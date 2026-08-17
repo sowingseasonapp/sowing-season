@@ -839,31 +839,43 @@ function defaultOpenState(comp, flagMap) {
   return open;
 }
 
-// One collapsible section: header line carries the numbers so the body doesn't
-// need a totals row.
-function accordionHtml({ key, title, note, open, totals, actions, body, barPct, barOver }) {
-  const num = (label, v, cls = '') =>
-    `<span class="acc-num ${cls}"><span class="acc-num-k">${label}</span><span class="acc-num-v ${moneyCls(v)}">${money(v)}</span></span>`;
-  return `<div class="acc ${open ? 'open' : ''}" data-acc="${key}">
-    <div class="acc-head" data-acc-toggle="${key}">
-      <span class="acc-caret">${open ? '▾' : '▸'}</span>
-      <span class="acc-title">${title}${note ? ` <span class="muted acc-note">${note}</span>` : ''}</span>
-      <span class="acc-bar" title="${barPct != null ? `${Math.round(barPct)}% of the plan spent` : ''}">${
-        barPct != null ? `<span class="acc-bar-fill ${barOver ? 'over' : ''}" style="width:${Math.min(100, Math.max(0, barPct))}%"></span>` : ''
-      }</span>
-      <span class="acc-nums">
-        ${num('carry', totals.carryOver, 'quiet')}${num('planned', totals.planned)}${num(totals.spentLabel || 'spent', totals.spent)}${num('left', totals.leftover)}
-      </span>
-      <span class="acc-actions">${open ? actions : ''}</span>
-    </div>
-    <div class="acc-body">${open ? body : ''}</div>
+// Column widths shared by the sticky header, every category head and every fund
+// table, so a number always sits under its own column heading.
+const FUND_COLS = `<colgroup>
+  <col style="width:37%"><col style="width:15%"><col style="width:15%"><col style="width:15%">
+  <col style="width:15%"><col style="width:56px"></colgroup>`;
+
+// The one column header for a group of tables. Sticks to the top while its
+// group is on screen; `activity` is "Spent" for expenses, "Received" for income.
+function gridHeadHtml(activity) {
+  return `<div class="grid-head">
+    <table class="grid tbl-fixed">${FUND_COLS}<thead><tr>
+      <th>Fund</th><th>Carry over</th><th>Planned</th><th>${activity}</th><th>Leftover</th><th></th>
+    </tr></thead></table>
   </div>`;
 }
 
-// Column widths shared by every fund table so the sticky header lines up.
-const FUND_COLS = `<colgroup>
-  <col style="width:32%"><col style="width:13%"><col style="width:13%"><col style="width:13%">
-  <col style="width:6%"><col style="width:13%"><col style="width:92px"></colgroup>`;
+// One collapsible section. Its header is a row on the same grid as the funds
+// beneath it, so the category totals line up under the column headings instead
+// of floating — and the body needs no totals row of its own.
+function accordionHtml({ key, title, note, open, totals, actions, body, barPct, barOver }) {
+  const cell = (v) => `<td class="${moneyCls(v)}">${money(v)}</td>`;
+  return `<div class="acc ${open ? 'open' : ''}" data-acc="${key}">
+    <table class="grid tbl-fixed acc-head-table" data-acc-toggle="${key}">${FUND_COLS}<tbody><tr class="acc-head-row">
+      <td class="acc-title-cell">
+        <span class="acc-caret">${open ? '▾' : '▸'}</span>
+        <span class="acc-title">${title}</span>
+        ${note ? `<span class="muted acc-note">${note}</span>` : ''}
+        <span class="acc-bar" title="${barPct != null ? `${Math.round(barPct)}% of the plan used` : ''}">${
+          barPct != null ? `<span class="acc-bar-fill ${barOver ? 'over' : ''}" style="width:${Math.min(100, Math.max(0, barPct))}%"></span>` : ''
+        }</span>
+      </td>
+      ${cell(totals.carryOver)}${cell(totals.planned)}${cell(totals.spent)}${cell(totals.leftover)}
+      <td class="acc-actions">${open ? actions : ''}</td>
+    </tr></tbody></table>
+    <div class="acc-body">${open ? body : ''}</div>
+  </div>`;
+}
 
 function renderBudget(main) {
   const month = curMonth();
@@ -958,12 +970,18 @@ function renderBudget(main) {
     const k = normFund(t.fund);
     if (k) txCounts[k] = (txCounts[k] || 0) + 1;
   }
-  const txCell = (f) => {
+  // Transaction count rides next to the fund name rather than owning a column.
+  const txChip = (f) => {
     const n = txCounts[normFund(f.fund)] || 0;
     return n
-      ? `<td><a href="#" class="tx-count" data-txfund="${esc(f.fund)}" title="See this fund's ${n} transaction(s)">${n}</a></td>`
-      : `<td><span class="tx-count-zero" title="No transactions yet this month">0</span></td>`;
+      ? `<a href="#" class="tx-count" data-txfund="${esc(f.fund)}" title="See this fund's ${n} transaction${n === 1 ? '' : 's'} this month">${n}</a>`
+      : '';
   };
+
+  // One sticky column header for the income group (same grid as the expense one).
+  // Each group is wrapped so its header only sticks while that group is on screen.
+  const incomeShown = incomeGroups.some((g) => comp.income.some((f) => (f.group || 'bonus') === g.key && matches(f.fund)));
+  if (incomeShown) html += `<div class="fund-group">${gridHeadHtml('Received')}`;
 
   for (const g of incomeGroups) {
     const all = comp.income.map((f, i) => ({ f, i })).filter(({ f }) => (f.group || 'bonus') === g.key);
@@ -972,11 +990,9 @@ function renderBudget(main) {
     const isStd = g.key === 'standard';
     const accKey = `inc:${g.key}`;
     const open = isOpen(accKey);
-    // Same column grammar as the expense tables; only the "Received" label differs.
-    let body = `<table class="grid tbl-fixed">${FUND_COLS}<thead><tr>
-      <th>Fund</th><th>Carry over</th><th>Planned</th><th>Received</th>
-      <th title="Transactions in this fund this month">Tx</th><th>Leftover</th><th></th>
-      </tr></thead><tbody>`;
+    // Same column grammar as the expense tables; the group's sticky header above
+    // labels the columns, so no per-section header row.
+    let body = `<table class="grid tbl-fixed">${FUND_COLS}<tbody>`;
     for (const { f, i } of rows) {
       const chk = (month.checks || {})[f.fund] || { count: 0, amount: 0, titheAmount: 0 };
       // Paycheck maths live in the fund panel; the row just states the result.
@@ -987,11 +1003,10 @@ function renderBudget(main) {
       body += `<tr>
         <td><a href="#" class="fund-name" data-inc-setup="${i}" title="Open this fund — income type, tithe, carry-over, paycheck">${esc(f.fund)}</a>${
           f.titheExempt ? '<span class="type-mark quiet" title="Exempt from tithe — not counted in the tithe base.">⊘</span>' : ''}${
-          f.carryForward ? '<span class="type-mark" title="Leftover rolls into next month\'s carry-over instead of resetting to $0.">↷</span>' : ''}${caption}</td>
+          f.carryForward ? '<span class="type-mark" title="Leftover rolls into next month\'s carry-over instead of resetting to $0.">↷</span>' : ''}${txChip(f)}${caption}</td>
         <td><input class="money" data-inc="${i}" data-k="carryOver" value="${money(f.carryOver)}"></td>
         <td><input class="money" data-inc="${i}" data-k="planned" value="${money(f.planned)}"></td>
         <td class="${moneyCls(f.received)}"><a href="#" class="mono" data-txfund="${esc(f.fund)}" style="color:inherit">${money(f.received)}</a></td>
-        ${txCell(f)}
         <td class="${moneyCls(f.leftover)}">${money(f.leftover)}</td>
         <td class="row-actions"><button class="btn-ghost row-more" data-inc-setup="${i}" title="Open this fund — setup, transfer, reorder, transactions">⋯</button></td></tr>`;
     }
@@ -1001,7 +1016,6 @@ function renderBudget(main) {
       planned: r2(all.reduce((a, { f }) => a + f.planned, 0)),
       spent: r2(all.reduce((a, { f }) => a + f.received, 0)),
       leftover: r2(all.reduce((a, { f }) => a + f.leftover, 0)),
-      spentLabel: 'received',
     };
     html += accordionHtml({
       key: accKey,
@@ -1016,13 +1030,10 @@ function renderBudget(main) {
     });
   }
 
+  if (incomeShown) html += `</div>`;
+
   // Expense categories — one sticky column header for all of them.
-  html += `<div class="grid-head">
-    <table class="grid tbl-fixed">${FUND_COLS}<thead><tr>
-      <th>Fund</th><th>Carry over</th><th>Planned</th><th>Spent</th>
-      <th title="Transactions in this fund this month">Tx</th><th>Leftover</th><th></th>
-    </tr></thead></table>
-  </div>`;
+  html += `<div class="fund-group">${gridHeadHtml('Spent')}`;
 
   let hiddenCats = 0;
   comp.categories.forEach((c, ci) => {
@@ -1034,15 +1045,14 @@ function renderBudget(main) {
     let body = `<table class="grid tbl-fixed">${FUND_COLS}<tbody>`;
     rows.forEach(({ f, fi }) => {
       body += `<tr>
-        <td><a href="#" class="fund-name" data-fund-setup="${ci}:${fi}" title="Click for fund setup (fund type, schedule, savings goal, category)">${esc(f.fund)}</a>${fundChips(f, flagMap[normFund(f.fund)], month.id)}</td>
+        <td><a href="#" class="fund-name" data-fund-setup="${ci}:${fi}" title="Open this fund — type, schedule, goal, actions">${esc(f.fund)}</a>${fundChips(f, flagMap[normFund(f.fund)], month.id)}${txChip(f)}</td>
         <td><input class="money" data-cat="${ci}" data-fund="${fi}" data-k="carryOver" value="${money(f.carryOver)}"></td>
         <td><input class="money" data-cat="${ci}" data-fund="${fi}" data-k="planned" value="${money(f.planned)}"></td>
         <td class="${moneyCls(f.expensed)}"><a href="#" class="mono" data-txfund="${esc(f.fund)}" style="color:inherit">${money(f.expensed)}</a></td>
-        ${txCell(f)}
         <td class="${moneyCls(f.leftover)}">${money(f.leftover)}</td>
         <td class="row-actions"><button class="btn-ghost row-more" data-fund-setup="${ci}:${fi}" title="Open this fund — setup, transfer, reorder, transactions">⋯</button></td></tr>`;
     });
-    if (!rows.length) body += `<tr><td colspan="7" class="muted" style="padding:10px 12px">No funds yet — use “+ Add fund”.</td></tr>`;
+    if (!rows.length) body += `<tr><td colspan="6" class="muted" style="padding:10px 12px">No funds yet — use “+ Add fund”.</td></tr>`;
     body += `</tbody></table>`;
     const t = c.totals;
     const budget = r2(t.carryOver + t.planned);
@@ -1060,6 +1070,7 @@ function renderBudget(main) {
     });
   });
 
+  html += `</div>`; // close the expense group
   if (q && hiddenCats) html += `<p class="muted" style="margin-top:-6px">${hiddenCats} categor${hiddenCats === 1 ? 'y' : 'ies'} hidden by the search.</p>`;
   html += `<button class="btn" data-add-cat title="Add a new expense category to this month (rolls into future months)">+ Add category</button>`;
 
