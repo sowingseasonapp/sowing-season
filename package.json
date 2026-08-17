@@ -1,0 +1,22 @@
+{
+  "name": "family-budget",
+  "version": "1.0.0",
+  "description": "Envelope-style family budgeting app",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "pack": "node tools/package-app.js",
+    "test": "node tools/test-compute.mjs",
+    "dev": "node tools/dev-server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "@electron/packager": "^20.2.0",
+    "electron": "^43.3.0",
+    "xlsx": "^0.18.5"
+  },
+  "productName": "Family Budget"
+}

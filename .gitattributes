@@ -1,0 +1,7 @@
+# Normalize line endings so a Windows checkout doesn't produce whole-file diffs.
+* text=auto eol=lf
+
+# Binary
+*.ico binary
+*.png binary
+*.xlsx binary

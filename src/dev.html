@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Family Budget (dev)</title>
+  <link rel="stylesheet" href="/src/styles.css" />
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar">
+      <div class="brand">💰 Family Budget</div>
+      <div class="month-picker">
+        <label>Month</label>
+        <select id="monthSelect"></select>
+        <button id="newMonthBtn" class="btn btn-accent btn-sm">+ Start next month</button>
+      </div>
+      <nav id="nav">
+        <button data-view="budget" class="nav-btn active">📋 Budget</button>
+        <button data-view="transactions" class="nav-btn">🧾 Transactions</button>
+        <button data-view="import" class="nav-btn">⬇️ Import CSV</button>
+        <button data-view="reports" class="nav-btn">📈 Year Overview</button>
+        <button data-view="settings" class="nav-btn">⚙️ Settings</button>
+      </nav>
+      <div class="sidebar-foot">
+        <div id="saveStatus" class="save-status">All changes saved</div>
+      </div>
+    </aside>
+    <main id="main"></main>
+  </div>
+  <div id="toast"></div>
+  <script>
+    // Browser-testing shim for the Electron preload API. No persistence.
+    window.budgetAPI = {
+      loadData: () => fetch('/data/seed.json').then((r) => r.json()),
+      saveData: async () => true,
+      openCsv: async () => ({ path: 'sample.csv', text: await fetch('/sample.csv').then((r) => r.text()) }),
+      revealData: async () => alert('(dev mode)'),
+      exportData: async () => true,
+    };
+  </script>
+  <script type="module" src="/src/app.js"></script>
+</body>
+</html>

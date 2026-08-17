@@ -1,0 +1,18 @@
+# Dependencies
+node_modules/
+
+# Build output (regenerate with `npm run pack`)
+dist/
+dist-tmp/
+dist[0-9]*/
+
+# Rendered icon PNGs — regenerate via the dev server's /save-icon helper.
+# build/icon.ico is committed; the intermediates are not.
+tools/icons/
+
+# OS / editor noise
+Thumbs.db
+desktop.ini
+.DS_Store
+*.log
+*.corrupt
