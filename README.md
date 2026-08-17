@@ -92,7 +92,19 @@ spreadsheet tab, minus the manual work.
 ## Development
 
 - `npm start` — run the app.
-- `npm run pack` — rebuild the packaged exe into `dist/`.
+- `npm run pack` — rebuild the packaged exe into `dist/` (via `tools/package-app.js`;
+  it uses the packager's JS API because CLI `--ignore` regexes silently match nothing
+  on Windows, which once bundled each previous build inside the next one).
+- `npm test` — the verification suite.
+- `npm run dev` — the browser dev harness on :5173.
+
+### Repository note
+
+`data/seed.json` is the imported spreadsheet snapshot — it contains **real transaction
+history, vendors and income figures**, and the app needs it to seed first run. That is
+fine for a local repo, but do not push this repository to a public host as-is.
+To publish the code without the data: `git rm --cached data/seed.json`, add it to
+`.gitignore`, and have first run start from an empty template instead.
 - `node tools/test-compute.mjs` — verifies the computation engine against the original
   spreadsheet's cached values (needs the xlsx on the Desktop).
 - `node tools/dev-server.js` — serves the UI at http://localhost:5173 for browser testing
