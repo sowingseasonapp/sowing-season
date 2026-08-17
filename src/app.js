@@ -843,7 +843,7 @@ function defaultOpenState(comp, flagMap) {
 // table, so a number always sits under its own column heading.
 const FUND_COLS = `<colgroup>
   <col style="width:37%"><col style="width:15%"><col style="width:15%"><col style="width:15%">
-  <col style="width:15%"><col style="width:56px"></colgroup>`;
+  <col style="width:15%"><col style="width:68px"></colgroup>`;
 
 // The one column header for a group of tables. Sticks to the top while its
 // group is on screen; `activity` is "Spent" for expenses, "Received" for income.
@@ -860,15 +860,17 @@ function gridHeadHtml(activity) {
 // of floating — and the body needs no totals row of its own.
 function accordionHtml({ key, title, note, open, totals, actions, body, barPct, barOver }) {
   const cell = (v) => `<td class="${moneyCls(v)}">${money(v)}</td>`;
+  // The progress bar spans the top edge of the card so it reads as this
+  // category's line, not as another item competing inside the header row.
+  const bar = barPct == null ? '' : `<div class="acc-progress" title="${Math.round(barPct)}% of the plan used">
+      <span class="${barOver ? 'over' : ''}" style="width:${Math.min(100, Math.max(0, barPct))}%"></span></div>`;
   return `<div class="acc ${open ? 'open' : ''}" data-acc="${key}">
+    ${bar}
     <table class="grid tbl-fixed acc-head-table" data-acc-toggle="${key}">${FUND_COLS}<tbody><tr class="acc-head-row">
       <td class="acc-title-cell">
         <span class="acc-caret">${open ? '▾' : '▸'}</span>
         <span class="acc-title">${title}</span>
         ${note ? `<span class="muted acc-note">${note}</span>` : ''}
-        <span class="acc-bar" title="${barPct != null ? `${Math.round(barPct)}% of the plan used` : ''}">${
-          barPct != null ? `<span class="acc-bar-fill ${barOver ? 'over' : ''}" style="width:${Math.min(100, Math.max(0, barPct))}%"></span>` : ''
-        }</span>
       </td>
       ${cell(totals.carryOver)}${cell(totals.planned)}${cell(totals.spent)}${cell(totals.leftover)}
       <td class="acc-actions">${open ? actions : ''}</td>
@@ -1025,7 +1027,7 @@ function renderBudget(main) {
       totals: gt,
       barPct: gt.planned > 0.004 ? (gt.spent / gt.planned) * 100 : null,
       barOver: false,
-      actions: `<button class="btn btn-sm" data-add-inc="${g.key}">+ Add fund</button>`,
+      actions: `<button class="btn-ghost" data-add-inc="${g.key}" title="Add a fund to ${esc(g.title)}">+</button>`,
       body,
     });
   }
@@ -1064,8 +1066,8 @@ function renderBudget(main) {
       totals: { carryOver: t.carryOver, planned: t.planned, spent: t.expensed, leftover: t.leftover },
       barPct: budget > 0.004 ? (Math.abs(t.expensed) / budget) * 100 : null,
       barOver: t.leftover < -0.004,
-      actions: `<button class="btn btn-sm" data-add-fund="${ci}">+ Add fund</button>
-        <button class="btn-ghost" data-del-cat="${ci}" title="Remove this category (must be empty first; past months keep it)">✕</button>`,
+      actions: `<button class="btn-ghost" data-add-fund="${ci}" title="Add a fund to ${esc(c.name)}">+</button>
+        <button class="btn-ghost" data-del-cat="${ci}" title="Remove “${esc(c.name)}” (must be empty first; past months keep it)">✕</button>`,
       body,
     });
   });

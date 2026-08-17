@@ -91,17 +91,17 @@ h2 { font-size: 1.05rem; margin: 0; }
 .acc-caret { color: var(--ink-soft); font-size: .8rem; width: 10px; flex: none; }
 .acc-title { font-size: .98rem; }
 .acc-note { font-weight: 400; font-size: .78rem; white-space: nowrap; }
-.acc-bar {
-  flex: 0 1 80px; height: 5px; background: #eef0f4; border-radius: 3px; overflow: hidden;
-  min-width: 30px;
-}
-.acc-bar-fill { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
-.acc-bar-fill.over { background: var(--red); }
+
+/* Category progress: one clean line across the top of the card */
+.acc-progress { height: 3px; background: #eef0f4; }
+.acc-progress span { display: block; height: 100%; background: var(--accent); }
+.acc-progress span.over { background: var(--red); }
+
 .acc-actions {
-  display: flex; gap: 4px; align-items: center; justify-content: flex-end;
-  white-space: nowrap; font-weight: 400;
+  display: flex; gap: 2px; align-items: center; justify-content: flex-end;
+  white-space: nowrap; font-weight: 400; padding-right: 8px !important;
 }
-.acc-actions .btn-sm { padding: 3px 8px; font-size: .78rem; }
+.acc-actions .btn-ghost { padding: 2px 6px; font-size: .9rem; line-height: 1; }
 .acc-body:empty { display: none; }
 
 /* One sticky column header per group (income, expenses) */
