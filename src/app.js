@@ -388,8 +388,13 @@ function wireSetupForm(root, { monthId, carryOver = 0, onChange = null }) {
  */
 let panelRef = null; // {kind:'expense', ci, fi} | {kind:'income', idx}
 
+// Escape closes the panel from anywhere — the listener lives on the document
+// because the panel itself rarely holds focus (it re-renders with the app).
+function panelEscHandler(e) { if (e.key === 'Escape') closeFundPanel(); }
+
 function closeFundPanel() {
   panelRef = null;
+  document.removeEventListener('keydown', panelEscHandler);
   const el = $('#fundPanel');
   if (el) el.remove();
 }
@@ -404,6 +409,7 @@ function panelFund(month) {
 
 function showFundPanel(ref) {
   panelRef = ref;
+  document.addEventListener('keydown', panelEscHandler);
   renderFundPanel();
 }
 
@@ -455,9 +461,12 @@ function renderFundPanel() {
             <label>Carry over<input class="money" id="pnlCarry" value="${money(f.carryOver)}"></label>
             <label>Planned<input class="money" id="pnlPlanned" value="${money(f.planned)}"></label>
             <div class="panel-num-ro"><span>${isIncome ? 'Received' : 'Spent'}</span>
-              <b class="${moneyCls(isIncome ? live.received : live.expensed)}">${money(isIncome ? live.received : live.expensed)}</b></div>
+              ${isIncome
+                ? `<b class="${moneyCls(live.received)}">${money(live.received)}</b>`
+                : `<b class="${live.expensed > 0.004 ? 'pos' : ''}">${live.expensed > 0.004 ? '+' + money(live.expensed) : money(Math.abs(live.expensed))}</b>`}</div>
             <div class="panel-num-ro"><span>Left</span>
-              <b class="${moneyCls(live.leftover)}">${money(live.leftover)}</b></div>
+              <b class="${isIncome && live.leftover < -0.004 ? 'muted' : moneyCls(live.leftover)}"${
+                isIncome && live.leftover < -0.004 ? ` title="${money(-live.leftover)} still expected this month"` : ''}>${money(live.leftover)}</b></div>
           </div>
         </section>
 
@@ -473,12 +482,13 @@ function renderFundPanel() {
                 </label>`).join('')}
             </div>
             <div class="setup-fields" id="pnlChecks" style="${f.group === 'standard' ? '' : 'display:none'}">
-              <div class="modal-row"><label style="width:auto">Paycheck</label>
-                <input class="money small-num" id="pnlChkCount" value="${chk.count || 0}" title="Number of checks this month">
+              <div class="modal-row"><label style="width:auto">Paychecks</label>
+                <input class="money small-num" id="pnlChkCount" style="flex:none" value="${chk.count || 0}" title="Number of checks this month">
                 <span class="muted">×</span>
-                <input class="money" id="pnlChkAmount" value="${money(chk.amount || 0)}" title="Deposited amount per check (after deductions)">
-                <span class="muted">· titheable</span>
-                <input class="money" id="pnlChkTithe" value="${money(chk.titheAmount || 0)}" title="Per-check income the tithe is based on (before insurance/retirement deductions)"></div>
+                <input class="money" id="pnlChkAmount" style="width:110px;flex:none" value="${money(chk.amount || 0)}" title="Deposited amount per check (after deductions)">
+                <span class="muted">each</span></div>
+              <div class="modal-row"><label style="width:auto" title="Per-check income the tithe is based on (before insurance/retirement deductions)">Titheable per check</label>
+                <input class="money" id="pnlChkTithe" style="width:110px;flex:none" value="${money(chk.titheAmount || 0)}" title="Per-check income the tithe is based on (before insurance/retirement deductions)"></div>
             </div>
             <p class="setup-result" id="pnlIncCalc"></p>
             <div class="setup-options">
@@ -518,7 +528,6 @@ function renderFundPanel() {
 
   $('.panel-scrim', wrap).onclick = closeFundPanel;
   $('#pnlClose', wrap).onclick = closeFundPanel;
-  wrap.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeFundPanel(); });
 
   // Numbers apply immediately, same as the grid inputs.
   const applyNum = (el, key) => {
@@ -839,31 +848,40 @@ function defaultOpenState(comp, flagMap) {
   return open;
 }
 
-// Column widths shared by the sticky header, every category head and every fund
-// table, so a number always sits under its own column heading.
+// Column widths shared by every card: its heading row, its category head and
+// its fund table, so a number always sits under its own column heading.
 const FUND_COLS = `<colgroup>
   <col style="width:37%"><col style="width:15%"><col style="width:15%"><col style="width:15%">
   <col style="width:15%"><col style="width:68px"></colgroup>`;
 
-// The one column header for a group of tables. Sticks to the top while its
-// group is on screen; `activity` is "Spent" for expenses, "Received" for income.
-function gridHeadHtml(activity) {
-  return `<div class="grid-head">
-    <table class="grid tbl-fixed">${FUND_COLS}<thead><tr>
-      <th>Fund</th><th>Carry over</th><th>Planned</th><th>${activity}</th><th>Leftover</th><th></th>
-    </tr></thead></table>
-  </div>`;
-}
-
 // One collapsible section. Its header is a row on the same grid as the funds
-// beneath it, so the category totals line up under the column headings instead
-// of floating — and the body needs no totals row of its own.
-function accordionHtml({ key, title, note, open, totals, actions, body, barPct, barOver }) {
+// beneath it, so the category totals line up with the fund columns — and the
+// body needs no totals row of its own.
+function accordionHtml({ key, title, note, open, totals, actions, body, barPct, barOver, activity, kind = 'expense' }) {
   const cell = (v) => `<td class="${moneyCls(v)}">${money(v)}</td>`;
+  // Spending is normal activity, not an alarm — show it as a plain positive
+  // amount (like the Spent card up top) and keep red for actual problems.
+  // A net-positive month on an expense fund means refunds came in.
+  const spentCell = (v) => kind === 'income' ? cell(v)
+    : v > 0.004 ? `<td class="pos" title="More came back in than went out this month">+${money(v)}</td>`
+    : `<td>${money(Math.abs(v))}</td>`;
+  // An income fund's negative leftover just means checks haven't arrived yet —
+  // show it quietly instead of as a red warning.
+  const leftCell = (v) => kind === 'income' && v < -0.004
+    ? `<td class="muted" title="${money(-v)} still expected this month">${money(v)}</td>`
+    : cell(v);
   // The progress bar spans the top edge of the card so it reads as this
   // category's line, not as another item competing inside the header row.
   const bar = barPct == null ? '' : `<div class="acc-progress" title="${Math.round(barPct)}% of the plan used">
       <span class="${barOver ? 'over' : ''}" style="width:${Math.min(100, Math.max(0, barPct))}%"></span></div>`;
+  // Column headings sit inside the card, right under the category name and on
+  // the same grid, so they label the fund rows they belong to instead of
+  // floating above the group. They stay pinned while the card is on screen.
+  const colHead = `<div class="acc-col-head">
+      <table class="grid tbl-fixed">${FUND_COLS}<thead><tr>
+        <th>Fund</th><th>Carry over</th><th>Planned</th><th>${activity}</th><th>Leftover</th><th></th>
+      </tr></thead></table>
+    </div>`;
   return `<div class="acc ${open ? 'open' : ''}" data-acc="${key}">
     ${bar}
     <table class="grid tbl-fixed acc-head-table" data-acc-toggle="${key}">${FUND_COLS}<tbody><tr class="acc-head-row">
@@ -872,10 +890,10 @@ function accordionHtml({ key, title, note, open, totals, actions, body, barPct, 
         <span class="acc-title">${title}</span>
         ${note ? `<span class="muted acc-note">${note}</span>` : ''}
       </td>
-      ${cell(totals.carryOver)}${cell(totals.planned)}${cell(totals.spent)}${cell(totals.leftover)}
+      ${cell(totals.carryOver)}${cell(totals.planned)}${spentCell(totals.spent)}${leftCell(totals.leftover)}
       <td class="acc-actions">${open ? actions : ''}</td>
     </tr></tbody></table>
-    <div class="acc-body">${open ? body : ''}</div>
+    <div class="acc-body">${open ? colHead + body : ''}</div>
   </div>`;
 }
 
@@ -884,6 +902,10 @@ function renderBudget(main) {
   const comp = computeMonth(month);
   const s = comp.summary;
   const balanced = Math.abs(s.leftToAllocate) < 0.005;
+  // Auto-calculated amounts (tithe %, yearly ÷ 12…) round to whole cents, so a
+  // month can be "off" by a cent or two with nothing actually wrong. Say so
+  // instead of raising a red flag over a penny.
+  const roundingOnly = !balanced && Math.abs(s.leftToAllocate) <= 0.02;
 
   const flags = fundFlags(month, comp, todayISO());
   const attList = flags.filter((x) => x.attention);
@@ -900,10 +922,13 @@ function renderBudget(main) {
 
   let html = `
     <div class="month-head">
-      <div class="hero ${s.leftToAllocate >= -0.004 ? 'good' : 'bad'}">
+      <div class="hero ${s.leftToAllocate >= -0.004 || roundingOnly ? 'good' : 'bad'}">
         <div class="k">Left to allocate</div>
         <div class="v">${money(s.leftToAllocate)}</div>
-        <div class="note">${balanced ? 'Zero-based ✓' : s.leftToAllocate > 0 ? 'Unallocated income' : 'Over-allocated'}
+        <div class="note">${balanced ? 'Zero-based ✓ — every dollar has a job'
+          : roundingOnly ? `Zero-based ✓ — the ${Math.round(Math.abs(s.leftToAllocate) * 100)}¢ is rounding from auto-calculated amounts`
+          : s.leftToAllocate > 0 ? 'Income not yet assigned to a fund'
+          : 'Planned more than your income'}
           · planned income ${money(s.plannedIncome)} · allocated ${money(s.allocated)}</div>
       </div>
       <div class="recap-stats month-stats">
@@ -980,11 +1005,6 @@ function renderBudget(main) {
       : '';
   };
 
-  // One sticky column header for the income group (same grid as the expense one).
-  // Each group is wrapped so its header only sticks while that group is on screen.
-  const incomeShown = incomeGroups.some((g) => comp.income.some((f) => (f.group || 'bonus') === g.key && matches(f.fund)));
-  if (incomeShown) html += `<div class="fund-group">${gridHeadHtml('Received')}`;
-
   for (const g of incomeGroups) {
     const all = comp.income.map((f, i) => ({ f, i })).filter(({ f }) => (f.group || 'bonus') === g.key);
     const rows = all.filter(({ f }) => matches(f.fund));
@@ -992,7 +1012,7 @@ function renderBudget(main) {
     const isStd = g.key === 'standard';
     const accKey = `inc:${g.key}`;
     const open = isOpen(accKey);
-    // Same column grammar as the expense tables; the group's sticky header above
+    // Same column grammar as the expense tables; this card's own heading row
     // labels the columns, so no per-section header row.
     let body = `<table class="grid tbl-fixed">${FUND_COLS}<tbody>`;
     for (const { f, i } of rows) {
@@ -1009,7 +1029,8 @@ function renderBudget(main) {
         <td><input class="money" data-inc="${i}" data-k="carryOver" value="${money(f.carryOver)}"></td>
         <td><input class="money" data-inc="${i}" data-k="planned" value="${money(f.planned)}"></td>
         <td class="${moneyCls(f.received)}"><a href="#" class="mono" data-txfund="${esc(f.fund)}" style="color:inherit">${money(f.received)}</a></td>
-        <td class="${moneyCls(f.leftover)}">${money(f.leftover)}</td>
+        <td class="${f.leftover < -0.004 ? 'muted' : moneyCls(f.leftover)}"${
+          f.leftover < -0.004 ? ` title="${money(-f.leftover)} still expected this month"` : ''}>${money(f.leftover)}</td>
         <td class="row-actions"><button class="btn-ghost row-more" data-inc-setup="${i}" title="Open this fund — setup, transfer, reorder, transactions">⋯</button></td></tr>`;
     }
     body += `</tbody></table>`;
@@ -1021,6 +1042,8 @@ function renderBudget(main) {
     };
     html += accordionHtml({
       key: accKey,
+      activity: 'Received',
+      kind: 'income',
       title: `<span title="${esc(g.hint)}">${g.title}</span>`,
       note: `${all.length} fund${all.length === 1 ? '' : 's'}`,
       open,
@@ -1031,11 +1054,6 @@ function renderBudget(main) {
       body,
     });
   }
-
-  if (incomeShown) html += `</div>`;
-
-  // Expense categories — one sticky column header for all of them.
-  html += `<div class="fund-group">${gridHeadHtml('Spent')}`;
 
   let hiddenCats = 0;
   comp.categories.forEach((c, ci) => {
@@ -1050,7 +1068,9 @@ function renderBudget(main) {
         <td><a href="#" class="fund-name" data-fund-setup="${ci}:${fi}" title="Open this fund — type, schedule, goal, actions">${esc(f.fund)}</a>${fundChips(f, flagMap[normFund(f.fund)], month.id)}${txChip(f)}</td>
         <td><input class="money" data-cat="${ci}" data-fund="${fi}" data-k="carryOver" value="${money(f.carryOver)}"></td>
         <td><input class="money" data-cat="${ci}" data-fund="${fi}" data-k="planned" value="${money(f.planned)}"></td>
-        <td class="${moneyCls(f.expensed)}"><a href="#" class="mono" data-txfund="${esc(f.fund)}" style="color:inherit">${money(f.expensed)}</a></td>
+        <td class="${f.expensed > 0.004 ? 'pos' : ''}"><a href="#" class="mono" data-txfund="${esc(f.fund)}" style="color:inherit"${
+          f.expensed > 0.004 ? ' title="More came back in than went out this month"' : ''}>${
+          f.expensed > 0.004 ? '+' + money(f.expensed) : money(Math.abs(f.expensed))}</a></td>
         <td class="${moneyCls(f.leftover)}">${money(f.leftover)}</td>
         <td class="row-actions"><button class="btn-ghost row-more" data-fund-setup="${ci}:${fi}" title="Open this fund — setup, transfer, reorder, transactions">⋯</button></td></tr>`;
     });
@@ -1060,6 +1080,7 @@ function renderBudget(main) {
     const budget = r2(t.carryOver + t.planned);
     html += accordionHtml({
       key: accKey,
+      activity: 'Spent',
       title: esc(c.name),
       note: `${c.funds.length} fund${c.funds.length === 1 ? '' : 's'}${c.excludeFromTotals ? ' · not counted in totals' : ''}`,
       open,
@@ -1072,7 +1093,6 @@ function renderBudget(main) {
     });
   });
 
-  html += `</div>`; // close the expense group
   if (q && hiddenCats) html += `<p class="muted" style="margin-top:-6px">${hiddenCats} categor${hiddenCats === 1 ? 'y' : 'ies'} hidden by the search.</p>`;
   html += `<button class="btn" data-add-cat title="Add a new expense category to this month (rolls into future months)">+ Add category</button>`;
 
@@ -1241,7 +1261,7 @@ function renderTransactions(main) {
     </div>
     <div class="section"><table class="grid"><thead><tr>
       <th style="width:110px;text-align:left">Date</th><th style="text-align:left">Vendor</th><th>Amount</th>
-      <th style="text-align:left">Fund</th><th style="text-align:left">Description</th><th style="width:90px;text-align:left">Account</th><th style="width:34px"></th>
+      <th style="text-align:left">Fund</th><th style="text-align:left">Description</th><th style="width:120px;text-align:left">Account</th><th style="width:34px"></th>
     </tr></thead><tbody>`;
   for (const { t, i } of list) {
     const bad = !known.has(normFund(t.fund)) || !normFund(t.fund);
@@ -1426,11 +1446,17 @@ function renderReports(main) {
   for (const { c } of comps) { incTot = r2(incTot + actIncome(c)); html += `<td class="pos">${money(actIncome(c))}</td>`; }
   html += `<td class="pos"><b>${money(incTot)}</b></td></tr>`;
 
-  // Category rows (spent shown as positive magnitude)
+  // Category rows (spent shown as positive magnitude). Categories excluded from
+  // totals (Work) still get a table row, marked so the columns visibly don't
+  // feed the Net line.
   const catNames = [];
-  for (const { m } of comps) for (const c of m.categories) if (!catNames.includes(c.name)) catNames.push(c.name);
+  const notCounted = new Set();
+  for (const { m } of comps) for (const c of m.categories) {
+    if (!catNames.includes(c.name)) catNames.push(c.name);
+    if (c.excludeFromTotals) notCounted.add(c.name);
+  }
   for (const name of catNames) {
-    html += `<tr><td>${esc(name)}</td>`;
+    html += `<tr><td>${esc(name)}${notCounted.has(name) ? ' <span class="muted">· not counted in totals</span>' : ''}</td>`;
     let tot = 0;
     for (const { c } of comps) {
       const cat = c.categories.find((x) => x.name === name);
@@ -1487,7 +1513,10 @@ function renderReports(main) {
       { name: 'Spending', color: VIZ.s2, values: comps.map(({ c }) => Math.abs(actExpense(c))) },
     ],
   }));
+  // The chart shows household spending only — categories excluded from totals
+  // would overstate it.
   const catRows = catNames
+    .filter((name) => !notCounted.has(name))
     .map((name) => ({
       label: name,
       value: r2(comps.reduce((a, { c }) => {

@@ -80,7 +80,7 @@ h2 { font-size: 1.05rem; margin: 0; }
 /* Accordions — the header is a row on the same grid as the funds below it */
 .acc {
   background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
-  margin-bottom: 8px; overflow: hidden;
+  margin-bottom: 8px; overflow: clip; /* not hidden: keeps .acc-col-head sticky */
 }
 .acc.open { margin-bottom: 14px; }
 .acc-head-table { cursor: pointer; user-select: none; }
@@ -93,7 +93,7 @@ h2 { font-size: 1.05rem; margin: 0; }
 .acc-note { font-weight: 400; font-size: .78rem; white-space: nowrap; }
 
 /* Category progress: one clean line across the top of the card */
-.acc-progress { height: 3px; background: #eef0f4; }
+.acc-progress { height: 3px; background: #e9edf3; }
 .acc-progress span { display: block; height: 100%; background: var(--accent); }
 .acc-progress span.over { background: var(--red); }
 
@@ -104,13 +104,13 @@ h2 { font-size: 1.05rem; margin: 0; }
 .acc-actions .btn-ghost { padding: 2px 6px; font-size: .9rem; line-height: 1; }
 .acc-body:empty { display: none; }
 
-/* One sticky column header per group (income, expenses) */
-.grid-head {
-  position: sticky; top: -26px; z-index: 4; background: var(--bg);
-  padding-top: 10px; margin-bottom: 4px;
-}
-.grid-head table { background: #eef1f6; border: 1px solid var(--line); border-radius: 8px; }
-.grid-head th { padding: 6px 12px; border-bottom: none; }
+/* Column headings belong to the card they label: they sit just under its
+   category name and stay pinned there while that card's funds are on screen.
+   top must offset #main's 26px padding-top: sticky elements pin inside the
+   scroll container's padding, so top:0 would float 26px down with rows
+   scrolling visibly through the gap above. */
+.acc-col-head { position: sticky; top: -26px; z-index: 3; background: #f2f4f8; }
+.acc-col-head th { padding: 5px 12px; }
 table.tbl-fixed { table-layout: fixed; }
 
 /* Section / category tables */

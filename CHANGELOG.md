@@ -9,7 +9,45 @@ so entries before that are dated by when the work happened, not by commit.
 
 ---
 
-## 2026-08-16 — Budget UI reorganisation (5 phases)
+## 2026-08-17 — Per-card column headings + full UX audit
+
+**Column headings moved inside each card.** The one sticky header per group
+(income, expenses) read as detached from the tables it labelled. Each accordion
+now carries its own heading row (`.acc-col-head`) just under the category name,
+on the same `FUND_COLS` grid, pinned while that card is on screen. Trap fixed in
+the process: sticky elements pin **inside the scroll container's padding**, so
+with `#main`'s 26px padding-top a `top: 0` header floated 26px down with rows
+scrolling visibly through the gap — `.acc-col-head` needs `top: -26px`.
+
+**Full audit pass** (structural + visual), aimed at keeping the app friendly for
+someone who doesn't know much about finances:
+
+- **A penny is not an emergency.** Auto-calculated amounts round to whole cents,
+  so most months sit 1–2¢ off zero (the test suite's known ≤2¢ diffs). The hero
+  used to show "($0.01) Over-allocated" in red; within 2¢ it now stays green:
+  "Zero-based ✓ — the 1¢ is rounding from auto-calculated amounts".
+- **Un-arrived paychecks are not a crisis.** Income leftovers are negative most
+  of the month (checks haven't landed yet) and rendered as big red numbers.
+  Negative income leftovers are now muted, with "still expected this month" in
+  the tooltip. Red still means real problems.
+- **Spending is not an alarm.** Spent columns showed ordinary activity as red
+  "($90.00)" while the Spent stat card showed neutral "$757.00". Spent cells now
+  show plain positive amounts; a net-refund month shows green "+$X".
+- **Escape now closes the fund panel.** The key listener sat on the panel
+  element, which almost never holds focus (the panel re-renders with the app);
+  it's a document-level listener for the panel's lifetime now.
+- **Paycheck form unwrapped.** In the income panel, the flex-1 inputs forced the
+  titheable field onto its own full-width line; now two labelled rows
+  ("Paychecks N × $X each" / "Titheable per check") with fixed-width inputs.
+- **Year Overview consistency.** "Where the money went" included the Work
+  category that every other total excludes; the chart now skips
+  `excludeFromTotals` categories and the table marks them "· not counted in
+  totals".
+- Hero notes reworded in plain language ("every dollar has a job", "Planned more
+  than your income"); Transactions' Account column widened so "Checking" stops
+  truncating; progress-track colour nudged visible.
+
+
 
 The Budget page had grown feature-by-feature until every category, fund, status and
 action competed at the same level: 12 always-open sections, 57 fund rows, 228 row
