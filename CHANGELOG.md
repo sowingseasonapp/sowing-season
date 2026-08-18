@@ -1,0 +1,149 @@
+# Changelog
+
+Written for whoever picks this project up next — including a future Claude session.
+It records **what changed and why**, plus the decisions and traps that aren't obvious
+from the code. Newest first.
+
+The app was built conversationally over several sessions; git arrived late (2026-08-16),
+so entries before that are dated by when the work happened, not by commit.
+
+---
+
+## 2026-08-16 — Budget UI reorganisation (5 phases)
+
+The Budget page had grown feature-by-feature until every category, fund, status and
+action competed at the same level: 12 always-open sections, 57 fund rows, 228 row
+buttons, up to 4 chips per row. A plan was written and approved first
+(`~/.claude/plans/scalable-wobbling-crown.md`) and executed in five phases.
+
+**Layering.** Six summary cards became one hero (*Left to allocate*) plus three compact
+stats. Categories and income groups became **accordions**: the header line carries
+carry-over / planned / spent / leftover on the same grid as the funds below, so the
+totals sit under their own column headings and the body needs no totals row. Open/closed
+state lives in `localStorage` (`fb.open.<monthId>`); a month's first visit opens income
+plus any category holding a flagged fund. Search auto-expands matches. Each category
+card carries a thin progress line across its top edge, visible open or collapsed.
+
+**One header per group.** All tables share `FUND_COLS` + `table-layout: fixed`, so a
+single sticky column header serves each group (income says *Received*, expenses say
+*Spent*). Each group is wrapped in `.fund-group` so its header sticks only over its own
+section — without that wrapper both headers pile up at the top of the viewport.
+
+**Fund side panel.** Rows lost all four action buttons (up/down/transfer/delete = 228 of
+them); each row now ends in one `⋯` opening a right-hand panel with the fund's numbers,
+setup, actions (transfer, move, change category, delete) and its transactions. The panel
+re-renders from `render()` — without that, its position-dependent buttons (move up/down)
+go stale after a move.
+
+**Setup form.** `showFundSetup` and `showIncomeSetup` were deleted. One
+`setupFormHtml` / `wireSetupForm` / `readSetupForm` trio is shared by the expense panel,
+the income panel and the add-fund dialog. The old three-level tree
+(Type → Savings mode → Build mode) is now **five flat behaviour cards**, and
+"build forever vs. goal" is a single optional *stopping at* field. Presentation only —
+`setup.type` / `savingsMode` / `buildGoal` kept their shape, so no migration was needed.
+Editing commits on `change`, not on every keystroke, so typing `2400` doesn't briefly
+save 2, then 24, then 240.
+
+**Status system.** Up to four chips per row became a type glyph
+(fixed / pacing / savings goal / build up / insights-off) plus **at most one** actionable
+chip (over / off pace / $X free / overridden); on-pace is a green dot. The two insight
+badges, their two panels and the unassigned warning box merged into one **Review strip**
+with three groups.
+
+**Insight re-tune (data model v5).** `migrateV3` had typed any fund averaging >1.5
+transactions per active month as *pacing*, sweeping in monthly bills that merely post
+twice. Such a fund is "100% spent" the moment it posts, so it read as off pace forever —
+Electricity was flagged despite one transaction landing exactly on budget.
+
+> Transaction **count** turned out to be useless as a signal (v3's own rule guaranteed
+> >1.5). The real discriminator is **distinct spending days per active month**:
+> Electricity 1.0, Kids Savings 1.13, Tithe 1.88 … versus Essentials 15.1, Christmas 9.0,
+> Gas 4.5. `migrateV5` re-types anything below 3 days/month to Basic.
+
+12 funds were re-typed; Essentials, Gas, Fast Food, Random Entertainment, Christmas,
+Vacation, Fathers Day and Work Expenses stayed pacing. Off-pace now also requires a
+projected overrun beyond `max($10, 5% of budget)` and ignores the first 20% of the month.
+July's attention flags fell 11 → 4, August's 1 → 0. The re-typed list is shown in
+Settings → *Fund types adjusted* so nothing changed silently.
+
+**Two bugs found while verifying, both fixed:**
+
+- A UTF-8 BOM in `budget-data.json` made the app start **blank** — `JSON.parse` throws on
+  a BOM. `loadData` now strips it and, if the file is still unreadable, restores the
+  newest backup and keeps the bad file as `.corrupt`.
+- `electron-packager`'s CLI `--ignore="^/dist"` **never matched on Windows**, where paths
+  arrive with backslashes. Every build had been bundling the previous build inside
+  itself: `app.asar` had reached **1.9 GB** (2.2 GB total) around 0.4 MB of real code.
+  Packaging moved to `tools/package-app.js`, which drives the JS API with an allow-list.
+
+---
+
+## 2026-08-10 — Income fund setup, Extra Income, fund search, reordering
+
+- Income funds gained their own setup: **Standard Income** (paychecks — checks × per-check
+  amount, plus the titheable-per-check figure) and **Extra Income** (renamed from "Bonus
+  Income"), each with *Exempt from Tithe* and *Carry leftover into next month*
+  (`carryForward`, off by default so paycheck funds keep resetting to $0).
+- Adding a fund asks **Income or Expense** first, pre-selected by which button opened it.
+- Budget page gained a fund search, per-fund transaction counts, and up/down reordering
+  (later absorbed into the fund panel).
+- **Electron has no `window.prompt()`** (`confirm` works). It silently did nothing, so the
+  add-fund and add-category buttons appeared dead. Replaced with the `promptName()` modal.
+  The browser dev harness masks this — test dialogs with `window.prompt = undefined`.
+
+## 2026-08-09 — Fund types, insights, end-of-month workflow
+
+- Four fund types — **Basic · Pacing · Fixed recurring · Savings** — with savings splitting
+  into *Target Date* and *Build Over Time* (optionally capped by `buildGoal`, which makes
+  the last contribution shrink to land exactly on the goal and resume if it drops below).
+- **Insights**: "needs attention" (over budget, or pacing to exceed) and "available to
+  move" (transactions in, money left, no more expected). Any fund can be excluded via
+  `setup.excludeInsights`.
+- **End-of-month workflow** on *Start next month*: a recap (income/spent/net, wins, pacing
+  results, matured savings, category breakdown) and the outstanding insights with inline
+  transfers — skippable in one click.
+- Fund-to-fund **transfers** stored as a matched transaction pair
+  ("Transfer to X" −amt / "Transfer from Y" +amt), mirroring what the spreadsheet did by
+  hand. `settings.excludeTransfers` keeps them out of aggregate reporting.
+- Category add/remove, and moving a fund between categories. Removal requires the fund or
+  category to be **balanced** (leftover $0, no transactions this month) — the user's rule.
+
+## 2026-08-08 — Tithe rework, income grouping, checking-account CSV
+
+- Income split into Standard / Extra groups (data model **v2**); each paycheck carries a
+  `titheAmount` — the pre-insurance/retirement figure the tithe is actually based on.
+  Tithe = % × (Σ checks × titheAmount + Σ extra planned), exempt funds excluded.
+- Tithe percentage changes apply **from the selected month forward only**; each month's
+  rule stores its own `percent`, so history can't move even if an old month is edited.
+- CSV import learned the **checking-account** format (Transaction Type + Amount) alongside
+  the credit-card one, skipping card payments on both sides and stripping memo prefixes
+  ("note - Withdrawal to X") for vendor matching.
+
+## 2026-08-06 — First build
+
+Electron app replacing `2026 Budget.xlsx`, seeded with Dec 2025 – Aug 2026 (744
+transactions). Budget / Transactions / CSV import / Year Overview / Settings, the
+month-rollover engine, bank CSV import with auto-categorisation, and the money-bag icon.
+
+**Verified against the workbook: 1,049 of 1,060 cell-level checks match exactly**; the
+remaining 11 differ by at most a cent because the app rounds to whole cents while Excel
+carries values like `146.66666…`. Worth knowing: the sheet's Dec–Mar tithe formula
+excluded the Gifts row and was fixed from April on — the app uses the corrected rule
+everywhere, so re-editing one of those months would recompute its tithe slightly.
+
+---
+
+## Conventions worth keeping
+
+- **Verify against the spreadsheet.** `npm test` re-checks every month against the real
+  workbook. It must stay green; treat a new mismatch as a bug in the app.
+- **History is immutable.** Setup, tithe %, fund type and category changes apply to the
+  selected month forward. Past months keep their own stored rules.
+- **Migrations are additive and idempotent**, keyed by `data.version` (now 5). Each one
+  must preserve every existing planned amount — the test suite asserts this.
+- **Money is rounded to whole cents** via `r2()`; compare with a tolerance of ~0.011.
+- **Package with `npm run pack`.** Never use electron-packager's CLI `--ignore` on Windows.
+- **Never write `budget-data.json` with PowerShell `Set-Content -Encoding utf8`** — it adds
+  a BOM. Use node.
+- `data/seed.json` is tracked and holds **real financial history**. Don't push this repo
+  to a public host without removing it first.

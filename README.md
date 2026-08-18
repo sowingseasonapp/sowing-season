@@ -16,62 +16,58 @@ The app ships with all 2026 spreadsheet history (Dec 2025 – Aug 2026) already 
 
 ## Views
 
-- **Budget** — the monthly summary: income, every category and fund, editable carry-over /
-  planned / yearly-cost cells. Funds with an `auto:` chip recalculate themselves (checks ×
-  amount, tithe %, yearly ÷ N); typing a value directly removes the auto rule.
-  Click any Spent/Received number to see the transactions behind it.
-  Income is split into **Standard Income** (paychecks: checks × per-check amount, plus a
-  **titheable/check** column — the pre-insurance/retirement figure the tithe is based on)
-  and **Extra Income** (inconsistent income — gifts, reimbursements; tithed at full
-  planned value unless exempt). Click an income fund's name for its setup: type,
-  **Exempt from Tithe**, and **Carry leftover into next month** (off by default —
-  paycheck funds reset to $0 like the spreadsheet). Adding a fund from any section asks
-  Income vs Expense first (pre-selected by context).
-  Tithe = % × (checks × titheable/check + bonus income planned).
-  Categories can be added (+ Add category) and removed (✕ on the header) — removal
-  requires the category/fund to be balanced first and never touches past months.
-  A **Find a fund** box filters the page to matching funds (categories with no match are
-  hidden; totals still reflect every fund). A **Tx** column shows each fund's transaction
-  count for the month — click the number to jump to those transactions.
+- **Budget** — the month, in layers. A hero figure (*Left to allocate*, with planned income
+  and allocated beneath it) plus three stats: income, spent, net.
 
-  The page is layered: a month hero (Left to allocate) plus three stats, then **collapsible
-  categories** whose header line carries carry-over / planned / spent / left and a progress
-  bar, all sharing **one sticky column header**. Open/closed state is remembered per month
-  (first visit opens income and anything flagged); *Expand all / Collapse all* is in the
-  toolbar and searching auto-expands matches.
+  Below that, **income groups and expense categories are collapsible**. Each card shows a
+  progress line across its top and, on its header row, the category's carry-over / planned /
+  spent / leftover lined up under one **sticky column header** per group (income reads
+  *Received*, expenses *Spent*). Open/closed state is remembered per month — a month's first
+  visit opens income plus anything flagged. *Expand all / Collapse all* sits in the toolbar,
+  and **Find a fund** filters the page, auto-expanding matches.
 
-  Every fund row ends in a **⋯** that opens the **fund panel** on the right — its numbers,
-  its setup, its actions (transfer, move up/down, change category, remove) and its
-  transactions, all in one place. Rows themselves carry only a type glyph (↻ fixed, ▦ pacing,
-  ◎ savings goal, ▲ build up, ⊘ insights off) and at most one status chip
-  (over / off pace / $X free / overridden); on-pace shows as a green dot.
-  **Click a fund's name** to open its setup: pick a fund type and (optionally) move it
-  to another category. Types: **Basic** (all-purpose; leftover flags as available after
-  the first transaction) · **Pacing** (groceries-style; on-pace/off-pace chips through
-  the month, leftover available on the last day) · **Fixed recurring** ($T every N
-  months → planned = T÷N) · **Savings**, in two modes —
-  *Target Date* (goal $ by target month → planned fills the gap evenly; the goal rolls to
-  the same month next year after it passes; insights fire only in the target month) or
-  *Build Over Time* (a fixed amount set aside every month to build a pot you draw from as
-  needed; never flagged available-to-move, only flags if it goes negative — with either
-  no ceiling ("Build Forever") or a goal: contributions cap to land exactly on the goal,
-  pause there, and resume if the balance drops below it).
-  Every fund type also has **"Exclude fund from insights"** — the fund never triggers
-  Needs Attention / Available to Move and shows no pace chips.
+  A fund row is its name, a type glyph, at most one status chip, then carry-over, planned,
+  spent and leftover — carry-over and planned edit in place. The transaction count rides
+  beside the name as a small chip; click it for that fund's transactions. Type glyphs are
+  ↻ fixed recurring, ▦ pacing, ◎ savings goal, ▲ build up, ⊘ excluded from insights. Status
+  is only shown when it asks something of you: `over`, `off pace`, `$X free`, `overridden`
+  (on-pace is a quiet green dot).
+
+  **The ⋯ at the end of a row opens the fund panel** — everything about that fund in one
+  place: its numbers, its setup, its actions (transfer, move up/down, change category,
+  remove) and its transactions this month. Fund types are five flat choices:
+  **Basic** (everyday spending; leftover flags as available after the first transaction) ·
+  **Pacing** (groceries-style, watched for pace; leftover frees up on the last day) ·
+  **Fixed recurring** ($T every N months → planned = T÷N) ·
+  **Savings goal** (a total by a target month; planned fills the gap evenly and the goal
+  rolls to the same month next year once it passes) ·
+  **Build up** (a fixed amount monthly, optionally *stopping at* an amount — contributions
+  cap there and resume if the balance drops below). Any fund can be excluded from insights.
+  Income funds get their own two types — **Standard Income** (paychecks: checks × per-check
+  amount plus the titheable-per-check figure the tithe is based on) and **Extra Income**
+  (gifts, reimbursements) — each with *Exempt from tithe* and *Carry leftover into next
+  month* (off by default, so paycheck funds reset to $0 like the spreadsheet).
+
+  Auto-calculated planned amounts can be overridden for a single month (an `overridden`
+  chip appears; new months reset to the setup). Setup, type and category changes apply from
+  the selected month forward — history never changes.
+
+  One **Review** badge collects every insight: *needs attention* (over budget or off pace),
+  *available to move* (transactions in, money left, none expected), and *unassigned
+  transactions* — each with an inline ⇄ to move money.
+
+  Categories are added with **+ Add category** and removed with the ✕ on their header;
+  removal needs the category or fund balanced first and never touches past months.
 - **Exclude transfers from reporting** (Settings) — fund-to-fund transfers stay visible
-  inside each fund, but stop counting toward actual income/spending in the summary
-  cards, Year Overview, and month recap. Income funds named "Transfer …" count entirely
-  as transfers. Auto planned amounts are overridable per month (an "overridden"
-  chip shows; new months reset). Badges at the top flag funds that **need attention**
-  and money **available to move**. Setup and category changes apply current-month
-  forward; history never changes.
+  inside each fund, but stop counting toward actual income/spending in the summary,
+  Year Overview and month recap. Income funds named "Transfer …" count wholly as transfers.
 - **End-of-month workflow** — "Start next month" opens a recap of the closing month
   (income/spent/net, wins, pacing results, matured savings goals, category breakdown),
   lists outstanding insights with inline transfer links, then creates the month —
   or skip it all with one click.
 - **Transactions** — add/edit/delete entries for the month. Expenses negative, income positive.
 - **⇄ Transfer** — move money between any two funds in the month (toolbar button on the
-  Budget and Transactions pages, or the ⇄ on any fund row to prefill "From"). A transfer is
+  Budget and Transactions pages, or the ⇄ in a fund's panel or the Review strip to prefill "From"). A transfer is
   stored as a matched pair of transactions ("Transfer to X" / "Transfer from Y"), so the
   audit trail is kept and income/expense totals are unaffected.
 - **Import CSV** — pick a bank CSV export; both formats are auto-detected:
@@ -89,14 +85,27 @@ The app ships with all 2026 spreadsheet history (Dec 2025 – Aug 2026) already 
 resets income carry-overs to zero, and re-applies planned rules — exactly like copying the
 spreadsheet tab, minus the manual work.
 
+## History
+
+See [CHANGELOG.md](CHANGELOG.md) for what changed in each round of work, why, and the
+decisions and gotchas behind them (data-model migrations, the tithe rules, the Windows
+packaging trap, the BOM crash). Start there before changing behaviour.
+
 ## Development
 
 - `npm start` — run the app.
-- `npm run pack` — rebuild the packaged exe into `dist/` (via `tools/package-app.js`;
-  it uses the packager's JS API because CLI `--ignore` regexes silently match nothing
-  on Windows, which once bundled each previous build inside the next one).
-- `npm test` — the verification suite.
-- `npm run dev` — the browser dev harness on :5173.
+- `npm run pack` — rebuild the packaged exe into `dist/` (via `tools/package-app.js`, which
+  drives the packager's JS API: CLI `--ignore` regexes silently match nothing on Windows,
+  which once bundled each previous build inside the next one).
+- `npm test` — the verification suite: every month re-checked against the original
+  workbook, plus the migration, tithe, savings, insight and CSV cases.
+- `npm run dev` — the browser dev harness on :5173 (in-memory, no persistence).
+- `tools/extract-workbook.js` — the one-time spreadsheet → `data/seed.json` importer.
+- `build/icon.ico` — the app icon, built by `node tools/build-ico.js` from the PNGs in
+  `tools/icons/` (rendered from the emoji via the dev server's /save-icon helper).
+
+The seed data is only used on first run (when `%APPDATA%\Family Budget\budget-data.json`
+doesn't exist yet). Deleting that file resets the app to the spreadsheet snapshot.
 
 ### Repository note
 
@@ -105,14 +114,3 @@ history, vendors and income figures**, and the app needs it to seed first run. T
 fine for a local repo, but do not push this repository to a public host as-is.
 To publish the code without the data: `git rm --cached data/seed.json`, add it to
 `.gitignore`, and have first run start from an empty template instead.
-- `node tools/test-compute.mjs` — verifies the computation engine against the original
-  spreadsheet's cached values (needs the xlsx on the Desktop).
-- `node tools/dev-server.js` — serves the UI at http://localhost:5173 for browser testing
-  (in-memory only, no persistence).
-- `tools/extract-workbook.js` — the one-time spreadsheet → `data/seed.json` importer.
-- `build/icon.ico` — the app icon (💰), built by `node tools/build-ico.js` from PNGs in
-  `tools/icons/` (rendered from the emoji via browser canvas; POST /save-icon on the dev
-  server regenerates them). Pass `--icon=build/icon.ico` when packaging.
-
-The seed data is only used on first run (when `%APPDATA%\Family Budget\budget-data.json`
-doesn't exist yet). Deleting that file resets the app to the spreadsheet snapshot.
