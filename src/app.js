@@ -882,18 +882,26 @@ function accordionHtml({ key, title, note, open, totals, actions, body, barPct, 
         <th>Fund</th><th>Carry over</th><th>Planned</th><th>${activity}</th><th>Leftover</th><th></th>
       </tr></thead></table>
     </div>`;
+  // Open: the header carries just the name — the numbers live in a Total row at
+  // the bottom, under the column headings that describe them. Collapsed: the
+  // header row is the summary, numbers on the same grid as everything else.
+  const totalCells = `${cell(totals.carryOver)}${cell(totals.planned)}${spentCell(totals.spent)}${leftCell(totals.leftover)}`;
+  const totalRow = `<table class="grid tbl-fixed">${FUND_COLS}<tbody><tr class="total">
+      <td>Total</td>${totalCells}<td></td></tr></tbody></table>`;
   return `<div class="acc ${open ? 'open' : ''}" data-acc="${key}">
     ${bar}
     <table class="grid tbl-fixed acc-head-table" data-acc-toggle="${key}">${FUND_COLS}<tbody><tr class="acc-head-row">
-      <td class="acc-title-cell">
-        <span class="acc-caret">${open ? '▾' : '▸'}</span>
-        <span class="acc-title">${title}</span>
-        ${note ? `<span class="muted acc-note">${note}</span>` : ''}
+      <td class="acc-title-cell"${open ? ' colspan="5"' : ''}>
+        <div class="acc-title-wrap">
+          <span class="acc-caret">${open ? '▾' : '▸'}</span>
+          <span class="acc-title">${title}</span>
+          ${note ? `<span class="muted acc-note">${note}</span>` : ''}
+        </div>
       </td>
-      ${cell(totals.carryOver)}${cell(totals.planned)}${spentCell(totals.spent)}${leftCell(totals.leftover)}
+      ${open ? '' : totalCells}
       <td class="acc-actions">${open ? actions : ''}</td>
     </tr></tbody></table>
-    <div class="acc-body">${open ? colHead + body : ''}</div>
+    <div class="acc-body">${open ? colHead + body + totalRow : ''}</div>
   </div>`;
 }
 

@@ -87,7 +87,9 @@ h2 { font-size: 1.05rem; margin: 0; }
 .acc-head-table:hover .acc-head-row td { background: #f6f9ff; }
 .acc.open .acc-head-row td { background: #fafbfc; border-bottom: 1px solid var(--line); }
 .acc-head-row td { padding: 9px 12px; border-bottom: none; font-weight: 600; }
-.acc-title-cell { display: flex; align-items: center; gap: 8px; }
+/* Flex lives on an inner wrapper, not the td — a flexed td stops being a
+   table-cell box and colspan (used when the card is open) would be ignored. */
+.acc-title-wrap { display: flex; align-items: center; gap: 8px; }
 .acc-caret { color: var(--ink-soft); font-size: .8rem; width: 10px; flex: none; }
 .acc-title { font-size: .98rem; }
 .acc-note { font-weight: 400; font-size: .78rem; white-space: nowrap; }
@@ -210,6 +212,9 @@ input.money {
 input.money:hover { border-color: var(--line); background: #fff; }
 input.money:focus { border-color: var(--accent); background: #fff; outline: none; }
 input.small-num { width: 60px; }
+/* In the fixed-grid budget tables the input must fit its 15% column — a fixed
+   108px overflows into the neighbouring cell once the window narrows. */
+table.tbl-fixed input.money { width: 100%; min-width: 0; }
 
 /* Buttons */
 .btn {

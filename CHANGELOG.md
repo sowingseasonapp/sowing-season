@@ -47,6 +47,17 @@ someone who doesn't know much about finances:
   than your income"); Transactions' Account column widened so "Checking" stops
   truncating; progress-track colour nudged visible.
 
+**Totals moved below open cards** (follow-up, same day). An expanded card's
+header numbers sat *above* the column headings that actually describe the fund
+rows *below* — jarring. Open cards now show a name-only header (the title cell
+spans the numeric columns) and a bold **Total** row at the bottom of the fund
+table; collapsed cards keep their totals in the header row. Same rule for
+income sections. Two traps: the title cell's flex layout had to move to an
+inner `.acc-title-wrap` div because a `display:flex` td stops being a
+table-cell box and its `colspan` is ignored; and the fixed 108px `input.money`
+overflowed its 15% column on narrow windows — inside `tbl-fixed` tables the
+inputs are now `width:100%`.
+
 
 
 The Budget page had grown feature-by-feature until every category, fund, status and
