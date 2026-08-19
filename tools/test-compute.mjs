@@ -4,6 +4,7 @@ import {
   computeMonth, buildNextMonth, normFund, migrateV2, migrateV3, migrateV4, migrateV5,
   applyTitheRules, titheBase, autoPlanned, isOverridden, fundFlags, r2,
   savingsMonthly, monthAdd, monthDiff,
+  migrateV6, aumTotals, upsertSnapshot, aumLastUpdated,
 } from '../src/compute.js';
 import { parseBankCsv, buildVendorMap, suggestFund, findDuplicate } from '../src/csv.js';
 import fs from 'fs';
@@ -321,6 +322,49 @@ console.log(`\nCompute engine vs spreadsheet: ${ok} checks passed, ${bad} failed
   };
   console.log(`   pace @day12 (39% in): spent 60 → ${paceCase(60, 12)} (expect off) · spent 40 → ${paceCase(40, 12)} (expect on) · spent 25 → ${paceCase(25, 12)} (expect on)`);
   console.log(`   early grace @day4: spent 60 → ${paceCase(60, 4)} (expect on — too early to judge)`);
+}
+
+// ---- v6: AUM (assets under management) ----
+{
+  // Migration: runs once, idempotent, and never clobbers an existing aum block.
+  const d = { version: 5, months: [] };
+  const first = migrateV6(d);
+  const again = migrateV6(d);
+  const shapeOk = ['assets', 'debts', 'snapshots', 'log'].every((k) => Array.isArray(d.aum[k]));
+  console.log(`\nV6 migration: ran=${first} (expect true) · second run=${again} (expect false) · version=${d.version} (expect 6) · shape ok=${shapeOk}`);
+  const d2 = { version: 5, aum: { assets: [{ id: 'a_1', name: 'House', value: 425000, updatedAt: '2026-01-01' }], debts: [], snapshots: [], log: [] } };
+  migrateV6(d2);
+  console.log(`V6 keeps an existing aum: ${d2.aum.assets.length === 1 && d2.aum.assets[0].name === 'House'} (expect true)`);
+  // Full boot order on the real seed (v6 must come after v5's re-type pass).
+  const dSeed = JSON.parse(fs.readFileSync(new URL('../data/seed.json', import.meta.url), 'utf8'));
+  migrateV2(dSeed); migrateV3(dSeed); migrateV4(dSeed); migrateV5(dSeed); migrateV6(dSeed);
+  console.log(`Seed migrates to v${dSeed.version} (expect 6), aum starts empty: ${dSeed.aum.assets.length === 0 && dSeed.aum.snapshots.length === 0}`);
+
+  // Totals: empty, positive, negative — r2-rounded.
+  const empty = aumTotals({ assets: [], debts: [] });
+  console.log(`AUM totals empty: ${JSON.stringify(empty)} (expect all 0)`);
+  const t = aumTotals({ assets: [{ value: 425000 }, { value: 12500.555 }], debts: [{ value: 310000 }] });
+  console.log(`AUM totals: assets=${t.assets} (expect 437500.56) · debts=${t.debts} (expect 310000) · aum=${t.aum} (expect 127500.56)`);
+  const neg = aumTotals({ assets: [{ value: 100 }], debts: [{ value: 250 }] });
+  console.log(`AUM negative: ${neg.aum} (expect -150)`);
+
+  // Snapshots: same-day replaces, new day appends, out-of-order insert keeps date sort.
+  const aum = { assets: [{ value: 1000 }], debts: [{ value: 400 }], snapshots: [], log: [] };
+  upsertSnapshot(aum, '2026-08-10');
+  aum.assets[0].value = 1200;
+  upsertSnapshot(aum, '2026-08-18');
+  aum.assets[0].value = 1300;
+  upsertSnapshot(aum, '2026-08-18'); // same day again — replace, not append
+  aum.assets[0].value = 1100;
+  upsertSnapshot(aum, '2026-08-14'); // backdated — must land in the middle
+  const dates = aum.snapshots.map((s) => s.date).join(',');
+  const day18 = aum.snapshots.filter((s) => s.date === '2026-08-18');
+  console.log(`Snapshots: n=${aum.snapshots.length} (expect 3) · dates=${dates} (expect 2026-08-10,2026-08-14,2026-08-18)`);
+  console.log(`Same-day replaced: one entry=${day18.length === 1}, aum=${day18[0].aum} (expect 900 — the later value won)`);
+
+  // Last updated: max date wins; empty list → null.
+  const lu = aumLastUpdated([{ updatedAt: '2026-05-01' }, { updatedAt: '2026-08-02' }, { name: 'no date yet' }]);
+  console.log(`Last updated: ${lu} (expect 2026-08-02) · empty=${aumLastUpdated([])} (expect null)`);
 }
 
 // ---- checking-account CSV format ----

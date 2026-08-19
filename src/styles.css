@@ -387,6 +387,15 @@ td.dim { color: #a6adbb; }
 .viz-bl-bar { display: block; height: 100%; border-radius: 0 4px 4px 0; }
 .viz-bl-val { text-align: right; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
 
+/* AUM */
+.aum-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; margin-bottom: 18px; }
+@media (max-width: 1100px) { .aum-grid { grid-template-columns: 1fr; } }
+.aum-grid .section { margin-bottom: 0; } /* the grid gap owns the spacing */
+.aum-section .section-head .actions { align-items: center; }
+span.pos { color: var(--green); }
+span.neg { color: var(--red); }
+.viz-dot { stroke: #fff; stroke-width: 1.5; }
+
 /* Modal */
 .modal-overlay {
   position: fixed; inset: 0; background: rgba(15,20,30,.45); z-index: 40;

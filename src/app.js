@@ -2,9 +2,10 @@ import {
   computeMonth, applyTitheRules, applyChecksRules, buildNextMonth,
   monthLabel, normFund, r2, migrateV2, migrateV3, migrateV4,
   autoPlanned, isOverridden, fundFlags, savingsMonthly, migrateV5,
+  migrateV6, aumTotals, upsertSnapshot, aumLastUpdated,
 } from './compute.js';
 import { parseBankCsv, buildVendorMap, suggestFund, findDuplicate } from './csv.js';
-import { groupedBars, barList } from './charts.js';
+import { groupedBars, barList, lineArea } from './charts.js';
 
 const VIZ = { s1: '#2a78d6', s2: '#eb6834' };
 
@@ -20,6 +21,7 @@ let txAccountFilter = '';
 let fundSearch = '';
 let importState = null;
 let flagPanel = null; // 'att' | 'off' | null — which flag list is expanded on the Budget page
+let aumLogOpen = false; // AUM change-log section, collapsed by default
 
 /* ---------------- persistence ---------------- */
 let saveTimer = null;
@@ -144,6 +146,7 @@ function render() {
   else if (view === 'transactions') renderTransactions(main);
   else if (view === 'import') renderImport(main);
   else if (view === 'reports') renderReports(main);
+  else if (view === 'aum') renderAum(main);
   else if (view === 'settings') renderSettings(main);
   // An open fund panel shows live numbers and position-dependent actions, so it
   // refreshes with the page rather than going stale.
@@ -151,19 +154,19 @@ function render() {
 }
 
 /* ---------------- Name-input dialog (Electron has no window.prompt) ---------------- */
-function promptName(title, placeholder, onSubmit) {
+function promptName(title, placeholder, onSubmit, { okLabel = 'Add', initial = '' } = {}) {
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.innerHTML = `
     <div class="modal" style="width:360px">
       <h2 style="font-size:1.05rem">${esc(title)}</h2>
       <div class="modal-row" style="margin-top:10px">
-        <input id="pnInput" class="search" style="flex:1" placeholder="${esc(placeholder)}" maxlength="60">
+        <input id="pnInput" class="search" style="flex:1" placeholder="${esc(placeholder)}" value="${esc(initial)}" maxlength="60">
       </div>
       <div class="modal-err" id="pnErr"></div>
       <div class="modal-actions">
         <button class="btn" id="pnCancel">Cancel</button>
-        <button class="btn btn-accent" id="pnOk">Add</button>
+        <button class="btn btn-accent" id="pnOk">${esc(okLabel)}</button>
       </div>
     </div>`;
   document.body.appendChild(overlay);
@@ -184,6 +187,7 @@ function promptName(title, placeholder, onSubmit) {
   $('#pnCancel', overlay).onclick = close;
   $('#pnOk', overlay).onclick = submit;
   input.focus();
+  if (initial) input.select();
 }
 
 /* ---------------- Transfer dialog ---------------- */
@@ -1557,6 +1561,246 @@ function renderReports(main) {
   main.dataset.fundDrill = sel;
 }
 
+/* ---------------- AUM view ----------------
+ * Assets Under Management (SeedTime's framing of net worth): everything you
+ * manage minus everything you owe. Month-independent — ignores the month
+ * picker; the value of the tab is the timeline, so every mutation upserts
+ * today's snapshot and writes a change-log entry via aumMutate().
+ */
+const AUM_STALE_DAYS = 90;
+
+function newAumId(kind) {
+  return (kind === 'asset' ? 'a_' : 'd_') + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);
+}
+
+// "Aug 19", with the year appended once it isn't this year's date.
+function fmtShortDate(iso) {
+  if (!iso) return '—';
+  const [y, m, d] = iso.split('-').map(Number);
+  return `${MONTH_SHORT[m - 1]} ${d}${y === Number(todayISO().slice(0, 4)) ? '' : ` ${y}`}`;
+}
+
+function aumDaysAgo(iso) {
+  return Math.round((new Date(todayISO()) - new Date(iso)) / 86400000);
+}
+
+function findAumItem(id) {
+  let item = data.aum.assets.find((x) => x.id === id);
+  if (item) return { item, kind: 'asset', list: data.aum.assets };
+  item = data.aum.debts.find((x) => x.id === id);
+  return item ? { item, kind: 'debt', list: data.aum.debts } : null;
+}
+
+// Single choke point for every AUM edit: the caller applies the field change,
+// this does the bookkeeping — change log (capped at 200), today's snapshot,
+// save, re-render. Nothing can forget a step.
+function aumMutate(action, kind, item, { from = null, to = null } = {}) {
+  data.aum.log.push({ date: todayISO(), kind, name: item.name, from, to, action });
+  if (data.aum.log.length > 200) data.aum.log.splice(0, data.aum.log.length - 200);
+  upsertSnapshot(data.aum, todayISO());
+  markDirty(); render();
+}
+
+function renderAum(main) {
+  const aum = data.aum;
+  const t = aumTotals(aum);
+  const snaps = aum.snapshots;
+  const last = snaps[snaps.length - 1], prev = snaps[snaps.length - 2];
+
+  // Hero note: movement since the previous snapshot (needs two to compare).
+  let deltaNote = '';
+  if (last && prev) {
+    const d = r2(last.aum - prev.aum);
+    deltaNote = Math.abs(d) > 0.004
+      ? `<span class="${d > 0 ? 'pos' : 'neg'}">${d > 0 ? '▲' : '▼'} ${money(Math.abs(d))}</span> since ${fmtShortDate(prev.date)} · `
+      : `unchanged since ${fmtShortDate(prev.date)} · `;
+  }
+
+  const luAssets = aumLastUpdated(aum.assets);
+  const luDebts = aumLastUpdated(aum.debts);
+
+  // One assets/debts section: header carries the total, last-updated and + Add;
+  // rows are biggest-first like the worksheet reads.
+  const sectionHtml = (kind, title, items) => {
+    const total = r2(items.reduce((a, x) => a + (x.value || 0), 0));
+    const lu = aumLastUpdated(items);
+    const sorted = [...items].sort((a, b) => (b.value || 0) - (a.value || 0));
+    let rows = '';
+    for (const it of sorted) {
+      const days = it.updatedAt ? aumDaysAgo(it.updatedAt) : null;
+      const stale = days != null && days > AUM_STALE_DAYS
+        ? ` <span class="rule-chip chip-warn" title="Last checked ${days} days ago — worth re-checking the current value.">stale</span>` : '';
+      rows += `<tr>
+        <td><a href="#" class="fund-name" data-aum-name="${it.id}" title="Rename">${esc(it.name)}</a></td>
+        <td><input class="money" data-aum-item="${it.id}" value="${money(it.value)}"></td>
+        <td class="muted">${fmtShortDate(it.updatedAt)}${stale}</td>
+        <td class="row-actions"><button class="btn-ghost" data-aum-del="${it.id}" title="Remove">✕</button></td></tr>`;
+    }
+    if (!sorted.length) rows = `<tr><td colspan="4" class="muted" style="padding:12px">Nothing here yet — use “+ Add”.</td></tr>`;
+    return `<div class="section aum-section">
+      <div class="section-head"><h2>${title} <span class="${kind === 'asset' ? 'pos' : ''}" style="font-weight:600">· ${money(total)}</span></h2>
+        <div class="actions">
+          ${lu ? `<span class="muted" style="font-size:.8rem;align-self:center">last updated ${fmtShortDate(lu)}</span>` : ''}
+          <button class="btn btn-sm" data-aum-add="${kind}">+ Add</button>
+        </div></div>
+      <table class="grid compact tbl-fixed"><colgroup>
+        <col style="width:44%"><col style="width:24%"><col style="width:24%"><col style="width:8%"></colgroup>
+        <thead><tr><th>${kind === 'asset' ? 'Asset' : 'Debt'}</th><th>${kind === 'asset' ? 'Value' : 'Owed'}</th><th>Updated</th><th></th></tr></thead>
+        <tbody>${rows}</tbody></table>
+    </div>`;
+  };
+
+  // History table, newest first, Δ vs the previous snapshot.
+  let historyHtml = '';
+  if (snaps.length) {
+    let hrows = '';
+    for (let i = snaps.length - 1; i >= 0; i--) {
+      const s = snaps[i], p = snaps[i - 1];
+      const d = p ? r2(s.aum - p.aum) : null;
+      hrows += `<tr><td>${fmtShortDate(s.date)}</td><td>${money(s.assets)}</td><td>${money(s.debts)}</td>
+        <td class="${moneyCls(s.aum)}">${money(s.aum)}</td>
+        <td class="${d == null ? 'muted' : moneyCls(d)}">${d == null ? '—' : (d > 0.004 ? '+' : '') + money(d)}</td></tr>`;
+    }
+    historyHtml = `<table class="grid compact"><thead><tr>
+      <th style="text-align:left">Date</th><th>Assets</th><th>Debts</th><th>AUM</th><th>Δ</th>
+    </tr></thead><tbody>${hrows}</tbody></table>`;
+  }
+
+  // Change log rows, newest first.
+  const logHtml = () => {
+    if (!aum.log.length) return `<p class="muted" style="padding:12px 16px;margin:0">No changes logged yet.</p>`;
+    const what = (e) => {
+      if (e.action === 'add') return `added at ${money(e.to || 0)}`;
+      if (e.action === 'remove') return `removed (was ${money(e.from || 0)})`;
+      if (e.action === 'rename') return `renamed “${esc(e.from)}” → “${esc(e.to)}”`;
+      return `${money(e.from || 0)} → ${money(e.to || 0)}`;
+    };
+    let rows = '';
+    for (let i = aum.log.length - 1; i >= 0; i--) {
+      const e = aum.log[i];
+      rows += `<tr><td class="muted" style="white-space:nowrap">${fmtShortDate(e.date)}</td>
+        <td>${e.kind === 'asset' ? 'Asset' : 'Debt'}</td><td style="text-align:left">${esc(e.name)}</td>
+        <td style="text-align:left">${what(e)}</td></tr>`;
+    }
+    return `<table class="grid compact"><thead><tr>
+      <th style="text-align:left">Date</th><th style="text-align:left">Type</th><th style="text-align:left">Name</th><th style="text-align:left">Change</th>
+    </tr></thead><tbody>${rows}</tbody></table>`;
+  };
+
+  main.innerHTML = `
+    <h1>AUM</h1>
+    <p class="sub">Assets under management — everything you manage, minus everything you owe. Good managers know what they're managing: re-check the values now and then, and watch the line move.</p>
+    <div class="month-head">
+      <div class="hero ${t.aum >= -0.004 ? 'good' : 'bad'}">
+        <div class="k">Assets under management</div>
+        <div class="v">${money(t.aum)}</div>
+        <div class="note">${deltaNote}assets ${money(t.assets)} − debts ${money(t.debts)}</div>
+      </div>
+      <div class="recap-stats month-stats">
+        <div><span class="k">Assets</span><span class="v pos">${money(t.assets)}</span>
+          <span class="muted" style="font-size:.75rem">${luAssets ? `last updated ${fmtShortDate(luAssets)}` : 'nothing tracked yet'}</span></div>
+        <div><span class="k">Debts</span><span class="v">${money(t.debts)}</span>
+          <span class="muted" style="font-size:.75rem">${luDebts ? `last updated ${fmtShortDate(luDebts)}` : 'nothing tracked yet'}</span></div>
+      </div>
+    </div>
+    <div class="section">
+      <div class="section-head"><h2>AUM over time</h2>
+        <div class="actions"><button class="btn btn-sm" id="aumSnapBtn"
+          title="Snapshots are recorded automatically whenever a value changes — this just marks today down deliberately.">Record snapshot</button></div></div>
+      ${snaps.length >= 2
+        ? `<div id="aumChart"></div>${historyHtml}`
+        : `<p class="muted" style="padding:14px 16px;margin:0">${snaps.length === 0
+            ? 'Add your assets and debts below — every edit records a snapshot, and the timeline appears once there are two days of history.'
+            : 'One snapshot so far — the chart appears once a second day is recorded.'}</p>${historyHtml}`}
+    </div>
+    <div class="aum-grid">
+      ${sectionHtml('asset', 'Assets', aum.assets)}
+      ${sectionHtml('debt', 'Debts', aum.debts)}
+    </div>
+    <div class="section">
+      <div class="section-head" id="aumLogToggle" style="cursor:pointer" title="Every add, edit, rename and removal, newest first (last 200 kept)">
+        <h2><span class="acc-caret">${aumLogOpen ? '▾' : '▸'}</span> Change log <span class="muted" style="font-weight:400">· ${aum.log.length}</span></h2></div>
+      ${aumLogOpen ? logHtml() : ''}
+    </div>`;
+
+  // Mount the chart: one AUM line, full snapshot in the tooltip.
+  if (snaps.length >= 2) {
+    $('#aumChart').appendChild(lineArea({
+      color: VIZ.s1,
+      points: snaps.map((s) => ({
+        label: fmtShortDate(s.date),
+        value: s.aum,
+        tip: `<div>Assets: <b>${money(s.assets)}</b></div><div>Debts: <b>${money(s.debts)}</b></div><div>AUM: <b>${money(s.aum)}</b></div>`,
+      })),
+    }));
+  }
+
+  // --- wire events ---
+  main.onclick = (e) => {
+    const add = e.target.closest('[data-aum-add]');
+    if (add) {
+      const kind = add.dataset.aumAdd;
+      const list = kind === 'asset' ? aum.assets : aum.debts;
+      promptName(kind === 'asset' ? 'New asset' : 'New debt',
+        kind === 'asset' ? 'e.g. House, 401(k), Car' : 'e.g. Mortgage, Car loan', (nm) => {
+          if (list.some((x) => x.name.toLowerCase() === nm.toLowerCase())) return 'That name is already on the list.';
+          const item = { id: newAumId(kind), name: nm, value: 0, updatedAt: todayISO() };
+          list.push(item);
+          aumMutate('add', kind, item, { to: 0 });
+          toast(`"${nm}" added — click its value to set it.`);
+        });
+      return;
+    }
+    const ren = e.target.closest('[data-aum-name]');
+    if (ren) {
+      e.preventDefault();
+      const found = findAumItem(ren.dataset.aumName);
+      if (!found) return;
+      const { item, kind, list } = found;
+      promptName(`Rename ${kind}`, item.name, (nm) => {
+        if (nm === item.name) return;
+        if (list.some((x) => x !== item && x.name.toLowerCase() === nm.toLowerCase())) return 'That name is already on the list.';
+        const old = item.name;
+        item.name = nm;
+        aumMutate('rename', kind, item, { from: old, to: nm });
+      }, { okLabel: 'Rename', initial: item.name });
+      return;
+    }
+    const del = e.target.closest('[data-aum-del]');
+    if (del) {
+      const found = findAumItem(del.dataset.aumDel);
+      if (!found) return;
+      const { item, kind, list } = found;
+      if (!confirm(`Remove ${kind} "${item.name}" (${money(item.value)})? Past snapshots and the change log keep its history.`)) return;
+      list.splice(list.indexOf(item), 1);
+      aumMutate('remove', kind, item, { from: item.value });
+      return;
+    }
+    if (e.target.closest('#aumSnapBtn')) {
+      upsertSnapshot(aum, todayISO());
+      markDirty(); render();
+      toast('Snapshot recorded for today.');
+      return;
+    }
+    if (e.target.closest('#aumLogToggle')) { aumLogOpen = !aumLogOpen; render(); }
+  };
+  main.onchange = (e) => {
+    const el = e.target;
+    if (!el.matches('[data-aum-item]')) return;
+    const found = findAumItem(el.dataset.aumItem);
+    if (!found) return;
+    const { item, kind } = found;
+    const v = parseMoney(el.value);
+    if (isNaN(v)) { render(); return; }
+    const nv = Math.abs(v); // both sides store positive numbers; AUM math subtracts
+    if (Math.abs(nv - (item.value || 0)) < 0.005) { render(); return; }
+    const from = item.value;
+    item.value = nv;
+    item.updatedAt = todayISO();
+    aumMutate('update', kind, item, { from, to: nv });
+  };
+}
+
 /* ---------------- Settings view ---------------- */
 function renderSettings(main) {
   const month = curMonth();
@@ -1782,6 +2026,9 @@ async function boot() {
   let migrated = migrateV2(data) | migrateV3(data) | migrateV4(data);
   const v5 = migrateV5(data);
   migrated = migrated || v5.changed;
+  // v6 must run after v5 — it bumps the version past 5, which would make
+  // migrateV5 skip its re-type pass on a fresh seed.
+  migrated = migrateV6(data) || migrated;
   // Record the re-typed list before saving so it survives a restart — the
   // migration only runs once, and the user should be able to review it later.
   if (v5.retyped.length) data.settings.lastRetype = v5.retyped;

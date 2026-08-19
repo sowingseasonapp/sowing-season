@@ -362,6 +362,50 @@ export function migrateV5(data) {
   return { changed: true, retyped };
 }
 
+// ---- AUM (assets under management) — v6 ----
+// SeedTime-style net worth: AUM = total assets − total debts. Two flat,
+// hand-entered lists plus an append-only snapshot history (at most one per
+// calendar day) and an item-level change log. Values are always positive for
+// both sides ("amount owed" for debts); the subtraction happens here.
+// Dates are YYYY-MM-DD strings supplied by the caller (app.js's todayISO()).
+
+export function aumTotals(aum) {
+  const sum = (arr) => r2((arr || []).reduce((a, x) => a + (x.value || 0), 0));
+  const assets = sum(aum.assets);
+  const debts = sum(aum.debts);
+  return { assets, debts, aum: r2(assets - debts) };
+}
+
+// Write today's totals into the snapshot history: replace the same-day entry
+// if one exists, else append — keeping the list sorted by date.
+export function upsertSnapshot(aum, dateISO) {
+  const t = aumTotals(aum);
+  const snap = { date: dateISO, assets: t.assets, debts: t.debts, aum: t.aum };
+  const i = aum.snapshots.findIndex((s) => s.date === dateISO);
+  if (i >= 0) aum.snapshots[i] = snap;
+  else {
+    aum.snapshots.push(snap);
+    aum.snapshots.sort((a, b) => a.date.localeCompare(b.date));
+  }
+  return snap;
+}
+
+// Most recent updatedAt across a list of assets/debts, or null when empty.
+export function aumLastUpdated(items) {
+  let max = null;
+  for (const x of items) if (x.updatedAt && (!max || x.updatedAt > max)) max = x.updatedAt;
+  return max;
+}
+
+// v5 → v6: add the top-level aum block. Must run after migrateV5 — it bumps
+// the version past 5, which would make migrateV5 skip its re-type pass.
+export function migrateV6(data) {
+  if ((data.version || 1) >= 6) return false;
+  if (!data.aum) data.aum = { assets: [], debts: [], snapshots: [], log: [] };
+  data.version = 6;
+  return true;
+}
+
 // v1 → v2: income funds get a group (standard = paychecks / bonus = everything else)
 // and each checks entry gets a titheAmount, defaulting to the net per-check amount so
 // every existing month's tithe value is preserved exactly.

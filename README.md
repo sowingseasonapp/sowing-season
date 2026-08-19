@@ -78,6 +78,13 @@ The app ships with all 2026 spreadsheet history (Dec 2025 – Aug 2026) already 
   withdrawals — are flagged and deselected. Nothing saves until you press Import.
 - **Year Overview** — income-vs-spending bars by month, a ranked "where the money went"
   chart, the monthly actuals table, and per-fund history with a planned-vs-spent chart.
+- **AUM** — assets under management (SeedTime's take on net worth): everything you manage,
+  minus everything you owe. Two hand-entered lists — assets and debts, no account syncing —
+  under one headline number, with every value showing when it was last checked (a `stale`
+  chip appears after 90 days). Every edit automatically records **today's snapshot**, so
+  the AUM-over-time chart and history table build themselves; a collapsed change log keeps
+  the last 200 item-level edits. Month-independent — the month picker doesn't apply here.
+  Stored in the data file's `aum` block (data version 6).
 - **Settings** — tithe %, fund rename (updates all months + transactions), new categories,
   data export.
 

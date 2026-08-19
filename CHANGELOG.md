@@ -9,6 +9,42 @@ so entries before that are dated by when the work happened, not by commit.
 
 ---
 
+## 2026-08-18 — AUM tab (data v6)
+
+New sidebar view: **🌱 AUM** (Assets Under Management) — SeedTime's (Bob & Linda Lotich)
+framing of net worth: **AUM = total assets − total debts**, kept deliberately
+worksheet-simple. Two flat hand-entered lists (assets and debts, both stored as positive
+"current value"/"amount owed" numbers), one hero figure, and — the actual point — a
+timeline: every mutation upserts **today's snapshot** (`{date, assets, debts, aum}`,
+append-only, at most one per calendar day), so the "AUM over time" line chart and history
+table build themselves. Each item carries `updatedAt` (set whenever its value changes),
+with a `stale` chip after 90 days as a nudge to re-check; an item-level **change log**
+(add / update / rename / remove, capped at 200 entries) answers "when was this logged".
+The view is **month-independent** — it ignores the month picker entirely and reads
+nothing from `data.months`.
+
+**Data model v6**: one new top-level block, `data.aum = { assets, debts, snapshots, log }`
+(`migrateV6` in compute.js). Persistence, backups and Settings → export all operate on the
+whole `data` object, so `main.js` needed zero changes; `data/seed.json` is untouched
+(first run migrates on boot). Pure logic (`aumTotals`, `upsertSnapshot`, `aumLastUpdated`,
+`migrateV6`) lives in compute.js with coverage in `npm test`.
+
+Decisions and traps:
+
+- **`migrateV6` must run *after* `migrateV5` in `boot()`** — it bumps `version` past 5,
+  and `migrateV5` keys off the version, so the other order silently skips the v5 re-type
+  pass on a fresh seed. (Found while writing the plan wiring, confirmed with the fixture.)
+- All AUM edits flow through one `aumMutate()` choke point (log entry → snapshot upsert →
+  `markDirty()` → `render()`), so no edit path can forget the bookkeeping.
+- `charts.js` gained `lineArea()` (same `el()`/`niceScale`/`viz-*`/tooltip conventions as
+  `groupedBars`). It's the one chart that must handle **negative values**: the y-scale
+  extends below zero and the `viz-baseline` is drawn at y(0), not the bottom edge.
+  `fmtTick` learned to print `-$8k` instead of `$-8k` along the way.
+- A "Record snapshot" button exists for a deliberate "mark it down" moment, but it's
+  optional by design — snapshots are automatic on every edit.
+- `promptName()` grew optional `okLabel`/`initial` options so the AUM rename dialog could
+  reuse it (Electron still has no `window.prompt`; same trap as 2026-08-10).
+
 ## 2026-08-17 — Per-card column headings + full UX audit
 
 **Column headings moved inside each card.** The one sticky header per group
@@ -188,7 +224,7 @@ everywhere, so re-editing one of those months would recompute its tithe slightly
   workbook. It must stay green; treat a new mismatch as a bug in the app.
 - **History is immutable.** Setup, tithe %, fund type and category changes apply to the
   selected month forward. Past months keep their own stored rules.
-- **Migrations are additive and idempotent**, keyed by `data.version` (now 5). Each one
+- **Migrations are additive and idempotent**, keyed by `data.version` (now 6). Each one
   must preserve every existing planned amount — the test suite asserts this.
 - **Money is rounded to whole cents** via `r2()`; compare with a tolerance of ~0.011.
 - **Package with `npm run pack`.** Never use electron-packager's CLI `--ignore` on Windows.
