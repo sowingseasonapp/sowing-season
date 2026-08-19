@@ -9,6 +9,14 @@ so entries before that are dated by when the work happened, not by commit.
 
 ---
 
+## 2026-08-18 — Remove the category progress bars
+
+The thin blue/red progress line across the top of each Budget-page card
+(`.acc-progress`, added in the layering pass) turned out to be more distracting
+than informative — the owner asked for it to go. The header totals and status
+chips already tell the story, so the bar, its `barPct`/`barOver` plumbing and
+its CSS were removed outright rather than hidden.
+
 ## 2026-08-18 — AUM tab (data v6)
 
 New sidebar view: **🌱 AUM** (Assets Under Management) — SeedTime's (Bob & Linda Lotich)

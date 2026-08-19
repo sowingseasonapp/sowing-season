@@ -861,7 +861,7 @@ const FUND_COLS = `<colgroup>
 // One collapsible section. Its header is a row on the same grid as the funds
 // beneath it, so the category totals line up with the fund columns — and the
 // body needs no totals row of its own.
-function accordionHtml({ key, title, note, open, totals, actions, body, barPct, barOver, activity, kind = 'expense' }) {
+function accordionHtml({ key, title, note, open, totals, actions, body, activity, kind = 'expense' }) {
   const cell = (v) => `<td class="${moneyCls(v)}">${money(v)}</td>`;
   // Spending is normal activity, not an alarm — show it as a plain positive
   // amount (like the Spent card up top) and keep red for actual problems.
@@ -874,10 +874,6 @@ function accordionHtml({ key, title, note, open, totals, actions, body, barPct, 
   const leftCell = (v) => kind === 'income' && v < -0.004
     ? `<td class="muted" title="${money(-v)} still expected this month">${money(v)}</td>`
     : cell(v);
-  // The progress bar spans the top edge of the card so it reads as this
-  // category's line, not as another item competing inside the header row.
-  const bar = barPct == null ? '' : `<div class="acc-progress" title="${Math.round(barPct)}% of the plan used">
-      <span class="${barOver ? 'over' : ''}" style="width:${Math.min(100, Math.max(0, barPct))}%"></span></div>`;
   // Column headings sit inside the card, right under the category name and on
   // the same grid, so they label the fund rows they belong to instead of
   // floating above the group. They stay pinned while the card is on screen.
@@ -893,7 +889,6 @@ function accordionHtml({ key, title, note, open, totals, actions, body, barPct, 
   const totalRow = `<table class="grid tbl-fixed">${FUND_COLS}<tbody><tr class="total">
       <td>Total</td>${totalCells}<td></td></tr></tbody></table>`;
   return `<div class="acc ${open ? 'open' : ''}" data-acc="${key}">
-    ${bar}
     <table class="grid tbl-fixed acc-head-table" data-acc-toggle="${key}">${FUND_COLS}<tbody><tr class="acc-head-row">
       <td class="acc-title-cell"${open ? ' colspan="5"' : ''}>
         <div class="acc-title-wrap">
@@ -1060,8 +1055,6 @@ function renderBudget(main) {
       note: `${all.length} fund${all.length === 1 ? '' : 's'}`,
       open,
       totals: gt,
-      barPct: gt.planned > 0.004 ? (gt.spent / gt.planned) * 100 : null,
-      barOver: false,
       actions: `<button class="btn-ghost" data-add-inc="${g.key}" title="Add a fund to ${esc(g.title)}">+</button>`,
       body,
     });
@@ -1089,7 +1082,6 @@ function renderBudget(main) {
     if (!rows.length) body += `<tr><td colspan="6" class="muted" style="padding:10px 12px">No funds yet — use “+ Add fund”.</td></tr>`;
     body += `</tbody></table>`;
     const t = c.totals;
-    const budget = r2(t.carryOver + t.planned);
     html += accordionHtml({
       key: accKey,
       activity: 'Spent',
@@ -1097,8 +1089,6 @@ function renderBudget(main) {
       note: `${c.funds.length} fund${c.funds.length === 1 ? '' : 's'}${c.excludeFromTotals ? ' · not counted in totals' : ''}`,
       open,
       totals: { carryOver: t.carryOver, planned: t.planned, spent: t.expensed, leftover: t.leftover },
-      barPct: budget > 0.004 ? (Math.abs(t.expensed) / budget) * 100 : null,
-      barOver: t.leftover < -0.004,
       actions: `<button class="btn-ghost" data-add-fund="${ci}" title="Add a fund to ${esc(c.name)}">+</button>
         <button class="btn-ghost" data-del-cat="${ci}" title="Remove “${esc(c.name)}” (must be empty first; past months keep it)">✕</button>`,
       body,

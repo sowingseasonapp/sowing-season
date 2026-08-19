@@ -94,11 +94,6 @@ h2 { font-size: 1.05rem; margin: 0; }
 .acc-title { font-size: .98rem; }
 .acc-note { font-weight: 400; font-size: .78rem; white-space: nowrap; }
 
-/* Category progress: one clean line across the top of the card */
-.acc-progress { height: 3px; background: #e9edf3; }
-.acc-progress span { display: block; height: 100%; background: var(--accent); }
-.acc-progress span.over { background: var(--red); }
-
 .acc-actions {
   display: flex; gap: 2px; align-items: center; justify-content: flex-end;
   white-space: nowrap; font-weight: 400; padding-right: 8px !important;
