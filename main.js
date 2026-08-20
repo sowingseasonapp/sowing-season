@@ -2,6 +2,10 @@ const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
+// Dev escape hatch: point userData at a scratch folder (demo data, screenshot
+// capture) so the real %APPDATA%\Family Budget file is never touched.
+if (process.env.BUDGET_DATA_DIR) app.setPath('userData', process.env.BUDGET_DATA_DIR);
+
 const DATA_DIR = () => app.getPath('userData');
 const DATA_FILE = () => path.join(DATA_DIR(), 'budget-data.json');
 const BACKUP_DIR = () => path.join(DATA_DIR(), 'backups');
@@ -96,6 +100,11 @@ app.whenReady().then(() => {
     return { path: res.filePaths[0], text: fs.readFileSync(res.filePaths[0], 'utf8') };
   });
   ipcMain.handle('data:reveal', () => { shell.showItemInFolder(DATA_FILE()); return true; });
+  // System-browser links. https:// only — never pass arbitrary strings to openExternal.
+  ipcMain.handle('shell:open-external', (_e, url) => {
+    if (typeof url === 'string' && /^https:\/\//i.test(url)) shell.openExternal(url);
+    return true;
+  });
   ipcMain.handle('data:export', async (_e, data) => {
     const res = await dialog.showSaveDialog({
       title: 'Export budget data',

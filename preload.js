@@ -7,4 +7,5 @@ contextBridge.exposeInMainWorld('budgetAPI', {
   openCsv: () => ipcRenderer.invoke('csv:open'),
   revealData: () => ipcRenderer.invoke('data:reveal'),
   exportData: (data) => ipcRenderer.invoke('data:export', data),
+  openExternal: (url) => ipcRenderer.invoke('shell:open-external', url),
 });

@@ -1638,14 +1638,130 @@ function renderReports(main) {
   main.dataset.fundDrill = sel;
 }
 
+/* ---------------- AUM walkthrough ----------------
+ * First-visit guide to the AUM page (settings.aumHelpSeen gates it), reopenable
+ * any time from the ? button in the page header. Slides are data; the modal
+ * reuses the standard overlay pattern. The SeedTime link opens in the system
+ * browser via the https-only openExternal IPC.
+ */
+const AUM_EPISODE_URL = 'https://seedtime.libsyn.com/aum-the-2nd-most-important-financial-metric-to-track';
+const AUM_STALE_DAYS = 90; // drives the amber "stale" chip in the AUM view below
+
+const AUM_SLIDES = [
+  {
+    img: 'assets/help/aum-overview.png',
+    title: 'Meet your AUM',
+    body: `AUM stands for <b>Assets Under Management</b> — everything you've been entrusted with,
+      minus everything you owe. It's one number: <b>total assets − total debts</b>. We use AUM
+      instead of "net worth" on purpose: your worth was never your balance sheet. You're the
+      <i>manager</i> of what you've been given — and good managers know what they're managing.`,
+  },
+  {
+    img: 'assets/help/aum-tables.png',
+    title: 'List what you manage',
+    body: `Add each asset with its rough current value: checking, savings, retirement accounts,
+      your home, vehicles. Estimates are fine — you can refine any value later just by
+      clicking it. The point is a complete picture, not a perfect one.`,
+  },
+  {
+    img: 'assets/help/aum-tables.png',
+    title: 'List what you owe',
+    body: `Add each debt as the <b>amount still owed</b>, entered as a positive number — the app
+      does the subtracting. Mortgage, car loans, cards, student loans. Seeing debts next to
+      assets is the whole exercise: it's all one thing you're managing.`,
+  },
+  {
+    img: 'assets/help/aum-trend.png',
+    title: 'Watch the trend, not the number',
+    body: `Every edit automatically saves a snapshot for today, and you can press <i>Record
+      snapshot</i> any time. The chart and the Δ column show whether you're moving forward.
+      That direction — not the number itself — is what faithful management looks like month
+      over month. A <b>stale</b> chip means a value hasn't been touched in ${AUM_STALE_DAYS}+ days
+      and probably needs a refresh.`,
+  },
+  {
+    img: null,
+    title: 'Keep it fresh',
+    body: `Update your values about once a month — it takes ten minutes. The change log at the
+      bottom remembers every edit. More questions about AUM? It comes from <b>SeedTime</b> —
+      Bob &amp; Linda Lotich explain it in their podcast episode <i>"(AUM) The 2nd most important
+      financial metric to track."</i>`,
+    cta: true,
+  },
+];
+
+function showAumWalkthrough() {
+  // The help button and the first-run path can race a re-render — never two.
+  if ($('.walkthrough-overlay')) return;
+  let slide = 0;
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay walkthrough-overlay';
+  overlay.tabIndex = -1;
+  overlay.innerHTML = `
+    <div class="modal walkthrough">
+      <button class="btn-ghost wt-close" id="wtClose" title="Close">✕</button>
+      <div class="wt-media" id="wtMedia"></div>
+      <h2 id="wtTitle"></h2>
+      <p class="wt-body" id="wtBody"></p>
+      <div class="wt-cta" id="wtCta"></div>
+      <div class="wt-foot">
+        <div class="wt-dots" id="wtDots"></div>
+        <div class="wt-nav">
+          <button class="btn" id="wtBack">Back</button>
+          <button class="btn btn-accent" id="wtNext">Next</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  const close = () => {
+    overlay.remove();
+    // Every dismissal counts as "seen" — Done, ✕, Escape, or overlay click.
+    if (!data.settings.aumHelpSeen) { data.settings.aumHelpSeen = true; markDirty(); }
+  };
+  const paint = () => {
+    const s = AUM_SLIDES[slide];
+    const last = slide === AUM_SLIDES.length - 1;
+    $('#wtMedia', overlay).innerHTML = s.img
+      ? `<img src="${s.img}" alt="${esc(s.title)} — screenshot">` : '';
+    $('#wtTitle', overlay).textContent = s.title;
+    $('#wtBody', overlay).innerHTML = s.body;
+    $('#wtCta', overlay).innerHTML = s.cta
+      ? `<button class="btn" id="wtSeedtime">Listen to the SeedTime episode ↗</button>
+         <div class="muted" style="font-size:.8rem;margin-top:8px">Reopen this guide any time with the ? button above.</div>`
+      : '';
+    $('#wtDots', overlay).innerHTML = AUM_SLIDES.map((_, i) =>
+      `<button class="wt-dot ${i === slide ? 'on' : ''}" data-slide="${i}" title="Slide ${i + 1}"></button>`).join('');
+    $('#wtBack', overlay).style.visibility = slide === 0 ? 'hidden' : 'visible';
+    $('#wtNext', overlay).textContent = last ? 'Done' : 'Next';
+    const st = $('#wtSeedtime', overlay);
+    if (st) st.onclick = () => window.budgetAPI.openExternal(AUM_EPISODE_URL);
+  };
+  const go = (i) => { slide = Math.max(0, Math.min(AUM_SLIDES.length - 1, i)); paint(); };
+
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) { close(); return; }
+    const dot = e.target.closest('.wt-dot');
+    if (dot) go(Number(dot.dataset.slide));
+  });
+  overlay.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') close();
+    else if (e.key === 'ArrowRight') go(slide + 1);
+    else if (e.key === 'ArrowLeft') go(slide - 1);
+  });
+  $('#wtClose', overlay).onclick = close;
+  $('#wtBack', overlay).onclick = () => go(slide - 1);
+  $('#wtNext', overlay).onclick = () => { if (slide === AUM_SLIDES.length - 1) close(); else go(slide + 1); };
+  paint();
+  overlay.focus();
+}
+
 /* ---------------- AUM view ----------------
  * Assets Under Management (SeedTime's framing of net worth): everything you
  * manage minus everything you owe. Month-independent — ignores the month
  * picker; the value of the tab is the timeline, so every mutation upserts
  * today's snapshot and writes a change-log entry via aumMutate().
  */
-const AUM_STALE_DAYS = 90;
-
 function newAumId(kind) {
   return (kind === 'asset' ? 'a_' : 'd_') + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);
 }
@@ -1765,7 +1881,7 @@ function renderAum(main) {
   };
 
   main.innerHTML = `
-    <h1>AUM</h1>
+    <h1>AUM <button class="help-btn" id="aumHelpBtn" title="How AUM works">?</button></h1>
     <p class="sub">Assets under management — everything you manage, minus everything you owe. Good managers know what they're managing: re-check the values now and then, and watch the line move.</p>
     <div class="month-head">
       <div class="hero ${t.aum >= -0.004 ? 'good' : 'bad'}">
@@ -1812,8 +1928,12 @@ function renderAum(main) {
     }));
   }
 
+  // First visit only — every dismissal sets the flag (see showAumWalkthrough).
+  if (!data.settings.aumHelpSeen) showAumWalkthrough();
+
   // --- wire events ---
   main.onclick = (e) => {
+    if (e.target.closest('#aumHelpBtn')) { showAumWalkthrough(); return; }
     const add = e.target.closest('[data-aum-add]');
     if (add) {
       const kind = add.dataset.aumAdd;

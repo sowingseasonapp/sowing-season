@@ -84,7 +84,9 @@ The app ships with all 2026 spreadsheet history (Dec 2025 – Aug 2026) already 
   chip appears after 90 days). Every edit automatically records **today's snapshot**, so
   the AUM-over-time chart and history table build themselves; a collapsed change log keeps
   the last 200 item-level edits. Month-independent — the month picker doesn't apply here.
-  Stored in the data file's `aum` block (data version 6).
+  Stored in the data file's `aum` block (data version 6). A 5-slide walkthrough opens on
+  the first visit (and any time via the `?` button next to the title), ending with a link
+  to the SeedTime podcast episode the concept comes from (opens in the system browser).
 - **Settings** — tithe %, fund rename (updates all months + transactions), new categories,
   data export.
 

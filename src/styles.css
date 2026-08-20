@@ -408,6 +408,36 @@ span.neg { color: var(--red); }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; }
 .modal-err { color: var(--red); font-size: .85rem; min-height: 1.2em; margin-top: 6px; }
 
+/* AUM walkthrough */
+.help-btn {
+  width: 20px; height: 20px; padding: 0; border-radius: 50%;
+  border: 1px solid var(--line); background: none; color: var(--ink-soft);
+  font-size: .7rem; font-weight: 600; line-height: 1; cursor: pointer;
+  vertical-align: 4px; margin-left: 2px;
+}
+.help-btn:hover { background: var(--accent); border-color: var(--accent); color: #fff; }
+.walkthrough { width: 560px; max-height: 88vh; overflow-y: auto; position: relative; }
+.walkthrough .wt-close { position: absolute; top: 10px; right: 12px; font-size: .85rem; }
+.walkthrough .wt-media { margin: 2px 0 12px; min-height: 24px; }
+.walkthrough .wt-media img {
+  display: block; width: 100%; border: 1px solid var(--line); border-radius: 8px;
+}
+.walkthrough h2 { margin: 0 0 6px; padding-right: 26px; }
+.walkthrough .wt-body { font-size: .92rem; line-height: 1.5; margin: 0; color: var(--ink); }
+.walkthrough .wt-cta { margin-top: 12px; }
+.walkthrough .wt-foot {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line);
+}
+.wt-dots { display: flex; gap: 7px; }
+.wt-dot {
+  width: 9px; height: 9px; padding: 0; border-radius: 50%; border: none;
+  background: var(--line); cursor: pointer;
+}
+.wt-dot:hover { background: var(--ink-soft); }
+.wt-dot.on { background: var(--accent); }
+.wt-nav { display: flex; gap: 8px; }
+
 /* Settings */
 .settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; }
 .field-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; }

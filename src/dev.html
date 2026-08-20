@@ -37,6 +37,7 @@
       openCsv: async () => ({ path: 'sample.csv', text: await fetch('/sample.csv').then((r) => r.text()) }),
       revealData: async () => alert('(dev mode)'),
       exportData: async () => true,
+      openExternal: async (url) => { console.log('openExternal:', url); return true; },
     };
   </script>
   <script type="module" src="/src/app.js"></script>

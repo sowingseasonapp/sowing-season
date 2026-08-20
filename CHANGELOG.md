@@ -9,7 +9,37 @@ so entries before that are dated by when the work happened, not by commit.
 
 ---
 
-## 2026-08-19 — Variable income ("my paycheck isn't the same every time")
+## 2026-08-19 — AUM first-run walkthrough + persistent ? help
+
+Implements `_cowork/proposal-aum-walkthrough.md` (the owner's 2026-08-20 decisions there:
+real screenshots, ? button in the AUM header, full SeedTime framing, link to the
+SeedTime podcast episode — not `/smrl-aum`, which is an email-capture page).
+
+- **First visit to AUM** auto-opens a 5-slide walkthrough (`showAumWalkthrough` +
+  `AUM_SLIDES` in app.js, directly above the AUM view section). Any dismissal — Done,
+  ✕, Escape, or overlay click — sets `settings.aumHelpSeen` and saves through the
+  normal `markDirty()` path. Additive boolean, absent = falsy: **no migration, data
+  version stays 6**, seed.json untouched. A `?` button next to the AUM `<h1>` reopens
+  it any time from slide 1; a guard refuses a second overlay (first-run and the button
+  can race a re-render).
+- **Trap that cost a debug cycle**: the slides template referenced `AUM_STALE_DAYS`,
+  which was declared *below* it — a `const` temporal-dead-zone throw at module load
+  left the whole renderer blank. The constant now lives at the top of the walkthrough
+  section. If app.js ever renders nothing, check the console for exactly this class of
+  error first.
+- **New IPC #7, `shell:open-external`** (preload `openExternal`): slide 5's "Listen to
+  the SeedTime episode ↗" opens the system browser. main.js allowlists `https://` only —
+  never pass arbitrary strings to `shell.openExternal`. There is still no `will-navigate`
+  guard app-wide (no `<a href>` to external hosts exists); noted as someday-hardening.
+- **Screenshots** (`src/assets/help/`, ~145 KB total, bundled automatically — the
+  packager keeps all of `src/`): captured from the real app running against **fabricated
+  demo data**, never the owner's live file or seed.json. The capture path is the new
+  `BUDGET_DATA_DIR` env escape hatch at the top of main.js (`app.setPath('userData', …)`
+  before anything reads it), pointed at a scratch folder with invented assets/debts and
+  12 invented snapshots. Kept because it's generally useful for dev profiles. Capture
+  trick: shoot at 1:1 from a 1160×800 window — `nativeImage.resize()` resampling
+  anti-aliases flat UI regions and ballooned the PNGs past the size budget.
+- **dev.html** shim grew a matching `openExternal` stub (logs to console).
 
 Implements `_cowork/variable-income-proposal.md` (designed for future public users —
 hourly, tips, commission — per the owner's 2026-08-20 decisions there: nudge + one-click
