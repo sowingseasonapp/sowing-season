@@ -9,6 +9,46 @@ so entries before that are dated by when the work happened, not by commit.
 
 ---
 
+## 2026-08-19 — Variable income ("my paycheck isn't the same every time")
+
+Implements `_cowork/variable-income-proposal.md` (designed for future public users —
+hourly, tips, commission — per the owner's 2026-08-20 decisions there: nudge + one-click
+fix, nothing changes without a tap). Variable income is **not a new income type**: it's
+Standard Income with an *estimated* per-check amount plus a true-up nudge. All changes
+live in app.js — compute.js is untouched, no data version bump.
+
+- **Data**: one additive flag, `variable: true`, on a fund's `month.checks[fund]` entry.
+  It travels with the paycheck settings, so `buildNextMonth` copies it forward for free
+  and the existing Standard→Extra switch deletes it with the checks entry. Absent/falsy
+  on all existing data — old files load unchanged.
+- **Fund panel**: a "Per-check amount varies (hourly, tips, commission)" checkbox in the
+  `#pnlChecks` block. When on, the per-check field reads as an estimate ("each
+  (estimated)", plan-low tooltip) and a suggestion line appears when history exists:
+  "Recent average: $X per check — [Use]" (`recentPerCheckAvg`: mean of per-check actuals,
+  `received / checks.count`, over the last ≤3 prior months with checks set up and
+  received > 0).
+- **True-up nudge**: fourth review-strip group, **💵 Paycheck check-in**, built from
+  `comp.income` (`fundFlags` stays expense-only). For each variable standard fund still
+  on its checks rule, `diff = received − planned`: over by > $1 nudges any time;
+  under by > $1 only once the month is done (mid-month a low number just means checks
+  haven't landed — the muted "still expected" leftover already covers it). Counts toward
+  the Review badge.
+- **"Use actual"** sets `chk.amount = r2(received / chk.count)` then `recalcRules` —
+  never writes `f.planned` directly (the planned handler clears the rule, and
+  `applyChecksRules` would overwrite it anyway). Because next month copies `checks`
+  forward, the trued-up number *is* next month's plan — "budget last month's income"
+  falls out with zero new rollover logic. `count × r2(received/count)` can miss received
+  by a cent when it doesn't divide evenly; that's under the $1 threshold, so no re-nudge.
+- **Tithe unchanged**: still `count × titheAmount`. For variable funds the titheable
+  field is a typical-gross estimate (tooltip says so). Exact tithing would need a
+  per-check ledger — explicitly rejected in the proposal.
+- Copy: Standard Income group hint and `INCOME_TYPES` description now mention varying
+  pay; the budget-row caption appends "est." for variable funds ("2 × $950.00 est.").
+
+Verified in the dev harness: toggle on/off, suggestion average (mixes trued-up and
+salaried months correctly), over-nudge mid-month, under-nudge only after month end,
+Use actual → leftover ≈ 0 with rule intact, rollover carries flag + trued-up amount.
+
 ## 2026-08-18 — Remove the category progress bars
 
 The thin blue/red progress line across the top of each Budget-page card

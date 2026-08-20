@@ -1,5 +1,5 @@
 import {
-  computeMonth, applyTitheRules, applyChecksRules, buildNextMonth,
+  computeMonth, applyTitheRules, applyChecksRules, buildNextMonth, fundSums,
   monthLabel, normFund, r2, migrateV2, migrateV3, migrateV4,
   autoPlanned, isOverridden, fundFlags, savingsMonthly, migrateV5,
   migrateV6, aumTotals, upsertSnapshot, aumLastUpdated,
@@ -131,6 +131,24 @@ function recalcRules(month) {
   applyTitheRules(month, data.settings.tithePercent ?? 0.15);
 }
 
+// Average per-check actual over the last (up to) 3 months before `beforeId`
+// where this fund had checks set up and actually received money. Used to
+// suggest an estimate for variable-income funds; null when no history.
+function recentPerCheckAvg(fundName, beforeId) {
+  const prior = data.months
+    .filter((m) => m.id < beforeId)
+    .sort((a, b) => b.id.localeCompare(a.id));
+  const vals = [];
+  for (const m of prior) {
+    if (vals.length >= 3) break;
+    const chk = (m.checks || {})[fundName];
+    if (!chk || !(chk.count > 0)) continue;
+    const received = fundSums(m)[normFund(fundName)] || 0;
+    if (received > 0) vals.push(received / chk.count);
+  }
+  return vals.length ? r2(vals.reduce((a, b) => a + b, 0) / vals.length) : null;
+}
+
 /* ---------------- shell ---------------- */
 function renderShell() {
   const selEl = $('#monthSelect');
@@ -259,7 +277,7 @@ function showTransferModal(presetFrom = '', onDone = null) {
  * "Build forever vs. goal" is just an optional "stop at" amount.
  */
 const INCOME_TYPES = [
-  { key: 'standard', name: 'Standard Income', desc: 'Paychecks, bonuses, or a main source of income — planned as checks × per-check amount.' },
+  { key: 'standard', name: 'Standard Income', desc: 'Paychecks or a main source of income — planned as checks × per-check amount (or an estimate, if your pay varies).' },
   { key: 'bonus', name: 'Extra Income', desc: 'Inconsistent income you want to track — gifts, reimbursements and the like.' },
 ];
 
@@ -437,6 +455,7 @@ function renderFundPanel() {
     .filter(({ t }) => normFund(t.fund) === normFund(f.fund))
     .sort((a, b) => (b.t.date || '').localeCompare(a.t.date || ''));
   const chk = isIncome ? ((month.checks || {})[f.fund] || { count: 0, amount: 0, titheAmount: 0 }) : null;
+  const chkAvg = (chk && chk.variable) ? recentPerCheckAvg(f.fund, month.id) : null;
   const sibCount = isIncome
     ? month.income.filter((x) => (x.group || 'bonus') === (f.group || 'bonus')).length
     : month.categories[panelRef.ci].funds.length;
@@ -489,10 +508,20 @@ function renderFundPanel() {
               <div class="modal-row"><label style="width:auto">Paychecks</label>
                 <input class="money small-num" id="pnlChkCount" style="flex:none" value="${chk.count || 0}" title="Number of checks this month">
                 <span class="muted">×</span>
-                <input class="money" id="pnlChkAmount" style="width:110px;flex:none" value="${money(chk.amount || 0)}" title="Deposited amount per check (after deductions)">
-                <span class="muted">each</span></div>
+                <input class="money" id="pnlChkAmount" style="width:110px;flex:none" value="${money(chk.amount || 0)}" title="${chk.variable
+                  ? 'Estimated per check. Plan on the low side — you can only spend income after it arrives. When checks come in, the month review offers to update this to the real amount.'
+                  : 'Deposited amount per check (after deductions)'}">
+                <span class="muted">${chk.variable ? 'each (estimated)' : 'each'}</span></div>
+              ${chk.variable && chkAvg != null ? `<div class="modal-row" style="margin-top:-4px">
+                <span class="fund-note">Recent average: ${money(chkAvg)} per check</span>
+                <button class="btn btn-sm" id="pnlChkUse" style="flex:none" title="Set the estimate to the recent average">Use</button></div>` : ''}
+              <div class="setup-options" style="margin:2px 0 8px">
+                <label title="For hourly, tips or commission pay. The per-check amount becomes an estimate — plan low, and the month review offers a one-tap update to what actually arrived.">
+                  <input type="checkbox" id="pnlChkVar" ${chk.variable ? 'checked' : ''}> Per-check amount varies <span class="muted">(hourly, tips, commission)</span></label>
+              </div>
               <div class="modal-row"><label style="width:auto" title="Per-check income the tithe is based on (before insurance/retirement deductions)">Titheable per check</label>
-                <input class="money" id="pnlChkTithe" style="width:110px;flex:none" value="${money(chk.titheAmount || 0)}" title="Per-check income the tithe is based on (before insurance/retirement deductions)"></div>
+                <input class="money" id="pnlChkTithe" style="width:110px;flex:none" value="${money(chk.titheAmount || 0)}" title="Per-check income the tithe is based on (before insurance/retirement deductions)${
+                  chk.variable ? '. If your pay varies, use a typical gross check — the tithe is an estimate.' : ''}"></div>
             </div>
             <p class="setup-result" id="pnlIncCalc"></p>
             <div class="setup-options">
@@ -581,6 +610,19 @@ function renderFundPanel() {
     chkApply($('#pnlChkCount', wrap), 'count', true);
     chkApply($('#pnlChkAmount', wrap), 'amount');
     chkApply($('#pnlChkTithe', wrap), 'titheAmount');
+    const varCb = $('#pnlChkVar', wrap);
+    if (varCb) varCb.onchange = (e) => {
+      if (!month.checks[f.fund]) month.checks[f.fund] = { count: 0, amount: 0, titheAmount: 0 };
+      if (e.target.checked) month.checks[f.fund].variable = true;
+      else delete month.checks[f.fund].variable;
+      markDirty(); render();
+    };
+    const useAvg = $('#pnlChkUse', wrap);
+    if (useAvg) useAvg.onclick = () => {
+      month.checks[f.fund].amount = chkAvg;
+      recalcRules(month); markDirty(); render();
+      toast(`Estimated per check set to ${money(chkAvg)}.`);
+    };
     $('#pnlExempt', wrap).onchange = (e) => { f.titheExempt = e.target.checked; recalcRules(month); markDirty(); render(); };
     $('#pnlCarryFwd', wrap).onchange = (e) => { f.carryForward = e.target.checked; markDirty(); render(); };
     incRefresh();
@@ -919,7 +961,26 @@ function renderBudget(main) {
   const offList = flags.filter((x) => x.offset);
   const flagMap = {};
   for (const x of flags) flagMap[normFund(x.fund)] = x;
-  const reviewCount = attList.length + offList.length + (comp.unassigned.length ? 1 : 0);
+
+  // Variable-income true-up: nudge when a paycheck estimate has drifted from
+  // what actually arrived. Over-received nudges any time; under-received only
+  // once the month is done — mid-month a low number just means checks haven't
+  // landed yet, which the muted "still expected" leftover already covers.
+  const nowMonth = todayISO().slice(0, 7);
+  const [mYr, mMo] = month.id.split('-').map(Number);
+  const monthDone = month.id < nowMonth ||
+    (month.id === nowMonth && Number(todayISO().slice(8, 10)) >= new Date(mYr, mMo, 0).getDate());
+  const checkIns = [];
+  for (const f of comp.income) {
+    if ((f.group || 'bonus') !== 'standard') continue;
+    if (!(f.rule && f.rule.type === 'checks')) continue; // planned manually overridden — the estimate no longer drives it
+    const chk = (month.checks || {})[f.fund];
+    if (!chk || !chk.variable || !(chk.count > 0)) continue;
+    const diff = r2(f.received - f.planned);
+    if (diff > 1 || (diff < -1 && monthDone)) checkIns.push({ fund: f.fund, diff });
+  }
+
+  const reviewCount = attList.length + offList.length + checkIns.length + (comp.unassigned.length ? 1 : 0);
 
   // Which sections are expanded: search overrides, else remembered, else smart default.
   const q = fundSearch.trim().toLowerCase();
@@ -986,16 +1047,27 @@ function renderBudget(main) {
       <td colspan="3">${comp.unassigned.length} transaction(s) aren't assigned to a fund this month</td>
       <td style="width:40px"><button class="btn-ghost" data-act="show-unassigned" title="Review them">→</button></td></tr>`] : [];
 
+    // Income estimates aren't problems, so they get their own group rather than
+    // riding along under "Needs attention".
+    const chkInRows = checkIns.map((x) => `<tr>
+      <td><a href="#" class="fund-name" data-review-fund="${esc(x.fund)}">${esc(x.fund)}</a>
+        <span class="muted">· Standard Income</span></td>
+      <td>Checks came in ${money(Math.abs(x.diff))} ${x.diff > 0 ? 'over' : 'under'} the estimate</td>
+      <td class="${moneyCls(x.diff)}">${money(x.diff)}</td>
+      <td style="width:92px"><button class="btn btn-sm" data-use-actual="${esc(x.fund)}"
+        title="Update the per-check estimate so planned matches what actually arrived — next month starts from the real number too">Use actual</button></td></tr>`);
+
     html += `<div class="review-strip">
       ${group('⚠ Needs attention', 'over budget or spending too fast', attRows)}
       ${group('💡 Available to move', 'safe to transfer elsewhere', offRows)}
       ${group('📥 Unassigned transactions', 'not counted in any fund', unRows)}
+      ${group('💵 Paycheck check-in', 'update the estimate to what actually arrived', chkInRows)}
     </div>`;
   }
 
   // Income sections: Standard (paychecks) and Bonus (everything else)
   const incomeGroups = [
-    { key: 'standard', title: 'Standard Income', hint: 'Paychecks, bonuses, or a main source of income. Planned = checks × per-check amount. The tithe uses the titheable amount (before insurance/retirement deductions), not the deposited amount.' },
+    { key: 'standard', title: 'Standard Income', hint: 'Paychecks, bonuses, or a main source of income. Planned = checks × per-check amount. The tithe uses the titheable amount (before insurance/retirement deductions), not the deposited amount. If your pay varies, open the fund and turn on "amount varies" — plan low and let the month review true it up.' },
     { key: 'bonus', title: 'Extra Income', hint: 'Inconsistent income you want to track — gifts, reimbursements, transfers. Tithed at the full planned amount unless exempt.' },
   ];
   // Transactions per fund this month (for the count column).
@@ -1026,7 +1098,7 @@ function renderBudget(main) {
       const chk = (month.checks || {})[f.fund] || { count: 0, amount: 0, titheAmount: 0 };
       // Paycheck maths live in the fund panel; the row just states the result.
       const caption = isStd && chk.count
-        ? `<div class="fund-note">${chk.count} × ${money(chk.amount)}${chk.titheAmount && Math.abs(chk.titheAmount - chk.amount) > 0.004
+        ? `<div class="fund-note">${chk.count} × ${money(chk.amount)}${chk.variable ? ' est.' : ''}${chk.titheAmount && Math.abs(chk.titheAmount - chk.amount) > 0.004
             ? ` · titheable ${money(chk.titheAmount)}` : ''}</div>`
         : '';
       body += `<tr>
@@ -1135,6 +1207,21 @@ function renderBudget(main) {
     }
     const xfer = e.target.closest('[data-xfer]');
     if (xfer) { showTransferModal(xfer.dataset.xfer); return; }
+    // Variable-income true-up: snap the per-check estimate to what actually
+    // arrived. Never writes planned directly — recalcRules recomputes it from
+    // count × amount, which keeps the checks rule alive and rolls the real
+    // number into next month.
+    const useAct = e.target.closest('[data-use-actual]');
+    if (useAct) {
+      const fInc = comp.income.find((x) => normFund(x.fund) === normFund(useAct.dataset.useActual));
+      const chk = fInc && (month.checks || {})[fInc.fund];
+      if (chk && chk.count > 0) {
+        chk.amount = r2(fInc.received / chk.count);
+        recalcRules(month); markDirty(); render();
+        toast(`"${fInc.fund}" estimate updated to ${money(chk.amount)} per check.`);
+      }
+      return;
+    }
     // Review-strip fund name → open that fund's panel wherever it lives.
     const rvFund = e.target.closest('[data-review-fund]');
     if (rvFund) {
