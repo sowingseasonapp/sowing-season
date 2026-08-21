@@ -9,6 +9,66 @@ so entries before that are dated by when the work happened, not by commit.
 
 ---
 
+## 2026-08-20 — Bank-agnostic CSV importer, Phases 1–4
+
+Implements `_cowork/bank-csv-research/` (research bundle from 2026-08-11; decisions in
+`03-DECISIONS-AND-WORK-ORDER.md` and `PHASE-4-GO-AHEAD.md`). Four commits, one per phase.
+The new pipeline lives in `src/csv/` (decode → tokenize → structure → roles → values →
+sign → profiles → import), entry point `parseBankFile(bytesOrText, {answers, profiles})`
+re-exported from csv.js; the six legacy csv.js exports keep their signatures. Cents are
+exact integers (BigInt) inside the importer, dollars at the boundary; the stored JSON
+shape is untouched and **no stored transactions were migrated**.
+
+Core stance (D1): the importer **refuses or asks instead of guessing**. Day-first dates,
+decimal commas, semicolon delimiters and recognised-but-unsupported formats (Monzo,
+Sparkasse) refuse by name; genuine ambiguity raises blocking questions the Import button
+waits on; a running-balance column is a hard reconciliation gate. User-confirmed profiles
+persist to `bank-profiles.json` in userData (IPC `profiles:load/save`, honours
+`BUDGET_DATA_DIR`) and are authoritative on repeat imports; seed profiles are structural
+only.
+
+Phase 4 (this commit) — the long-tail items, minus one:
+
+- **Scored duplicate matcher** (proposal §8). `scoreDuplicate` tiers: exact = 1.0; within
+  2¢ or 0.5% = 0.9; within 5% *and* the larger amount is the later one *and* the vendor
+  looks like dining/fuel = 0.6 (tips, pump holds). ≥0.9 auto-marks **duplicate**
+  (deselected); 0.6–0.9 renders **possible duplicate** — pre-checked so it imports unless
+  unticked. The `claimed`-set multiplicity behaviour is kept (three identical coffees need
+  three existing entries). New keys: account (same $50 on two cards ≠ duplicate) and bank
+  transaction ids — trusted only when the id column is ≥95% non-empty and ≥95% distinct
+  (`report.externalIdTrusted`; Zions ships a constant "null" reference column, which is
+  why the validation exists). Trusted ids are stored on imported transactions so the next
+  import of that account dedupes exactly. Date window is now **asymmetric −3…+7 days**
+  (pending posts later). Legacy `findDuplicate` keeps its signature but returns only
+  confident (≥0.9) matches. `normVendor` folds accents (NFKD) so a re-encoded "Café"
+  can't double.
+- **Full pending-row handling**: the status vocabulary covers the reference's flag list
+  (Pending, Placed, Denied, Reversed, Issued, Failed, Expired, Declined, Reverted,
+  Cancelled), and a **blank clearing/settle/completed date column marks a row pending**
+  (Apple Card has no Status column at all — the blank Clearing Date is the marker).
+- **Second descriptions**: memo-role columns (Comments, Extended Details, Notes) ride on
+  each record, land in the transaction's `description` field, feed `suggestFund` and act
+  as an alternate vendor key in duplicate matching — credit-union exports put a type code
+  in Description and the real merchant in Comments.
+- **Direction columns** (unsigned amounts + a Type/Credit-Debit indicator — Mint, Zions):
+  which token means which direction is **data, never code**. Per token: balance proof >
+  the user's answer > a stored profile mapping > the unambiguous debit/credit and
+  withdrawal/deposit families. Anything else (Af/Bij, Sale/Payment…) asks a per-token
+  question, and the answer persists into the resolved profile. The test suite proves the
+  same Af/Bij tokens import with opposite signs when the balance column says so.
+- **Multi-table files are REFUSED** (the owner's decision, reversing the proposal's "offer
+  both tables"): a second table = an investment export (Vanguard, IBKR), which an
+  envelope budget shouldn't ingest. `segment()` now scores a would-be second header with
+  the rows beneath it, so the detection actually fires. Fixture 53 asserts the refusal.
+
+Tests: `npm run test:csv` — 505 checks. Fixture #0 (both Capital One formats) is still
+byte-identical to the pre-change baseline, and `parseBankFile` must agree with the legacy
+parser on those files. **the owner's follow-up**: on the next 2–3 real imports, review the
+"possible duplicate" rows specifically to confirm the 0.6–0.9 scoring feels right before
+trusting it.
+
+---
+
 ## 2026-08-19 — AUM first-run walkthrough + persistent ? help
 
 Implements `_cowork/proposal-aum-walkthrough.md` (the owner's 2026-08-20 decisions there:

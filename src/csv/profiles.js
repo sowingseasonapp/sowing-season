@@ -121,6 +121,10 @@ export function buildResolvedProfile({ headerCells, arity, headerless, report, m
     dateOrder: report.dateOrder,
     roles: report.roles,
     signConvention: report.signConvention?.stored || 'as-is',
+    // The token → direction mapping this run resolved (balance proof, an
+    // answered question, or the debit/credit families) — persisting it is what
+    // makes the next import of this shape skip every direction heuristic.
+    directionTokens: report.signConvention?.directionTokens || matched?.directionTokens || null,
     pendingRule: matched?.pendingRule || null,
   };
 }

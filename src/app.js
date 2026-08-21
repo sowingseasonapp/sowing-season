@@ -4,7 +4,7 @@ import {
   autoPlanned, isOverridden, fundFlags, savingsMonthly, migrateV5,
   migrateV6, aumTotals, upsertSnapshot, aumLastUpdated,
 } from './compute.js';
-import { parseBankFile, buildVendorMap, suggestFund, findDuplicate } from './csv.js';
+import { parseBankFile, buildVendorMap, suggestFund, findDuplicateScored } from './csv.js';
 import { groupedBars, barList, lineArea } from './charts.js';
 
 const VIZ = { s1: '#2a78d6', s2: '#eb6834' };
@@ -1467,6 +1467,8 @@ function renderImport(main) {
       <span>Money out <b class="neg">${money(Math.abs(outTotal))}</b></span>
       ${balanceLine}
       ${pending ? `<span class="muted">${pending} pending row${pending === 1 ? '' : 's'} skipped (they'll re-appear as posted in a later export)</span>` : ''}
+      ${(() => { const n = importState.rows.filter((r) => r.possibleDup).length;
+        return n ? `<span class="muted">⚠ ${n} row${n === 1 ? ' looks' : 's look'} similar to entries you already have — marked “possible duplicate” below; untick any that are the same purchase</span>` : ''; })()}
       ${report?.signConvention?.verdict === 'flip' ? '<span class="muted">This bank writes spending as positive — amounts were converted so money out shows negative</span>' : ''}
       ${anomalies.length ? `<span class="import-anomaly">⚠ ${anomalies.length} row${anomalies.length === 1 ? '' : 's'} couldn't be read and ${anomalies.length === 1 ? 'was' : 'were'} left out — ${esc(anomalies.slice(0, 3).map((a) => `row ${a.row}: bad ${a.code === 'BadDate' ? 'date' : 'amount'} “${a.msg}”`).join(', '))}${anomalies.length > 3 ? ', …' : ''}</span>` : ''}
     </div>`;
@@ -1508,16 +1510,18 @@ function renderImport(main) {
       const rec = row.rec;
       const badges = [];
       if (row.duplicate) badges.push('<span class="badge dup">duplicate</span>');
+      else if (row.possibleDup) badges.push('<span class="badge dup-maybe" title="Same place and a similar amount within a few days of an entry you already have — often a tip or a gas-pump hold posting. It will import unless you untick it.">possible duplicate</span>');
       if (rec.isCardPayment) badges.push('<span class="badge pay">card payment</span>');
       if (!row.monthExists) badges.push(`<span class="badge warn">month not started</span>`);
       if (row.include && !row.fund) badges.push('<span class="badge warn">pick a fund</span>');
-      if (row.include && row.fund && !row.duplicate && !rec.isCardPayment) badges.push('<span class="badge new">ready</span>');
+      if (row.include && row.fund && !row.duplicate && !row.possibleDup && !rec.isCardPayment) badges.push('<span class="badge new">ready</span>');
       const month = row.monthExists ? data.months.find((m) => m.id === row.monthId) : null;
       html += `<tr class="${row.include ? '' : 'import-row-off'}">
         <td><input type="checkbox" data-imp-inc="${i}" ${row.include ? 'checked' : ''} ${row.monthExists ? '' : 'disabled'}></td>
         <td>${fmtDate(rec.date)}</td>
-        <td title="${esc(rec.vendor)}">${esc(rec.vendor.length > 38 ? rec.vendor.slice(0, 38) + '…' : rec.vendor)}
-          ${rec.account ? `<span class="fund-note"> · ${esc(rec.account)}</span>` : ''}</td>
+        <td title="${esc(rec.vendor)}${rec.memo ? ' — ' + esc(rec.memo) : ''}">${esc(rec.vendor.length > 38 ? rec.vendor.slice(0, 38) + '…' : rec.vendor)}
+          ${rec.account ? `<span class="fund-note"> · ${esc(rec.account)}</span>` : ''}
+          ${rec.memo ? `<div class="fund-note">${esc(rec.memo.length > 44 ? rec.memo.slice(0, 44) + '…' : rec.memo)}</div>` : ''}</td>
         <td class="${moneyCls(rec.amount)}">${money(rec.amount)}</td>
         <td>${monthLabel(row.monthId)}</td>
         <td>${month ? `<select class="inline ${row.include && !row.fund ? 'missing' : ''}" data-imp-fund="${i}">${fundOptions(month, row.fund)}</select>` : '<span class="muted">—</span>'}
@@ -1553,18 +1557,26 @@ function renderImport(main) {
     const rows = records.map((rec) => {
       const monthId = rec.date.slice(0, 7);
       const month = data.months.find((m) => m.id === monthId);
-      const dup = month ? !!findDuplicate(data.months, rec, claimed) : false;
+      // Scored matching (§8): ≥0.9 auto-marks as a duplicate; 0.6–0.9 is a
+      // "possible duplicate" — still selected, badged for the user to review.
+      const dup = month ? findDuplicateScored(data.months, rec, claimed,
+        { idTrusted: report.externalIdTrusted }) : null;
+      const duplicate = !!dup && dup.score >= 0.9;
       let fund = '', suggestNote = '';
       if (month) {
-        const sug = suggestFund(vendorMap, rec.vendor);
+        // The memo often holds the real merchant string (credit-union exports
+        // put a type code in Description) — try it when the vendor is unknown.
+        const sug = suggestFund(vendorMap, rec.vendor)
+          || (rec.memo ? suggestFund(vendorMap, rec.memo) : null);
         if (sug) {
           const canon = canonicalFund(month, sug.fund);
           if (canon) { fund = canon; suggestNote = `auto-matched (seen ${sug.n}×)`; }
         }
       }
       return {
-        rec, monthId, monthExists: !!month, duplicate: dup, fund, suggestNote,
-        include: !blocked && !!month && !dup && !rec.isCardPayment,
+        rec, monthId, monthExists: !!month, duplicate,
+        possibleDup: !!dup && dup.score < 0.9, fund, suggestNote,
+        include: !blocked && !!month && !duplicate && !rec.isCardPayment,
       };
     });
     importState = { fileName, fileData, rows, report, answers };
@@ -1614,10 +1626,16 @@ function renderImport(main) {
       for (const row of chosen) {
         const month = data.months.find((m) => m.id === row.monthId);
         if (!month) continue;
-        month.transactions.push({
+        // The memo (Comments / Extended Details) is often the real merchant
+        // string — keep it on the transaction as its description. A validated
+        // bank transaction id rides along so the next import of this account
+        // can dedupe exactly instead of heuristically.
+        const tx = {
           id: newTxId(), date: row.rec.date, vendor: row.rec.vendor, amount: row.rec.amount,
-          fund: row.fund, description: '', account: row.rec.account,
-        });
+          fund: row.fund, description: row.rec.memo || '', account: row.rec.account,
+        };
+        if (importState.report?.externalIdTrusted && row.rec.externalId) tx.externalId = row.rec.externalId;
+        month.transactions.push(tx);
         n++; lastMonth = month.id;
       }
       // The import is the confirmation (§6): persist this file's resolved shape

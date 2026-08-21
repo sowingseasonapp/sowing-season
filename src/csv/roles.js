@@ -26,6 +26,13 @@ const ACCT_NAMES = /^(account$|accountnumber|accountname|cardno|card$|auftragsko
 // which side is NOT hardcoded — the corpus has banks using both assignments.
 export const DIRECTION_TOKENS = /^(debit|credit|withdrawal|deposit|dr|cr|d|c|w|dep|out|in|outflow|inflow|af|bij|soll|haben|debit_card|ach_credit|ach_debit|check|sale|payment|return|purchase|pos)$/i;
 
+// The only tokens with a DEFAULT direction: the debit/credit and
+// withdrawal/deposit families, whose meaning doesn't vary by bank. Everything
+// else (af/bij, sale/payment, check…) must be pinned by the balance column, a
+// profile, or the user — §5.4's rule that token meaning is data, not code.
+export const OUT_TOKENS = /^(debit|debits|withdrawal|withdrawals|dr|d|db|w|out|outflow|debit_card|ach_debit)$/i;
+export const IN_TOKENS = /^(credit|credits|deposit|deposits|cr|c|dep|in|inflow|ach_credit)$/i;
+
 const RUN = { date: DATE_NAMES, datePosted: DATE2_NAMES, balance: BAL_NAMES, debit: DEBIT_NAMES,
   credit: CREDIT_NAMES, amount: AMOUNT_NAMES, check: CHECK_NAMES, id: ID_NAMES, category: CAT_NAMES,
   memo: MEMO_NAMES, desc: DESC_NAMES, direction: DIR_NAMES, account: ACCT_NAMES };

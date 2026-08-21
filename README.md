@@ -70,12 +70,21 @@ The app ships with all 2026 spreadsheet history (Dec 2025 – Aug 2026) already 
   Budget and Transactions pages, or the ⇄ in a fund's panel or the Review strip to prefill "From"). A transfer is
   stored as a matched pair of transactions ("Transfer to X" / "Transfer from Y"), so the
   audit trail is kept and income/expense totals are unaffected.
-- **Import CSV** — pick a bank CSV export; both formats are auto-detected:
-  the credit-card export (Debit/Credit columns) and the checking-account export
-  (Transaction Type + Transaction Amount). Rows are auto-matched to funds from your history
-  (memo prefixes like "note - Withdrawal to X" are handled), duplicates (same vendor + amount
-  within ±4 days) and card payments — including the checking-side "CAPITAL ONE … PMT"
-  withdrawals — are flagged and deselected. Nothing saves until you press Import.
+- **Import CSV** — pick any US bank's CSV export. The importer works the format out itself
+  (delimiter, header row, column roles, date order, sign convention), proves amounts against
+  a running-balance column whenever one exists, and **refuses or asks a plain-language
+  question instead of guessing** — day-first dates, comma decimals, semicolon files and
+  multi-table investment exports are refused by name. A format you confirm once is
+  remembered and imports silently after that. Pending rows are skipped (Status columns, or
+  Apple Card's blank Clearing Date). Rows auto-match to funds from your history (memo
+  prefixes like "note - Withdrawal to X" are handled, and second-description columns like
+  Comments/Extended Details are searched too and kept as the transaction's description).
+  Duplicate detection is scored: confident matches (same account + vendor + amount within
+  −3…+7 days, or a matching bank transaction id) are deselected as **duplicate**, while
+  near matches — a tip or a gas-pump hold changing the amount — show as **possible
+  duplicate**, still selected for you to review. Card payments — including the
+  checking-side "CAPITAL ONE … PMT" withdrawals — are flagged and deselected. Nothing
+  saves until you press Import.
 - **Year Overview** — income-vs-spending bars by month, a ranked "where the money went"
   chart, the monthly actuals table, and per-fund history with a planned-vs-spent chart.
 - **AUM** — assets under management (SeedTime's take on net worth): everything you manage,

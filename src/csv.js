@@ -200,8 +200,11 @@ function normalizeDate(s) {
 }
 
 // Strip store numbers / order codes so "AMAZON MKTPL*PK1T50MD3" ≈ "AMAZON MKTPL*GZ7OJ0KL3".
+// Accents are folded first (§8.4): if one import decoded "Café" correctly and
+// another didn't, an un-normalised key would see two vendors and double them.
 export function normVendor(s) {
   return String(s || '')
+    .normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
     .toUpperCase()
     .replace(/[*#]\S*/g, ' ')       // *ORDERCODE, #617
     .replace(/\b\d{3,}\b/g, ' ')    // long numbers (store/phone ids)
@@ -265,21 +268,66 @@ export function suggestFund(vendorMap, vendor) {
   return null;
 }
 
-// Duplicate detection: same amount + same vendor (normalized) + date within ±4 days.
-// (Manual entries often use the posted date, 1–2 days after the transaction date.)
-// Each existing transaction can only claim ONE csv row — pass a shared `claimed` Set.
-export function findDuplicate(months, rec, claimed) {
-  const recTime = Date.parse(rec.date);
-  const rv = normVendor(rec.vendor);
-  for (const m of months) {
+/* ---------------- Duplicate detection (scored, §8) ---------------- */
+
+// Vendors where the posted amount routinely differs from what was authorised:
+// restaurants add a tip, gas pumps replace the pre-auth hold.
+const TIP_OR_FUEL = /\b(restaurants?|grill|cafe|caffe|coffee|espresso|pizz(a|eria)|sushi|taco|burger|burrito|wings?|bbq|barbecue|steak(house)?|diner|deli|bistro|brewer(y|ies)|brewhouse|taphouse|bar|pub|cantina|kitchen|cocina|thai|pho|ramen|doordash|uber\s?eats|grubhub|postmates|shell|chevron|exxon|mobil|texaco|marathon|sunoco|valero|conoco|phillips\s?66|circle\s?k|speedway|quiktrip|racetrac|wawa|sheetz|caseys?|maverik|pilot|arco|fuel|gas\s?station)\b/i;
+const DAY = 86400000;
+
+// Score how likely `rec` (a CSV row) is a re-import of `t` (a stored
+// transaction). 0 = no match; 1.0 exact; 0.9 near-exact (rounding); 0.6 the
+// tip/pump-hold pattern. The date window is asymmetric (−3…+7 days): pending
+// appears BEFORE posted, so a CSV row posts up to a week after the entry the
+// user typed, but rarely precedes it.
+export function scoreDuplicate(t, rec, { idTrusted = false } = {}) {
+  if (!t.date || !rec.date) return 0;
+  const tAcct = String(t.account || '').trim(), rAcct = String(rec.account || '').trim();
+  if (tAcct && rAcct && tAcct !== rAcct) return 0; // the same $50 on two cards is two transactions (§8.2)
+  const tId = String(t.externalId || '').trim(), rId = String(rec.externalId || '').trim();
+  if (idTrusted && tId && rId) return tId === rId ? 1 : 0; // bank IDs are exact, not heuristic (§8.1)
+  const lagDays = (Date.parse(rec.date) - Date.parse(t.date)) / DAY;
+  if (lagDays < -3 || lagDays > 7) return 0;
+  const tv = normVendor(t.vendor);
+  if (!tv || (tv !== normVendor(rec.vendor) && (!rec.memo || tv !== normVendor(rec.memo)))) return 0;
+  const a = Math.round(t.amount * 100);
+  const b = Number.isFinite(rec.amountCents) ? rec.amountCents : Math.round(rec.amount * 100);
+  const diff = Math.abs(a - b), mag = Math.max(Math.abs(a), Math.abs(b));
+  if (diff === 0) return 1;
+  if (diff <= 2 || diff <= mag * 0.005) return 0.9;
+  const largerIsLater = lagDays === 0 || (lagDays > 0) === (Math.abs(b) >= Math.abs(a));
+  const tippable = TIP_OR_FUEL.test(rec.vendor || '') || TIP_OR_FUEL.test(rec.memo || '')
+    || TIP_OR_FUEL.test(t.vendor || '') || /dining|restaurant|food|gas|fuel/i.test(rec.bankCategory || '');
+  if (diff <= mag * 0.05 && largerIsLater && tippable) return 0.6;
+  return 0;
+}
+
+// Best-scoring unclaimed transaction at or above minScore, or null. Claims the
+// match: each existing transaction can claim only ONE csv row — the shared
+// `claimed` Set preserves multiplicity (three identical coffees dedupe as
+// three, not one).
+function bestDuplicate(months, rec, claimed, minScore, opts) {
+  let best = null, bestScore = 0;
+  outer: for (const m of months) {
     for (const t of m.transactions) {
       if (claimed.has(t.id)) continue;
-      if (!t.date || Math.abs(t.amount - rec.amount) >= 0.005) continue;
-      if (Math.abs(Date.parse(t.date) - recTime) > 4 * 86400000) continue;
-      if (normVendor(t.vendor) !== rv) continue;
-      claimed.add(t.id);
-      return t;
+      const s = scoreDuplicate(t, rec, opts);
+      if (s > bestScore) { best = t; bestScore = s; if (s === 1) break outer; }
     }
   }
-  return null;
+  if (!best || bestScore < minScore) return null;
+  claimed.add(best.id);
+  return { t: best, score: bestScore };
+}
+
+// Preview matcher: ≥0.9 auto-marks as a duplicate, 0.6–0.9 is a "possible
+// duplicate" the user reviews. Nothing is ever silently dropped.
+export function findDuplicateScored(months, rec, claimed, opts) {
+  return bestDuplicate(months, rec, claimed, 0.6, opts);
+}
+
+// Legacy surface (the onboarding wizard calls this): a duplicate is only a
+// CONFIDENT scored match (≥0.9) — what the preview would auto-mark.
+export function findDuplicate(months, rec, claimed) {
+  return bestDuplicate(months, rec, claimed, 0.9)?.t ?? null;
 }

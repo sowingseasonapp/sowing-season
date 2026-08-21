@@ -10,7 +10,7 @@
 import { decode } from './decode.js';
 import { detectDelimiter, tokenize } from './tokenize.js';
 import { findHeaderRow, segment, norm, isDateish, isMoneyish } from './structure.js';
-import { assignRoles, positionalRoles, DIRECTION_TOKENS } from './roles.js';
+import { assignRoles, positionalRoles, DIRECTION_TOKENS, OUT_TOKENS, IN_TOKENS } from './roles.js';
 import { stripAmount, decideDecimalMark, centsOf, inferDateOrder, parseDate } from './values.js';
 import { detectSign, balanceEvidence } from './sign.js';
 import { matchProfile, applyProfile, buildResolvedProfile } from './profiles.js';
@@ -23,7 +23,47 @@ function isCardPaymentRow(vendor, bankCategory) {
     || /capital one.*\b(mobile|online|autopay)?\s*(pymt|pmt)\b/i.test(vendor);
 }
 
-const OUTFLOW_TOKENS = /^(debit|debits|withdrawal|withdrawals|d|db|dr|w|out|outflow|debit_card|ach_debit)$/i;
+// Status values that mean the money hasn't (or won't) settle — the flag list
+// from the format reference: Citi/Schwab "Pending", PayPal Placed/Denied/
+// Reversed, Venmo Issued/Failed/Expired, Revolut Declined/Reverted, Wise
+// Cancelled. These rows re-post later (or never) — importing them now
+// guarantees a duplicate or a phantom transaction (C3).
+const NOT_SETTLED = /^(pending|placed|denied|reversed|issued|failed|expired|declined|reverted|cancell?ed)$/i;
+
+// Which way does each direction token point? The mapping is DATA, never code
+// (§5.4): the balance column proves it exactly; below that, an answer, a
+// profile, or the unambiguous debit/credit families. Balance votes are taken
+// per token over the same three row orderings the sign verifier uses.
+function directionFromBalance(records, tokens) {
+  const rows = records.map((r, i) => ({ a: Math.abs(r.amountCents), b: r.balanceCents, d: r.date, t: tokens[i] }))
+    .filter((x) => Number.isFinite(x.b) && Number.isFinite(x.a) && x.t);
+  if (rows.length < 3) return null;
+  const orderings = [rows, [...rows].reverse(), [...rows].sort((p, q) => (p.d < q.d ? -1 : p.d > q.d ? 1 : 0))];
+  for (const seq of orderings) {
+    const votes = new Map(); // token → {out, in}
+    let ok = 0, tested = 0;
+    for (let i = 1; i < seq.length; i++) {
+      const delta = seq[i].b - seq[i - 1].b, a = seq[i].a;
+      if (delta === 0 && a === 0) continue;
+      tested++;
+      const v = votes.get(seq[i].t) || { out: 0, in: 0 };
+      if (delta === -a) { v.out++; ok++; } else if (delta === a) { v.in++; ok++; }
+      votes.set(seq[i].t, v);
+    }
+    if (tested < 2 || ok / tested < 0.9) continue;
+    const mapping = {};
+    let consistent = true;
+    for (const [t, v] of votes) {
+      const n = v.out + v.in;
+      if (!n) continue;
+      if (v.out / n >= 0.9) mapping[t] = 'out';
+      else if (v.in / n >= 0.9) mapping[t] = 'in';
+      else consistent = false; // one token points both ways — not a direction column
+    }
+    if (consistent && Object.keys(mapping).length) return mapping;
+  }
+  return null;
+}
 
 // "2026-01-05" → "Jan 5, 2026" for question copy shown to beginners.
 const MONTH_WORDS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -102,6 +142,14 @@ export function parseBankFile(input, opts = {}) {
     }
   }
   report.counts.junk = dropped.filter((d) => d.why === 'JUNK').length;
+  if (dropped.some((d) => d.why === 'NEWTABLE')) {
+    // the owner's Phase 4 decision: a file holding a second table is an
+    // investment export (Vanguard, Interactive Brokers) — envelope budgeting
+    // shouldn't ingest those, so refuse by shape instead of half-importing.
+    return refuse('This file contains more than one table — investment and brokerage exports are laid out '
+      + 'this way, and they aren’t something a budget can ingest safely. Nothing was imported. '
+      + 'If this is a bank statement, try exporting just the transactions.');
+  }
   if (!body.length) return refuse('No transaction rows were found in this file.');
   if (report.counts.junk / (report.counts.junk + body.length) >= 0.2) {
     return refuse('Too much of this file doesn’t look like transaction rows to import it safely.');
@@ -240,6 +288,11 @@ export function parseBankFile(input, opts = {}) {
     pendCol = hdr.cells.findIndex((c) => norm(c) === norm(prof.pendingRule.column));
     pendVal = String(prof.pendingRule.pendingValue ?? 'Pending').toLowerCase();
   }
+  // Apple Card has no Status column at all — a blank Clearing Date IS the
+  // pending marker. Generic: a clearing/settled/completed-flavoured second
+  // date column left empty means the row hasn't posted yet.
+  const blankPostedIsPending = iDate2 >= 0 && useHeader
+    && /clear|settle|complet/.test(norm(hdr.cells[iDate2] ?? ''));
   const records = [];
   let pendingSkipped = 0;
   body.forEach((b, k) => {
@@ -272,8 +325,9 @@ export function parseBankFile(input, opts = {}) {
       amountCents = dz ? Math.abs(c) : -Math.abs(d);
     }
     const dirVals = dirCols.map((i) => String(b.cells[i] ?? '').trim());
-    if (dirVals.some((v) => /^pending$/i.test(v))
-        || (pendCol >= 0 && String(b.cells[pendCol] ?? '').trim().toLowerCase() === pendVal)) {
+    if (dirVals.some((v) => NOT_SETTLED.test(v))
+        || (pendCol >= 0 && String(b.cells[pendCol] ?? '').trim().toLowerCase() === pendVal)
+        || (blankPostedIsPending && String(b.cells[iDate2] ?? '').trim() === '')) {
       pendingSkipped++; return; // pending re-posts later with a new date (C3)
     }
     const dedupe = [];
@@ -313,23 +367,61 @@ export function parseBankFile(input, opts = {}) {
   if (usedSplit) {
     sign = { verdict: 'as-is', decided: true, source: 'split-columns' };
   } else {
-    // Unsigned amounts + a direction column = Mint's pattern.
-    const dirTokens = records.map((r) => r.direction).filter(Boolean);
-    const distinct = [...new Set(dirTokens.map((t) => t.toLowerCase()))];
-    const looksDirectional = dirCols.length > 0
-      && dirTokens.length >= records.length * 0.9
-      && distinct.length <= 4
-      && distinct.every((t) => DIRECTION_TOKENS.test(t) || prof?.directionTokens?.[t] !== undefined)
-      && records.every((r) => r.amountCents >= 0);
-    if (looksDirectional) {
-      // A profile can pin which token means outflow; otherwise use the
-      // canonical debit/withdrawal family. The balance gate validates either way.
-      const isOut = prof?.directionTokens
-        ? (t) => prof.directionTokens[t.toLowerCase()] === 'out'
-        : (t) => OUTFLOW_TOKENS.test(t);
-      for (const r of records) if (isOut(r.direction)) r.amountCents = -Math.abs(r.amountCents);
-      sign = { verdict: 'as-is', decided: true, source: 'direction' };
-      notes.push('applied the direction column to unsigned amounts');
+    // Unsigned amounts + a direction column = Mint's pattern. Each
+    // direction-role column is evaluated as a signing candidate; the first one
+    // whose tokens can ALL be pinned wins. Per token the precedence is:
+    // balance proof > the user's answer > a profile's stored mapping > the
+    // unambiguous debit/credit families. A direction-vocabulary token nothing
+    // can pin ASKS; a column of tokens outside the vocabulary with no balance
+    // proof simply isn't a direction column.
+    let directional = null, dirQuestions = null;
+    if (records.every((r) => r.amountCents >= 0)) {
+      for (const ci of dirCols) {
+        const tokens = records.map((r) => String(r.raw[ci] ?? '').trim().toLowerCase());
+        const nonEmpty = tokens.filter(Boolean);
+        const distinct = [...new Set(nonEmpty)];
+        if (!distinct.length || distinct.length > 4 || nonEmpty.length < records.length * 0.9) continue;
+        const fromBalance = directionFromBalance(records, tokens) || {};
+        const mapping = {}, unresolved = [];
+        let junk = false;
+        for (const t of distinct) {
+          const ans = answers['dir:' + t];
+          const m = fromBalance[t]
+            || (ans === 'out' || ans === 'in' ? ans : null)
+            || prof?.directionTokens?.[t]
+            || (OUT_TOKENS.test(t) ? 'out' : IN_TOKENS.test(t) ? 'in' : null);
+          if (m === 'out' || m === 'in') mapping[t] = m;
+          else if (DIRECTION_TOKENS.test(t)) unresolved.push(t);
+          else { junk = true; break; }
+        }
+        if (junk) continue;
+        if (unresolved.length) {
+          const colName = useHeader ? String(hdr.cells[ci]).trim() : 'Type';
+          dirQuestions = dirQuestions || unresolved.map((t) => ({
+            kind: 'direction', blocking: true, answerable: true, answerKey: 'dir:' + t,
+            message: `Every amount in this file is positive, and the “${colName}” column says which way the money went. Does “${t}” mean money LEFT your account?`,
+            options: [
+              { value: 'out', label: `Yes — “${t}” rows are money out` },
+              { value: 'in', label: `No — “${t}” rows are money in` },
+            ],
+          }));
+          continue; // another direction column may still resolve cleanly
+        }
+        directional = { tokens, mapping, provenByBalance: Object.keys(fromBalance).length > 0 };
+        break;
+      }
+    }
+    if (directional) {
+      records.forEach((r, k) => {
+        if (directional.mapping[directional.tokens[k]] === 'out') r.amountCents = -Math.abs(r.amountCents);
+      });
+      sign = { verdict: 'as-is', decided: true, source: 'direction', directionTokens: directional.mapping };
+      notes.push(directional.provenByBalance
+        ? 'the balance column proved which direction values are money out'
+        : 'applied the direction column to unsigned amounts');
+    } else if (dirQuestions) {
+      questions.push(...dirQuestions);
+      sign = { verdict: null, decided: false, source: 'direction' };
     } else if (answers.signConvention) {
       sign = { verdict: answers.signConvention, decided: true, source: 'user' };
       if (answers.signConvention === 'flip') for (const r of records) r.amountCents = -r.amountCents;
@@ -381,6 +473,18 @@ export function parseBankFile(input, opts = {}) {
       return refuse('This file has a running-balance column, but the amounts don’t add up against it '
         + 'in any direction. The file may be mis-formatted or misread, so nothing was imported.');
     }
+  }
+
+  // ── bank transaction IDs (§8.1): usable for exact duplicate matching only
+  // when the column is ≥95% non-empty AND ≥95% distinct within the file —
+  // many "Reference" columns are really a category or a constant (Zions
+  // repeats one value, or the literal string "null", down the whole column).
+  if (iId >= 0 && records.length) {
+    const ids = records.map((r) => r.externalId).filter((v) => v && !/^null$/i.test(v));
+    report.externalIdTrusted = ids.length >= records.length * 0.95
+      && new Set(ids).size >= ids.length * 0.95;
+  } else {
+    report.externalIdTrusted = false;
   }
 
   // ── report

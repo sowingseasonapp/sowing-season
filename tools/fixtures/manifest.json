@@ -1085,10 +1085,10 @@
       "dateMax": "2026-01-12",
       "signConvention": "as-is",
       "mustAsk": false,
-      "mustRefuse": false,
+      "mustRefuse": true,
       "balanceReconciles": false,
       "profile": null,
-      "note": "Two tables of different arity in one file. Only the first is transactions."
+      "note": "Two tables of different arity in one file (investment export). Phase 4 decision: the importer REFUSES multi-table files by name instead of half-importing the first table."
     },
     {
       "file": "54-edge-newest-first.csv",

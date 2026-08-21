@@ -102,7 +102,9 @@ export function segment(rows, headerIdx, arity) {
     }
     if (r.length === 1 || r.length < arity / 2) { dropped.push({ i, why: 'JUNK' }); continue; }
     if (blankRun > 0) {
-      const h = findHeaderRow([r]);
+      // Score this row WITH the rows under it — a second table's header only
+      // reveals itself through the block of consistent rows that follows.
+      const h = findHeaderRow(rows.slice(i), { maxScan: 1 });
       if (h && h.score >= 40) { dropped.push({ i, why: 'NEWTABLE' }); break; } // a second table starts
     }
     blankRun = 0;

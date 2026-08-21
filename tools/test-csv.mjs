@@ -10,7 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseCsv, parseBankCsv, parseBankFile } from '../src/csv.js';
+import { parseCsv, parseBankCsv, parseBankFile, scoreDuplicate, findDuplicateScored, findDuplicate } from '../src/csv.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FIX = path.join(HERE, 'fixtures');
@@ -233,6 +233,190 @@ for (const [file, expected] of Object.entries(baseline)) {
   const ignored = parseBankFile(buf, { profiles: [rp], answers: { ignoreProfile: true } });
   check('57 [not-this-bank re-runs inference]', ignored.report.questions.length > 0 && !ignored.report.profile,
     JSON.stringify(ignored.report.questions.map((q) => q.kind)));
+}
+
+// ================= Phase 4 =================
+
+// ---- Multi-table files are refused by name (the owner's decision) ----
+{
+  const out = parseBankFile(fs.readFileSync(path.join(FIX, '53-edge-multi-table.csv')));
+  check('53 [refusal names the multi-table shape]', /more than one table/i.test(out.error || ''),
+    out.error || 'no error');
+}
+
+// ---- Scored duplicate matcher (§8) ----
+{
+  const t = (over) => ({ id: over.id || 'tx', date: '2026-01-10', vendor: 'JOES GRILL', amount: -40,
+    fund: 'Fast Food', description: '', account: '', ...over });
+  const r = (over) => ({ date: '2026-01-10', vendor: 'JOES GRILL', amount: -40, amountCents: -4000,
+    account: '', bankCategory: '', memo: '', ...over });
+
+  check('dup exact = 1.0', scoreDuplicate(t({}), r({})) === 1);
+  check('dup 2¢ off = 0.9', scoreDuplicate(t({}), r({ amount: -40.02, amountCents: -4002 })) === 0.9);
+  check('dup 0.5% off = 0.9', scoreDuplicate(t({ amount: -500 }), r({ amount: -502, amountCents: -50200 })) === 0.9);
+  check('dup tip at a grill, later and larger = 0.6',
+    scoreDuplicate(t({}), r({ date: '2026-01-12', amount: -41.5, amountCents: -4150 })) === 0.6);
+  check('dup 5% at a non-dining vendor = no match',
+    scoreDuplicate(t({ vendor: 'ACE HARDWARE' }), r({ vendor: 'ACE HARDWARE', date: '2026-01-12', amount: -41.5, amountCents: -4150 })) === 0);
+  check('dup tip where the EARLIER amount is larger = no match',
+    scoreDuplicate(t({ amount: -41.5 }), r({ date: '2026-01-12', amount: -40, amountCents: -4000 })) === 0);
+
+  // The window is asymmetric (−3…+7): a CSV row posts up to a week AFTER the
+  // entry the user typed, but at most 3 days before it.
+  check('dup csv +7 days after entry matches', scoreDuplicate(t({}), r({ date: '2026-01-17' })) === 1);
+  check('dup csv +8 days after entry does not', scoreDuplicate(t({}), r({ date: '2026-01-18' })) === 0);
+  check('dup csv −3 days before entry matches', scoreDuplicate(t({}), r({ date: '2026-01-07' })) === 1);
+  check('dup csv −4 days before entry does not (old ±4 would have matched)',
+    scoreDuplicate(t({}), r({ date: '2026-01-06' })) === 0);
+
+  // Account in the match key (§8.2): the same $40 on two cards is two transactions.
+  check('dup different accounts = no match', scoreDuplicate(t({ account: '1234' }), r({ account: '9999' })) === 0);
+  check('dup one side missing its account still matches', scoreDuplicate(t({ account: '1234' }), r({})) === 1);
+
+  // Bank transaction IDs (§8.1): exact when trusted, ignored when not.
+  check('dup trusted equal ids = 1.0 even when the amount moved',
+    scoreDuplicate(t({ externalId: 'A1' }), r({ externalId: 'A1', amount: -55, amountCents: -5500 }), { idTrusted: true }) === 1);
+  check('dup trusted different ids = no match even when identical otherwise',
+    scoreDuplicate(t({ externalId: 'A1' }), r({ externalId: 'B2' }), { idTrusted: true }) === 0);
+  check('dup untrusted ids fall back to heuristics',
+    scoreDuplicate(t({ externalId: 'A1' }), r({ externalId: 'B2' }), { idTrusted: false }) === 1);
+
+  // The memo (real merchant string) is an alternate vendor key.
+  check('dup matches on the memo when the vendor is a type code',
+    scoreDuplicate(t({}), r({ vendor: 'DEBIT CARD PURCHASE', memo: 'JOES GRILL' })) === 1);
+}
+
+// ---- Multiplicity (57): three identical rows need three existing entries ----
+{
+  const buf = fs.readFileSync(path.join(FIX, '57-edge-duplicate-sameday.csv'));
+  const { records } = parseBankFile(buf, { answers: { dateOrder: 'MDY', signConvention: 'as-is' } });
+  const coffee = (id) => ({ id, date: '2026-01-05', vendor: 'BLUE BOTTLE COFFEE', amount: -5, fund: 'Fast Food', account: '' });
+  const dedupe = (existing) => {
+    const months = [{ id: '2026-01', transactions: existing }];
+    const claimed = new Set();
+    return records.map((rec) => findDuplicateScored(months, rec, claimed, {}));
+  };
+  const three = dedupe([coffee('a'), coffee('b'), coffee('c')]);
+  check('57 [3 existing claim all 3 rows]', three.filter((d) => d && d.score === 1).length === 3,
+    JSON.stringify(three.map((d) => d?.score ?? null)));
+  check('57 [each claims a DISTINCT transaction]', new Set(three.filter(Boolean).map((d) => d.t.id)).size === 3);
+  const two = dedupe([coffee('a'), coffee('b')]);
+  check('57 [2 existing leave the 3rd row importable]',
+    two.filter((d) => d && d.score === 1).length === 2 && two.filter((d) => !d).length === 2,
+    JSON.stringify(two.map((d) => d?.score ?? null)));
+  // Legacy surface: only a confident (≥0.9) match counts, and a 0.6-tier
+  // candidate is neither returned nor claimed.
+  const months = [{ id: '2026-01', transactions: [
+    { id: 'g', date: '2026-01-10', vendor: 'JOES GRILL', amount: -40, fund: 'x', account: '' }] }];
+  const claimed = new Set();
+  const tipRec = { date: '2026-01-12', vendor: 'JOES GRILL', amount: -41.5, amountCents: -4150, account: '', bankCategory: '', memo: '' };
+  check('findDuplicate [0.6 tier returns null and claims nothing]',
+    findDuplicate(months, tipRec, claimed) === null && claimed.size === 0);
+  check('findDuplicate [exact match still claims]',
+    findDuplicate(months, { ...tipRec, date: '2026-01-10', amount: -40, amountCents: -4000 }, claimed)?.id === 'g'
+      && claimed.has('g'));
+}
+
+// ---- Bank ID column validation (§8.1) ----
+{
+  const trusted = parseBankFile('Date,Description,Reference Number,Amount,Balance\n'
+    + '2026-01-05,COFFEE,R100,-5.00,995.00\n'
+    + '2026-01-06,GROCER,R101,-20.00,975.00\n'
+    + '2026-01-07,LUNCH,R102,-10.00,965.00\n'
+    + '2026-01-08,PAYROLL,R103,100.00,1065.00\n');
+  check('id column distinct+full → trusted', trusted.report.externalIdTrusted === true,
+    JSON.stringify({ err: trusted.error, q: trusted.report.questions }));
+  // Zions repeats one reference (and the literal string "null") down the file.
+  const zions = parseBankFile(fs.readFileSync(path.join(FIX, '16-zions-business.csv')));
+  check('16-zions [constant reference column NOT trusted]', zions.report.externalIdTrusted === false);
+}
+
+// ---- Pending rows: blank Clearing Date (Apple Card) + settled-status vocabulary ----
+{
+  const apple = parseBankFile('Date,Clearing Date,Description,Amount,Balance\n'
+    + '2026-01-05,2026-01-06,COFFEE,-5.00,995.00\n'
+    + '2026-01-06,2026-01-07,GROCER,-20.00,975.00\n'
+    + '2026-01-07,,CARD SWIPE STILL PENDING,-10.00,975.00\n'
+    + '2026-01-08,2026-01-09,PAYROLL,100.00,1075.00\n');
+  check('blank Clearing Date row skipped as pending',
+    !apple.error && apple.report.counts.pending === 1 && apple.report.counts.rows === 3,
+    JSON.stringify({ err: apple.error, counts: apple.report.counts, q: apple.report.questions }));
+  check('blank Clearing Date [balance still reconciles without it]', apple.report.balanceCheck.ok === true);
+
+  const statuses = parseBankFile('Date,Status,Description,Amount,Balance\n'
+    + '2026-01-05,Completed,COFFEE,-5.00,995.00\n'
+    + '2026-01-06,Denied,BAD CHARGE,-50.00,995.00\n'
+    + '2026-01-07,Reversed,DISPUTED CHARGE,-30.00,995.00\n'
+    + '2026-01-08,Completed,GROCER,-20.00,975.00\n'
+    + '2026-01-09,Completed,PAYROLL,100.00,1075.00\n');
+  check('Denied/Reversed statuses skipped like Pending',
+    !statuses.error && statuses.report.counts.pending === 2 && statuses.report.counts.rows === 3,
+    JSON.stringify({ err: statuses.error, counts: statuses.report.counts, q: statuses.report.questions }));
+}
+
+// ---- Second description (memo) is preserved ----
+{
+  const cu = parseBankFile(fs.readFileSync(path.join(FIX, '22-cu-comments.csv')));
+  check('22-cu [memo carries the real merchant string]',
+    cu.records[0]?.vendor === 'DEBIT CARD PURCHASE' && cu.records[0]?.memo === 'WHOLEFDS MKT 10123',
+    JSON.stringify({ vendor: cu.records[0]?.vendor, memo: cu.records[0]?.memo }));
+}
+
+// ---- Direction tokens: data, never code (§5.4) ----
+{
+  // Same Af/Bij tokens, opposite meanings — only the balance column can say
+  // which is which, and it must decide both ways.
+  const afOut = 'Date,Description,Type,Amount,Balance\n'
+    + '2026-01-05,COFFEE,Af,5.00,995.00\n'
+    + '2026-01-06,PAYROLL,Bij,100.00,1095.00\n'
+    + '2026-01-07,GROCER,Af,20.00,1075.00\n'
+    + '2026-01-08,LUNCH,Af,10.00,1065.00\n';
+  const a = parseBankFile(afOut);
+  check('direction [balance proves Af=out]',
+    !a.error && !a.report.questions.length && a.report.totals.netCents === 6500
+      && a.report.signConvention.directionTokens?.af === 'out',
+    JSON.stringify({ err: a.error, q: a.report.questions, totals: a.report.totals, sign: a.report.signConvention }));
+
+  const afIn = 'Date,Description,Type,Amount,Balance\n'
+    + '2026-01-05,REFUND A,Af,5.00,1005.00\n'
+    + '2026-01-06,RENT,Bij,100.00,905.00\n'
+    + '2026-01-07,REFUND B,Af,20.00,925.00\n'
+    + '2026-01-08,REFUND C,Af,10.00,935.00\n';
+  const b = parseBankFile(afIn);
+  check('direction [same tokens, opposite balance ⇒ Af=in]',
+    !b.error && !b.report.questions.length && b.report.totals.netCents === -6500
+      && b.report.signConvention.directionTokens?.af === 'in',
+    JSON.stringify({ err: b.error, q: b.report.questions, totals: b.report.totals, sign: b.report.signConvention }));
+
+  // No balance column: unknown-direction tokens must ASK, and the answers
+  // persist into the resolved profile so the next import is silent.
+  const noBal = afOut.split('\n').map((l) => l.split(',').slice(0, 4).join(',')).join('\n');
+  const q1 = parseBankFile(noBal);
+  const kinds = (q1.report.questions || []).map((q) => q.kind);
+  check('direction [no balance → asks per token]',
+    kinds.filter((k) => k === 'direction').length === 2, JSON.stringify(q1.report.questions));
+  const q2 = parseBankFile(noBal, { answers: { 'dir:af': 'out', 'dir:bij': 'in' } });
+  check('direction [answers resolve it]',
+    !q2.error && !q2.report.questions.length && q2.report.totals.netCents === 6500,
+    JSON.stringify({ err: q2.error, q: q2.report.questions, totals: q2.report.totals }));
+  check('direction [mapping lands in the resolved profile]',
+    JSON.stringify(q2.report.resolvedProfile?.directionTokens) === JSON.stringify({ af: 'out', bij: 'in' }),
+    JSON.stringify(q2.report.resolvedProfile));
+  const q3 = parseBankFile(noBal, { profiles: [q2.report.resolvedProfile] });
+  check('direction [user profile answers silently next time]',
+    !q3.error && !q3.report.questions.length && q3.report.totals.netCents === 6500
+      && q3.report.profile?.source === 'user',
+    JSON.stringify({ err: q3.error, q: q3.report.questions, profile: q3.report.profile }));
+
+  // The unambiguous families still work without any of that.
+  const dc = parseBankFile('Date,Description,Type,Amount\n'
+    + '2026-01-05,COFFEE,Debit,5.00\n'
+    + '2026-01-06,PAYROLL,Credit,100.00\n'
+    + '2026-01-07,GROCER,Debit,20.00\n'
+    + '2026-01-08,LUNCH,Debit,10.00\n');
+  check('direction [Debit/Credit family imports automatically]',
+    !dc.error && !dc.report.questions.length && dc.report.totals.netCents === 6500,
+    JSON.stringify({ err: dc.error, q: dc.report.questions, totals: dc.report.totals }));
 }
 
 console.log(`\nCSV importer: ${pass} passed, ${fail} failed`);
