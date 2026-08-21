@@ -35,9 +35,14 @@ for (const [name, id] of MONTHS) {
   const v = (a) => { const c = fab[a]; return c ? c.v : undefined; };
 
   // Summary block: C3 allocated(income), D3 planned expenses, E3 leftover, C4 actual income, C5 actual expense, C6 diff
-  check(`${name} plannedIncome`, comp.summary.plannedIncome, v('C3'));
-  check(`${name} allocated`, comp.summary.allocated, v('D3'));
-  check(`${name} leftToAllocate`, comp.summary.leftToAllocate, v('E3'));
+  // The seed stores every planned value rounded to the cent, but the sheet's totals sum
+  // sub-penny formula results (G48/6, G52/12, tithe ×15%, …) — so a summed total can sit
+  // up to half a cent per fund away from the sheet. Scale those tolerances by fund count.
+  const nExp = comp.categories.filter((c) => !c.excludeFromTotals).reduce((a, c) => a + c.funds.length, 0);
+  const nInc = comp.income.length;
+  check(`${name} plannedIncome`, comp.summary.plannedIncome, v('C3'), 0.011 + 0.005 * nInc);
+  check(`${name} allocated`, comp.summary.allocated, v('D3'), 0.011 + 0.005 * nExp);
+  check(`${name} leftToAllocate`, comp.summary.leftToAllocate, v('E3'), 0.011 + 0.005 * (nInc + nExp));
   check(`${name} actualIncome`, comp.summary.actualIncome, v('C4'));
   check(`${name} actualExpense`, comp.summary.actualExpense, v('C5'));
   check(`${name} actualDiff`, comp.summary.actualDiff, v('C6'));
@@ -405,3 +410,6 @@ console.log(`\nCompute engine vs spreadsheet: ${ok} checks passed, ${bad} failed
   const sample = recs.slice(0, 3).map((r) => `${r.date} ${r.vendor} ${r.amount} [${suggestFund(vendorMap, r.vendor)?.fund || '?'}]`);
   console.log('sample:', sample.join(' | '));
 }
+
+// Fail the process when any spreadsheet check missed, so `npm test` goes red on regressions.
+process.exitCode = bad ? 1 : 0;
