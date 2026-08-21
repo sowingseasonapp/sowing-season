@@ -271,6 +271,16 @@ input.inline-date { width: 120px; }
 .import-summary b.pos { color: var(--green); }
 .import-summary b.neg { color: var(--red); }
 .import-anomaly { color: var(--amber); font-size: .85rem; }
+.import-refusal { padding: 14px 16px; border-left: 4px solid var(--red); }
+.import-refusal p { margin: 6px 0 0; color: var(--ink-soft); }
+.import-questions { padding: 14px 16px; border-left: 4px solid var(--amber); }
+.import-questions-head { font-weight: 600; margin-bottom: 8px; }
+.import-question { margin-bottom: 12px; }
+.import-question p { margin: 0 0 6px; }
+.import-q-opt { display: block; padding: 3px 0 3px 4px; cursor: pointer; }
+.import-q-samples { width: auto; margin: 6px 0 10px; }
+.import-q-samples td, .import-q-samples th { text-align: left; }
+.import-questions .toolbar { margin: 4px 0 0; }
 
 /* Fund side panel */
 .panel-wrap { position: fixed; inset: 0; z-index: 45; }

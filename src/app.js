@@ -4,7 +4,7 @@ import {
   autoPlanned, isOverridden, fundFlags, savingsMonthly, migrateV5,
   migrateV6, aumTotals, upsertSnapshot, aumLastUpdated,
 } from './compute.js';
-import { parseBankCsv, buildVendorMap, suggestFund, findDuplicate } from './csv.js';
+import { parseBankFile, buildVendorMap, suggestFund, findDuplicate } from './csv.js';
 import { groupedBars, barList, lineArea } from './charts.js';
 
 const VIZ = { s1: '#2a78d6', s2: '#eb6834' };
@@ -1427,16 +1427,23 @@ function fmtDateRange(min, max) {
 
 function renderImport(main) {
   let html = `<h1>Import bank CSV</h1>
-    <p class="sub">Pick the CSV you export from your bank (Capital One format). The app matches each row to a fund based on your history, flags duplicates and card payments, and nothing is saved until you click Import.</p>
+    <p class="sub">Pick the CSV you export from your bank. The app works out the file's format, matches each row to a fund based on your history, flags duplicates and card payments, and nothing is saved until you click Import. If something about the file is unclear, it asks instead of guessing.</p>
     <div class="toolbar"><button class="btn btn-accent" id="pickCsv">📄 Choose CSV file…</button></div>`;
 
-  if (importState) {
+  if (importState && importState.refusal) {
+    html += `<div class="section import-refusal">
+      <b>${esc(importState.fileName)}</b> couldn't be imported.
+      <p>${esc(importState.refusal)}</p>
+    </div>`;
+  } else if (importState) {
+    const report = importState.report;
+    const questions = report?.questions || [];
     const inc = importState.rows.filter((r) => r.include);
     html += `<div class="toolbar">
-      <span><b>${importState.fileName}</b> — ${importState.rows.length} rows, <b>${inc.length}</b> selected to import</span>
+      <span><b>${esc(importState.fileName)}</b> — ${importState.rows.length} rows, <b>${inc.length}</b> selected to import</span>
       <div class="spacer"></div>
       <button class="btn" id="cancelImport">Cancel</button>
-      <button class="btn btn-accent" id="doImport" ${inc.length ? '' : 'disabled'}>Import ${inc.length} transaction(s)</button>
+      <button class="btn btn-accent" id="doImport" ${inc.length && !questions.length ? '' : 'disabled'}>Import ${inc.length} transaction(s)</button>
     </div>`;
 
     // Summary band: the aggregates are what make a misread file obvious —
@@ -1445,14 +1452,53 @@ function renderImport(main) {
     const inTotal = recs.reduce((a, r) => a + (r.amount > 0 ? r.amount : 0), 0);
     const outTotal = recs.reduce((a, r) => a + (r.amount < 0 ? r.amount : 0), 0);
     const dates = recs.map((r) => r.date).sort();
-    const anomalies = importState.anomalies || [];
+    const anomalies = report?.anomalies || [];
+    const pending = report?.counts?.pending || 0;
+    let balanceLine = '';
+    if (report?.balanceCheck?.ok) {
+      balanceLine = `<span class="pos">✓ Balance column reconciles across ${report.balanceCheck.tested} rows — the amounts are provably right</span>`;
+    } else if (report && recs.length) {
+      balanceLine = `<span class="muted">No balance column — amounts couldn't be verified automatically</span>`;
+    }
     html += `<div class="section import-summary">
       <span><b>${recs.length}</b> row${recs.length === 1 ? '' : 's'} · ${fmtDateRange(dates[0], dates[dates.length - 1])}</span>
       <span>Money in <b class="pos">${money(inTotal)}</b></span>
       <span>Money out <b class="neg">${money(Math.abs(outTotal))}</b></span>
+      ${balanceLine}
+      ${pending ? `<span class="muted">${pending} pending row${pending === 1 ? '' : 's'} skipped (they'll re-appear as posted in a later export)</span>` : ''}
+      ${report?.signConvention?.verdict === 'flip' ? '<span class="muted">This bank writes spending as positive — amounts were converted so money out shows negative</span>' : ''}
       ${anomalies.length ? `<span class="import-anomaly">⚠ ${anomalies.length} row${anomalies.length === 1 ? '' : 's'} couldn't be read and ${anomalies.length === 1 ? 'was' : 'were'} left out — ${esc(anomalies.slice(0, 3).map((a) => `row ${a.row}: bad ${a.code === 'BadDate' ? 'date' : 'amount'} “${a.msg}”`).join(', '))}${anomalies.length > 3 ? ', …' : ''}</span>` : ''}
     </div>`;
 
+    // Blocking questions: the importer refuses to guess — each answer re-reads
+    // the file, and Import stays disabled until every question is resolved.
+    if (questions.length) {
+      html += `<div class="section import-questions">
+        <div class="import-questions-head">Before this can be imported, the app needs your help — it won't guess:</div>`;
+      questions.forEach((q, qi) => {
+        html += `<div class="import-question"><p>${esc(q.message)}</p>`;
+        if (q.samples?.length && q.kind === 'dateOrder') {
+          html += `<table class="grid import-q-samples"><thead><tr><th style="text-align:left">In the file</th><th style="text-align:left">Month first</th><th style="text-align:left">Day first</th></tr></thead><tbody>`;
+          for (const s of q.samples) {
+            html += `<tr><td>${esc(s.raw)}${s.vendor ? ` <span class="fund-note">${esc(s.vendor.slice(0, 24))}</span>` : ''}</td>
+              <td>${fmtDateWords(s.asMDY)}</td><td>${fmtDateWords(s.asDMY)}</td></tr>`;
+          }
+          html += `</tbody></table>`;
+        }
+        if (q.answerable) {
+          for (const opt of q.options) {
+            html += `<label class="import-q-opt"><input type="radio" name="impq-${qi}" value="${esc(opt.value)}" data-imp-q="${qi}"> ${esc(opt.label)}</label>`;
+          }
+        }
+        html += `</div>`;
+      });
+      if (questions.some((q) => q.answerable)) {
+        html += `<div class="toolbar"><button class="btn btn-accent" id="applyAnswers" disabled>Use these answers</button></div>`;
+      }
+      html += `</div>`;
+    }
+
+    if (importState.rows.length) {
     html += `<div class="section"><table class="grid"><thead><tr>
       <th style="width:30px"></th><th style="text-align:left">Date</th><th style="text-align:left">Vendor</th>
       <th>Amount</th><th style="text-align:left">Month</th><th style="text-align:left">Fund</th><th style="text-align:left">Status</th>
@@ -1478,23 +1524,30 @@ function renderImport(main) {
         <td>${badges.join(' ')}</td></tr>`;
     });
     html += `</tbody></table></div>`;
+    }
   }
   main.innerHTML = html;
 
-  $('#pickCsv').onclick = async () => {
-    const file = await window.budgetAPI.openCsv();
-    if (!file) return;
-    let recs;
-    try { recs = parseBankCsv(file.text); }
+  // Parse (or re-parse, once questions are answered) and build the preview.
+  // Refusals and blocking questions come from the importer — the UI only renders.
+  const loadCsvForImport = (fileName, fileText, answers) => {
+    let result;
+    try { result = parseBankFile(fileText, { answers }); }
     catch (err) { toast(err.message); return; }
-    if (!recs.length) {
-      const bad = (recs.anomalies || []).length;
-      toast(bad ? `No usable transactions — ${bad} row(s) could not be read.` : 'No transactions found in that file.');
+    if (result.error) {
+      importState = { fileName, fileText, rows: [], refusal: result.error, answers };
+      render();
+      return;
+    }
+    const { records, report } = result;
+    if (!records.length && !report.questions.length) {
+      toast('No transactions found in that file.');
       return;
     }
     const vendorMap = buildVendorMap(data.months);
     const claimed = new Set();
-    const rows = recs.map((rec) => {
+    const blocked = report.questions.length > 0;
+    const rows = records.map((rec) => {
       const monthId = rec.date.slice(0, 7);
       const month = data.months.find((m) => m.id === monthId);
       const dup = month ? !!findDuplicate(data.months, rec, claimed) : false;
@@ -1508,14 +1561,40 @@ function renderImport(main) {
       }
       return {
         rec, monthId, monthExists: !!month, duplicate: dup, fund, suggestNote,
-        include: !!month && !dup && !rec.isCardPayment,
+        include: !blocked && !!month && !dup && !rec.isCardPayment,
       };
     });
-    importState = { fileName: file.path.split(/[\\/]/).pop(), rows, anomalies: recs.anomalies || [] };
+    importState = { fileName, fileText, rows, report, answers };
     render();
   };
 
-  if (importState) {
+  $('#pickCsv').onclick = async () => {
+    const file = await window.budgetAPI.openCsv();
+    if (!file) return;
+    loadCsvForImport(file.path.split(/[\\/]/).pop(), file.text, {});
+  };
+
+  if (importState && !importState.refusal && importState.report?.questions?.some((q) => q.answerable)) {
+    const questions = importState.report.questions;
+    const applyBtn = $('#applyAnswers');
+    const chosen = () => questions.map((q, qi) => q.answerable
+      ? main.querySelector(`input[name="impq-${qi}"]:checked`)?.value : 'n/a');
+    main.querySelectorAll('[data-imp-q]').forEach((el) => {
+      el.onchange = () => { if (applyBtn) applyBtn.disabled = chosen().some((v) => !v); };
+    });
+    if (applyBtn) {
+      applyBtn.onclick = () => {
+        const answers = { ...importState.answers };
+        questions.forEach((q, qi) => {
+          if (!q.answerable) return;
+          answers[q.answerKey] = main.querySelector(`input[name="impq-${qi}"]:checked`)?.value;
+        });
+        loadCsvForImport(importState.fileName, importState.fileText, answers);
+      };
+    }
+  }
+
+  if (importState && !importState.refusal) {
     $('#cancelImport').onclick = () => { importState = null; render(); };
     $('#doImport').onclick = () => {
       const chosen = importState.rows.filter((r) => r.include);

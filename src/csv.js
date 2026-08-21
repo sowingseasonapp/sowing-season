@@ -1,5 +1,8 @@
 // Bank CSV parsing (Capital One export format) + auto-categorization.
+// parseBankFile is the bank-agnostic pipeline (src/csv/) — it infers the
+// format, refuses what it can't read safely, and asks instead of guessing.
 import { normFund } from './compute.js';
+export { parseBankFile } from './csv/import.js';
 
 // Minimal RFC-4180 CSV parser (handles quoted fields, embedded commas/quotes).
 // A quote only opens a field at field start, and only closes when followed

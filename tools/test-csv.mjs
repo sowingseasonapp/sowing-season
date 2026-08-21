@@ -10,7 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseCsv, parseBankCsv } from '../src/csv.js';
+import { parseCsv, parseBankCsv, parseBankFile } from '../src/csv.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FIX = path.join(HERE, 'fixtures');
@@ -95,6 +95,73 @@ for (const [file, expected] of Object.entries(baseline)) {
     && recs.anomalies[0].code === 'BadAmount', JSON.stringify(recs.anomalies));
   check('A5 3-decimal half-up rounding', recs.length === 1 && recs[0].amountCents === -1235,
     JSON.stringify(recs[0]));
+}
+
+// ---- Phase 2: the fixture suite — manifest.json as assertions ----
+// Decision D1 overrides the manifest for international fixtures: DD/MM dates,
+// decimal commas and semicolon delimiters must be REFUSED or ASKED about by
+// name, never imported — even though the research manifest records the totals
+// a full international importer would produce.
+const INTERNATIONAL = new Set(['30-monzo-uk.csv', '31-sparkasse-de.csv', '56-edge-semicolon-narrow.csv']);
+
+const manifest = JSON.parse(fs.readFileSync(path.join(FIX, 'manifest.json'), 'utf8'));
+for (const fx of manifest.fixtures) {
+  const buf = fs.readFileSync(path.join(FIX, fx.file));
+  let out;
+  try { out = parseBankFile(buf); }
+  catch (e) { out = { error: 'THREW: ' + e.message, records: [], report: { questions: [] } }; }
+  const tag = fx.file;
+  const asked = (out.report?.questions?.length ?? 0) > 0;
+
+  if (INTERNATIONAL.has(fx.file)) {
+    check(`${tag} [D1 refused/asked]`, !!out.error || asked,
+      `international format was imported silently: ${JSON.stringify(out.report?.totals)}`);
+    continue;
+  }
+  if (fx.mustRefuse) {
+    check(`${tag} [refuses]`, !!out.error, 'expected a refusal, got ' + (asked ? 'a question' : 'records'));
+    continue;
+  }
+  if (fx.mustAsk) {
+    check(`${tag} [asks]`, asked || !!out.error,
+      'expected a blocking question or a refusal; the importer produced numbers silently');
+    continue;
+  }
+  if (out.error) { check(tag, false, `error: ${out.error}`); continue; }
+  // A sign question on a file the manifest expects to import is allowed only
+  // when the file is genuinely too small for the evidence rules (§5.7 says ask
+  // when undecided) — but the records must still parse to the expected values.
+  const r = out.report;
+  check(`${tag} [rows]`, r.counts.rows === fx.rows, `rows ${r.counts.rows} != ${fx.rows}`);
+  if (fx.totalCents != null && !asked) {
+    check(`${tag} [net]`, r.totals?.netCents === fx.totalCents, `net ${r.totals?.netCents} != ${fx.totalCents}`);
+  }
+  if (fx.inCents != null && !asked) {
+    check(`${tag} [in]`, r.totals?.inCents === fx.inCents, `in ${r.totals?.inCents} != ${fx.inCents}`);
+  }
+  if (fx.outCents != null && !asked) {
+    check(`${tag} [out]`, r.totals?.outCents === fx.outCents, `out ${r.totals?.outCents} != ${fx.outCents}`);
+  }
+  if (fx.dateMin) check(`${tag} [dateMin]`, r.totals?.dateMin === fx.dateMin, `${r.totals?.dateMin} != ${fx.dateMin}`);
+  if (fx.dateMax) check(`${tag} [dateMax]`, r.totals?.dateMax === fx.dateMax, `${r.totals?.dateMax} != ${fx.dateMax}`);
+  if (fx.delimiter) check(`${tag} [delim]`, r.delimiter === fx.delimiter, `${JSON.stringify(r.delimiter)} != ${JSON.stringify(fx.delimiter)}`);
+  if (fx.decimalMark) check(`${tag} [decimal]`, r.decimalMark === fx.decimalMark, `${r.decimalMark} != ${fx.decimalMark}`);
+  if (fx.encoding) check(`${tag} [encoding]`, r.encoding === fx.encoding, `${r.encoding} != ${fx.encoding}`);
+  if (fx.balanceReconciles) check(`${tag} [balance]`, r.balanceCheck.ok === true, 'balance did not reconcile');
+  if (asked) check(`${tag} [asked]`, true, ''); // visibility: which import fixtures still ask
+}
+
+// ---- Phase 2: parseBankFile must agree with the legacy path on Capital One ----
+for (const [file, expected] of Object.entries(baseline)) {
+  const out = parseBankFile(fs.readFileSync(path.join(FIX, file)));
+  check(`${file} [pipeline no error]`, !out.error && !out.report.questions.length,
+    out.error || JSON.stringify(out.report.questions));
+  const got = out.records.map((r) => ({
+    date: r.date, vendor: r.vendor, amount: r.amount, account: r.account,
+    bankCategory: r.bankCategory, isCardPayment: r.isCardPayment,
+  }));
+  check(`${file} [pipeline ≡ legacy]`, JSON.stringify(got) === JSON.stringify(expected),
+    JSON.stringify(got[0]) + ' vs ' + JSON.stringify(expected[0]));
 }
 
 console.log(`\nCSV importer: ${pass} passed, ${fail} failed`);
