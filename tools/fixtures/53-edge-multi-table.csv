@@ -1,0 +1,9 @@
+Deposits & Withdrawals,Header,Currency,Settle Date,Description,Amount
+Deposits & Withdrawals,Data,USD,2026-01-05,WHOLEFDS MKT 10123,-84.31
+Deposits & Withdrawals,Data,USD,2026-01-07,SHELL OIL 57444444444,-42.10
+Deposits & Withdrawals,Data,USD,2026-01-09,NETFLIX.COM,-17.99
+Deposits & Withdrawals,Data,USD,2026-01-12,ACME INC PAYROLL,4231.00
+
+Trades,Header,DataDiscriminator,Asset Category,Symbol,Quantity
+Trades,Data,Order,Stocks,AAPL,10
+Trades,Data,Order,Stocks,MSFT,5

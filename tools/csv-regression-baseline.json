@@ -1,0 +1,200 @@
+{
+  "00-capitalone-360-regression.csv": [
+    {
+      "date": "2026-01-05",
+      "vendor": "WHOLEFDS MKT 10123",
+      "amount": -84.31,
+      "account": "1234567890",
+      "bankCategory": "",
+      "isCardPayment": false
+    },
+    {
+      "date": "2026-01-07",
+      "vendor": "SHELL OIL 57444444444",
+      "amount": -42.1,
+      "account": "1234567890",
+      "bankCategory": "",
+      "isCardPayment": false
+    },
+    {
+      "date": "2026-01-09",
+      "vendor": "NETFLIX.COM",
+      "amount": -17.99,
+      "account": "1234567890",
+      "bankCategory": "",
+      "isCardPayment": false
+    },
+    {
+      "date": "2026-01-12",
+      "vendor": "ACME INC PAYROLL",
+      "amount": 4231,
+      "account": "1234567890",
+      "bankCategory": "",
+      "isCardPayment": false
+    },
+    {
+      "date": "2026-01-15",
+      "vendor": "TRADER JOES #482 PORTLAND OR",
+      "amount": -63.55,
+      "account": "1234567890",
+      "bankCategory": "",
+      "isCardPayment": false
+    },
+    {
+      "date": "2026-01-19",
+      "vendor": "AMAZON MKTPL*RT4G82KL1",
+      "amount": -24.99,
+      "account": "1234567890",
+      "bankCategory": "",
+      "isCardPayment": false
+    },
+    {
+      "date": "2026-01-23",
+      "vendor": "CITY WATER BILL PAYMENT",
+      "amount": -111.11,
+      "account": "1234567890",
+      "bankCategory": "",
+      "isCardPayment": false
+    },
+    {
+      "date": "2026-02-02",
+      "vendor": "PAYMENT - THANK YOU",
+      "amount": 500,
+      "account": "1234567890",
+      "bankCategory": "",
+      "isCardPayment": false
+    }
+  ],
+  "09-capitalone-card-iso.csv": [
+    {
+      "date": "2026-01-05",
+      "vendor": "WHOLEFDS MKT 10123",
+      "amount": -84.31,
+      "account": "5620",
+      "bankCategory": "Merchandise",
+      "isCardPayment": false
+    },
+    {
+      "date": "2026-01-07",
+      "vendor": "SHELL OIL 57444444444",
+      "amount": -42.1,
+      "account": "5620",
+      "bankCategory": "Merchandise",
+      "isCardPayment": false
+    },
+    {
+      "date": "2026-01-09",
+      "vendor": "NETFLIX.COM",
+      "amount": -17.99,
+      "account": "5620",
+      "bankCategory": "Merchandise",
+      "isCardPayment": false
+    },
+    {
+      "date": "2026-01-12",
+      "vendor": "ACME INC PAYROLL",
+      "amount": 4231,
+      "account": "5620",
+      "bankCategory": "Payment/Credit",
+      "isCardPayment": true
+    },
+    {
+      "date": "2026-01-15",
+      "vendor": "TRADER JOES #482 PORTLAND OR",
+      "amount": -63.55,
+      "account": "5620",
+      "bankCategory": "Merchandise",
+      "isCardPayment": false
+    },
+    {
+      "date": "2026-01-19",
+      "vendor": "AMAZON MKTPL*RT4G82KL1",
+      "amount": -24.99,
+      "account": "5620",
+      "bankCategory": "Merchandise",
+      "isCardPayment": false
+    },
+    {
+      "date": "2026-01-23",
+      "vendor": "CITY WATER BILL PAYMENT",
+      "amount": -111.11,
+      "account": "5620",
+      "bankCategory": "Merchandise",
+      "isCardPayment": false
+    },
+    {
+      "date": "2026-02-02",
+      "vendor": "PAYMENT - THANK YOU",
+      "amount": 500,
+      "account": "5620",
+      "bankCategory": "Payment/Credit",
+      "isCardPayment": true
+    }
+  ],
+  "10-capitalone-card-us.csv": [
+    {
+      "date": "2026-01-05",
+      "vendor": "WHOLEFDS MKT 10123",
+      "amount": -84.31,
+      "account": "5620",
+      "bankCategory": "Merchandise",
+      "isCardPayment": false
+    },
+    {
+      "date": "2026-01-07",
+      "vendor": "SHELL OIL 57444444444",
+      "amount": -42.1,
+      "account": "5620",
+      "bankCategory": "Merchandise",
+      "isCardPayment": false
+    },
+    {
+      "date": "2026-01-09",
+      "vendor": "NETFLIX.COM",
+      "amount": -17.99,
+      "account": "5620",
+      "bankCategory": "Merchandise",
+      "isCardPayment": false
+    },
+    {
+      "date": "2026-01-12",
+      "vendor": "ACME INC PAYROLL",
+      "amount": 4231,
+      "account": "5620",
+      "bankCategory": "Payment/Credit",
+      "isCardPayment": true
+    },
+    {
+      "date": "2026-01-15",
+      "vendor": "TRADER JOES #482 PORTLAND OR",
+      "amount": -63.55,
+      "account": "5620",
+      "bankCategory": "Merchandise",
+      "isCardPayment": false
+    },
+    {
+      "date": "2026-01-19",
+      "vendor": "AMAZON MKTPL*RT4G82KL1",
+      "amount": -24.99,
+      "account": "5620",
+      "bankCategory": "Merchandise",
+      "isCardPayment": false
+    },
+    {
+      "date": "2026-01-23",
+      "vendor": "CITY WATER BILL PAYMENT",
+      "amount": -111.11,
+      "account": "5620",
+      "bankCategory": "Merchandise",
+      "isCardPayment": false
+    },
+    {
+      "date": "2026-02-02",
+      "vendor": "PAYMENT - THANK YOU",
+      "amount": 500,
+      "account": "5620",
+      "bankCategory": "Payment/Credit",
+      "isCardPayment": true
+    }
+  ]
+}

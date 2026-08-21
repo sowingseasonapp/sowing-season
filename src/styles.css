@@ -264,6 +264,13 @@ input.inline-date { width: 120px; }
 
 /* Import table */
 .import-row-off td { opacity: .45; }
+.import-summary {
+  display: flex; gap: 22px; align-items: baseline; flex-wrap: wrap;
+  padding: 12px 16px; font-variant-numeric: tabular-nums;
+}
+.import-summary b.pos { color: var(--green); }
+.import-summary b.neg { color: var(--red); }
+.import-anomaly { color: var(--amber); font-size: .85rem; }
 
 /* Fund side panel */
 .panel-wrap { position: fixed; inset: 0; z-index: 45; }

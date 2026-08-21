@@ -1410,6 +1410,21 @@ function renderTransactions(main) {
 }
 
 /* ---------------- Import view ---------------- */
+// "Jan 5, 2026" — the summary band spells dates out so a wrong century or a
+// day/month flip is obvious at a glance, which a 01/05/26 rendering never is.
+function fmtDateWords(iso) {
+  if (!iso) return '—';
+  const [y, m, d] = iso.split('-').map(Number);
+  const M = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return `${M[m - 1]} ${d}, ${y}`;
+}
+function fmtDateRange(min, max) {
+  if (!min || !max) return '—';
+  if (min === max) return fmtDateWords(min);
+  if (min.slice(0, 4) === max.slice(0, 4)) return `${fmtDateWords(min).replace(/,.*$/, '')} – ${fmtDateWords(max)}`;
+  return `${fmtDateWords(min)} – ${fmtDateWords(max)}`;
+}
+
 function renderImport(main) {
   let html = `<h1>Import bank CSV</h1>
     <p class="sub">Pick the CSV you export from your bank (Capital One format). The app matches each row to a fund based on your history, flags duplicates and card payments, and nothing is saved until you click Import.</p>
@@ -1422,8 +1437,23 @@ function renderImport(main) {
       <div class="spacer"></div>
       <button class="btn" id="cancelImport">Cancel</button>
       <button class="btn btn-accent" id="doImport" ${inc.length ? '' : 'disabled'}>Import ${inc.length} transaction(s)</button>
-    </div>
-    <div class="section"><table class="grid"><thead><tr>
+    </div>`;
+
+    // Summary band: the aggregates are what make a misread file obvious —
+    // an inverted sign shows up as impossible income, a date bug as a wrong year.
+    const recs = importState.rows.map((r) => r.rec);
+    const inTotal = recs.reduce((a, r) => a + (r.amount > 0 ? r.amount : 0), 0);
+    const outTotal = recs.reduce((a, r) => a + (r.amount < 0 ? r.amount : 0), 0);
+    const dates = recs.map((r) => r.date).sort();
+    const anomalies = importState.anomalies || [];
+    html += `<div class="section import-summary">
+      <span><b>${recs.length}</b> row${recs.length === 1 ? '' : 's'} · ${fmtDateRange(dates[0], dates[dates.length - 1])}</span>
+      <span>Money in <b class="pos">${money(inTotal)}</b></span>
+      <span>Money out <b class="neg">${money(Math.abs(outTotal))}</b></span>
+      ${anomalies.length ? `<span class="import-anomaly">⚠ ${anomalies.length} row${anomalies.length === 1 ? '' : 's'} couldn't be read and ${anomalies.length === 1 ? 'was' : 'were'} left out — ${esc(anomalies.slice(0, 3).map((a) => `row ${a.row}: bad ${a.code === 'BadDate' ? 'date' : 'amount'} “${a.msg}”`).join(', '))}${anomalies.length > 3 ? ', …' : ''}</span>` : ''}
+    </div>`;
+
+    html += `<div class="section"><table class="grid"><thead><tr>
       <th style="width:30px"></th><th style="text-align:left">Date</th><th style="text-align:left">Vendor</th>
       <th>Amount</th><th style="text-align:left">Month</th><th style="text-align:left">Fund</th><th style="text-align:left">Status</th>
     </tr></thead><tbody>`;
@@ -1457,7 +1487,11 @@ function renderImport(main) {
     let recs;
     try { recs = parseBankCsv(file.text); }
     catch (err) { toast(err.message); return; }
-    if (!recs.length) { toast('No transactions found in that file.'); return; }
+    if (!recs.length) {
+      const bad = (recs.anomalies || []).length;
+      toast(bad ? `No usable transactions — ${bad} row(s) could not be read.` : 'No transactions found in that file.');
+      return;
+    }
     const vendorMap = buildVendorMap(data.months);
     const claimed = new Set();
     const rows = recs.map((rec) => {
@@ -1477,7 +1511,7 @@ function renderImport(main) {
         include: !!month && !dup && !rec.isCardPayment,
       };
     });
-    importState = { fileName: file.path.split(/[\\/]/).pop(), rows };
+    importState = { fileName: file.path.split(/[\\/]/).pop(), rows, anomalies: recs.anomalies || [] };
     render();
   };
 
