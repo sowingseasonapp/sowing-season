@@ -13,6 +13,7 @@ import { findHeaderRow, segment, norm, isDateish, isMoneyish } from './structure
 import { assignRoles, positionalRoles, DIRECTION_TOKENS } from './roles.js';
 import { stripAmount, decideDecimalMark, centsOf, inferDateOrder, parseDate } from './values.js';
 import { detectSign, balanceEvidence } from './sign.js';
+import { matchProfile, applyProfile, buildResolvedProfile } from './profiles.js';
 
 // Same heuristic as the legacy csv.js path, so both paths agree on what a
 // card payment looks like.
@@ -110,10 +111,36 @@ export function parseBankFile(input, opts = {}) {
   // text (Fidelity ships 14 disclaimer rows) can't dilute the column shapes
   const dataish = body.filter((b) => b.cells.some((c) => isDateish(c) || isMoneyish(c)));
   const sample = (dataish.length ? dataish : body).slice(0, 40).map((b) => b.cells);
-  let roles = useHeader ? assignRoles(hdr.cells, sample) : positionalRoles(sample);
-  if (useHeader && norm(hdr.cells[hdr.cells.length - 1]) === ''
-      && sample.filter((r) => String(r[hdr.cells.length - 1] ?? '').trim() === '').length / sample.length >= 0.95) {
-    roles = roles.slice(0, -1); // phantom column from a trailing delimiter
+  const phantom = useHeader && norm(hdr.cells[hdr.cells.length - 1]) === ''
+    && sample.filter((r) => String(r[hdr.cells.length - 1] ?? '').trim() === '').length / sample.length >= 0.95;
+  const effArity = phantom ? arity - 1 : arity;
+
+  // ── fingerprint-first (§6): a registry hit skips inference entirely. The
+  // seed's non-US entries are recognition-only — matched just to refuse by name.
+  let prof = null;
+  if (!answers.ignoreProfile) {
+    const m = matchProfile(useHeader ? hdr.cells : null, arity, { userProfiles: opts.profiles || [] });
+    if (m?.profile.recognitionOnly) {
+      return refuse(`This looks like a ${m.profile.name} export, which isn’t supported yet — `
+        + 'it uses a format (day-first dates, or comma decimals) that would be misread as US data. '
+        + 'Nothing was imported.');
+    }
+    if (m) {
+      prof = applyProfile(m, effArity); // null on a length mismatch → fall back to inference
+      if (prof) report.profile = { id: prof.id, name: prof.name, source: prof.source };
+    }
+  }
+
+  let roles;
+  if (prof && prof.prefixOnly) {
+    roles = assignRoles(hdr.cells, sample);
+    if (phantom) roles = roles.slice(0, -1);
+    prof.roles.forEach((r, i) => { roles[i] = r; }); // declared prefix wins
+  } else if (prof) {
+    roles = prof.roles.slice();
+  } else {
+    roles = useHeader ? assignRoles(hdr.cells, sample) : positionalRoles(sample);
+    if (phantom) roles = roles.slice(0, -1); // phantom column from a trailing delimiter
   }
   if (!roles.includes('date') && roles.includes('datePosted')) {
     roles[roles.indexOf('datePosted')] = 'date'; // "Posted Date" is the only date there is
@@ -139,7 +166,14 @@ export function parseBankFile(input, opts = {}) {
       + 'month-first. This usually happens when a spreadsheet program half-converted the file. '
       + 'It can’t be read safely, so nothing was imported.');
   }
-  let dateOrder = answers.dateOrder || ord.order;
+  // Precedence: a user answer, then what the data itself proves, then a
+  // USER-confirmed profile's stored order (how an answered question is
+  // remembered), then ask. Data beats profile so a stale profile can't misread
+  // a column the values decide. A SEED profile's order deliberately can't
+  // resolve ambiguity — generic headers collide (Amex's is literally
+  // Date,Description,Amount), and a DD/MM file wearing that header must still
+  // ask, never inherit MDY from a coincidental match.
+  let dateOrder = answers.dateOrder || ord.order || (prof?.source === 'user' ? prof.dateOrder : null);
   if (!dateOrder) {
     const samples = body.slice(0, 3).map((b) => ({
       raw: String(b.cells[iDate]).trim(),
@@ -173,7 +207,11 @@ export function parseBankFile(input, opts = {}) {
     .filter((s) => s.cleaned).map((s) => s.cleaned);
   if (!pooled.length) return refuse('No readable amounts were found in this file.');
   const dm = decideDecimalMark(pooled);
-  let mark = answers.decimalMark || (dm.conflict ? null : dm.mark);
+  // Same precedence as dates: answer, then the column's own evidence, then a
+  // user-confirmed profile (a seed mark can't resolve ambiguity, for the same
+  // collision reason as dates). A conflict in the data always asks.
+  let mark = answers.decimalMark
+    || (dm.conflict ? null : (dm.mark || (prof?.source === 'user' ? prof.decimalMark : null)));
   if (!mark) {
     questions.push({
       kind: 'decimalMark', blocking: true, answerable: true, answerKey: 'decimalMark',
@@ -195,6 +233,13 @@ export function parseBankFile(input, opts = {}) {
   // ── build records in exact cents
   const col = (i) => (i < 0 ? null : body.map((b) => centsOf(stripAmount(b.cells[i]), mark)));
   const A = col(iAmt), Db = col(iDeb), Cr = col(iCred), Bl = col(iBal);
+  // A profile pendingRule names the column and value that mark pending rows
+  // (Citi's Status=Pending); the generic direction-column check runs as well.
+  let pendCol = -1, pendVal = null;
+  if (prof?.pendingRule?.column && useHeader) {
+    pendCol = hdr.cells.findIndex((c) => norm(c) === norm(prof.pendingRule.column));
+    pendVal = String(prof.pendingRule.pendingValue ?? 'Pending').toLowerCase();
+  }
   const records = [];
   let pendingSkipped = 0;
   body.forEach((b, k) => {
@@ -227,7 +272,10 @@ export function parseBankFile(input, opts = {}) {
       amountCents = dz ? Math.abs(c) : -Math.abs(d);
     }
     const dirVals = dirCols.map((i) => String(b.cells[i] ?? '').trim());
-    if (dirVals.some((v) => /^pending$/i.test(v))) { pendingSkipped++; return; } // pending re-posts later (C3)
+    if (dirVals.some((v) => /^pending$/i.test(v))
+        || (pendCol >= 0 && String(b.cells[pendCol] ?? '').trim().toLowerCase() === pendVal)) {
+      pendingSkipped++; return; // pending re-posts later with a new date (C3)
+    }
     const dedupe = [];
     for (const i of descCols) {
       const v = String(b.cells[i] ?? '').trim();
@@ -271,17 +319,34 @@ export function parseBankFile(input, opts = {}) {
     const looksDirectional = dirCols.length > 0
       && dirTokens.length >= records.length * 0.9
       && distinct.length <= 4
-      && distinct.every((t) => DIRECTION_TOKENS.test(t))
+      && distinct.every((t) => DIRECTION_TOKENS.test(t) || prof?.directionTokens?.[t] !== undefined)
       && records.every((r) => r.amountCents >= 0);
     if (looksDirectional) {
-      for (const r of records) if (OUTFLOW_TOKENS.test(r.direction)) r.amountCents = -Math.abs(r.amountCents);
+      // A profile can pin which token means outflow; otherwise use the
+      // canonical debit/withdrawal family. The balance gate validates either way.
+      const isOut = prof?.directionTokens
+        ? (t) => prof.directionTokens[t.toLowerCase()] === 'out'
+        : (t) => OUTFLOW_TOKENS.test(t);
+      for (const r of records) if (isOut(r.direction)) r.amountCents = -Math.abs(r.amountCents);
       sign = { verdict: 'as-is', decided: true, source: 'direction' };
       notes.push('applied the direction column to unsigned amounts');
     } else if (answers.signConvention) {
       sign = { verdict: answers.signConvention, decided: true, source: 'user' };
       if (answers.signConvention === 'flip') for (const r of records) r.amountCents = -r.amountCents;
+    } else if (prof?.signAuthoritative && (prof.signConvention === 'as-is' || prof.signConvention === 'flip'
+        || prof.signConvention === 'parentheses')) {
+      // A format the user confirmed before: zero heuristics (§6 steady state).
+      const verdict = prof.signConvention === 'flip' ? 'flip' : 'as-is';
+      sign = { verdict, decided: true, source: 'profile' };
+      if (verdict === 'flip') for (const r of records) r.amountCents = -r.amountCents;
     } else {
-      sign = detectSign(records);
+      // A seed profile's sign is EVIDENCE, not a verdict — the seed documents
+      // header collisions (Amex vs generic 3-column, Discover vs Chase) where
+      // the same header carries opposite signs. detectSign weighs it at 0.8
+      // against the distribution and keyword votes.
+      const hint = prof && (prof.signConvention === 'flip' ? 'flip'
+        : prof.signConvention === 'as-is' || prof.signConvention === 'parentheses' ? 'as-is' : null);
+      sign = detectSign(records, { profileHint: hint });
       if (sign.decided && sign.verdict === 'flip') for (const r of records) r.amountCents = -r.amountCents;
       if (!sign.decided) {
         const s = records.find((r) => r.amountCents < 0) || records[0];
@@ -325,6 +390,20 @@ export function parseBankFile(input, opts = {}) {
   const dates = included.map((r) => r.date).sort();
   report.counts = { rows: included.length, junk: report.counts.junk, pending: pendingSkipped, anomalies: anomalies.length };
   report.totals = { inCents: inC, outCents: outC, netCents: inC + outC, dateMin: dates[0], dateMax: dates[dates.length - 1] };
+
+  // How this file's convention should be recorded if the user confirms it.
+  sign.stored = usedSplit ? 'split-positive'
+    : sign.source === 'direction' ? 'unsigned-with-direction'
+    : sign.verdict === 'flip' ? 'flip' : 'as-is';
+  // The profile the app persists after a user-confirmed import (§6) — with the
+  // date order, decimal mark, roles and sign this run resolved (including any
+  // question answers), so the next file of this shape skips inference entirely.
+  if (!questions.length) {
+    report.resolvedProfile = buildResolvedProfile({
+      headerCells: useHeader ? hdr.cells : null,
+      arity, headerless: !useHeader, report, matched: prof,
+    });
+  }
 
   // Dollars at the boundary — cents never leave the importer as `amount`.
   for (const r of records) r.amount = r.amountCents / 100;

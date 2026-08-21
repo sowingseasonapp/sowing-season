@@ -35,6 +35,8 @@
       loadData: () => fetch('/data/seed.json').then((r) => r.json()),
       saveData: async () => true,
       openCsv: async () => ({ path: 'sample.csv', text: await fetch('/sample.csv').then((r) => r.text()) }),
+      loadBankProfiles: async () => window.__devProfiles || { version: 1, profiles: [] },
+      saveBankProfiles: async (store) => { window.__devProfiles = store; return true; },
       revealData: async () => alert('(dev mode)'),
       exportData: async () => true,
       openExternal: async (url) => { console.log('openExternal:', url); return true; },

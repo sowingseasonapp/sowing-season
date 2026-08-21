@@ -9,6 +9,10 @@ if (process.env.BUDGET_DATA_DIR) app.setPath('userData', process.env.BUDGET_DATA
 const DATA_DIR = () => app.getPath('userData');
 const DATA_FILE = () => path.join(DATA_DIR(), 'budget-data.json');
 const BACKUP_DIR = () => path.join(DATA_DIR(), 'backups');
+// Bank profiles the user has confirmed by importing (CSV importer §6). App
+// configuration, not budget history — kept out of budget-data.json so the
+// rolling backups and the data version field never see it.
+const PROFILES_FILE = () => path.join(DATA_DIR(), 'bank-profiles.json');
 const SEED_FILE = path.join(__dirname, 'data', 'seed.json');
 const MAX_BACKUPS = 30;
 
@@ -97,7 +101,21 @@ app.whenReady().then(() => {
       properties: ['openFile'],
     });
     if (res.canceled || !res.filePaths.length) return null;
-    return { path: res.filePaths[0], text: fs.readFileSync(res.filePaths[0], 'utf8') };
+    // Raw bytes so the importer can sniff the encoding (UTF-16, windows-1252);
+    // `text` stays for compatibility with anything still reading it.
+    const bytes = fs.readFileSync(res.filePaths[0]);
+    return { path: res.filePaths[0], text: bytes.toString('utf8'), bytes };
+  });
+  ipcMain.handle('profiles:load', () => {
+    try { return parseJson(fs.readFileSync(PROFILES_FILE(), 'utf8')); }
+    catch { return { version: 1, profiles: [] }; }
+  });
+  ipcMain.handle('profiles:save', (_e, store) => {
+    fs.mkdirSync(DATA_DIR(), { recursive: true });
+    const tmp = PROFILES_FILE() + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(store, null, 1));
+    fs.renameSync(tmp, PROFILES_FILE());
+    return true;
   });
   ipcMain.handle('data:reveal', () => { shell.showItemInFolder(DATA_FILE()); return true; });
   // System-browser links. https:// only — never pass arbitrary strings to openExternal.

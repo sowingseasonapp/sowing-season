@@ -1461,6 +1461,7 @@ function renderImport(main) {
       balanceLine = `<span class="muted">No balance column — amounts couldn't be verified automatically</span>`;
     }
     html += `<div class="section import-summary">
+      ${report?.profile ? `<span><b>${esc(report.profile.name || "A format you've confirmed before")}</b> · recognised automatically <button class="btn btn-sm" id="notThisBank">Not this bank?</button></span>` : ''}
       <span><b>${recs.length}</b> row${recs.length === 1 ? '' : 's'} · ${fmtDateRange(dates[0], dates[dates.length - 1])}</span>
       <span>Money in <b class="pos">${money(inTotal)}</b></span>
       <span>Money out <b class="neg">${money(Math.abs(outTotal))}</b></span>
@@ -1530,12 +1531,14 @@ function renderImport(main) {
 
   // Parse (or re-parse, once questions are answered) and build the preview.
   // Refusals and blocking questions come from the importer — the UI only renders.
-  const loadCsvForImport = (fileName, fileText, answers) => {
+  const loadCsvForImport = async (fileName, fileData, answers) => {
+    let store = null;
+    try { store = await window.budgetAPI.loadBankProfiles(); } catch { /* first run / dev */ }
     let result;
-    try { result = parseBankFile(fileText, { answers }); }
+    try { result = parseBankFile(fileData, { answers, profiles: store?.profiles || [] }); }
     catch (err) { toast(err.message); return; }
     if (result.error) {
-      importState = { fileName, fileText, rows: [], refusal: result.error, answers };
+      importState = { fileName, fileData, rows: [], refusal: result.error, answers };
       render();
       return;
     }
@@ -1564,15 +1567,22 @@ function renderImport(main) {
         include: !blocked && !!month && !dup && !rec.isCardPayment,
       };
     });
-    importState = { fileName, fileText, rows, report, answers };
+    importState = { fileName, fileData, rows, report, answers };
     render();
   };
 
   $('#pickCsv').onclick = async () => {
     const file = await window.budgetAPI.openCsv();
     if (!file) return;
-    loadCsvForImport(file.path.split(/[\\/]/).pop(), file.text, {});
+    // Raw bytes when the IPC provides them (encoding detection); text otherwise.
+    loadCsvForImport(file.path.split(/[\\/]/).pop(), file.bytes ?? file.text, {});
   };
+
+  const notThis = $('#notThisBank');
+  if (notThis) {
+    notThis.onclick = () => loadCsvForImport(importState.fileName, importState.fileData,
+      { ...importState.answers, ignoreProfile: true });
+  }
 
   if (importState && !importState.refusal && importState.report?.questions?.some((q) => q.answerable)) {
     const questions = importState.report.questions;
@@ -1589,7 +1599,7 @@ function renderImport(main) {
           if (!q.answerable) return;
           answers[q.answerKey] = main.querySelector(`input[name="impq-${qi}"]:checked`)?.value;
         });
-        loadCsvForImport(importState.fileName, importState.fileText, answers);
+        loadCsvForImport(importState.fileName, importState.fileData, answers);
       };
     }
   }
@@ -1609,6 +1619,20 @@ function renderImport(main) {
           fund: row.fund, description: '', account: row.rec.account,
         });
         n++; lastMonth = month.id;
+      }
+      // The import is the confirmation (§6): persist this file's resolved shape
+      // so the next export from the same bank skips inference and questions.
+      // Seed-recognised formats ship with the app and aren't re-persisted —
+      // unless the user had to answer something (a seed match that still asked,
+      // like the generic 3-column header), which is exactly what's worth saving.
+      const rp = importState.report?.resolvedProfile;
+      const gaveAnswers = Object.keys(importState.answers || {}).some((k) => k !== 'ignoreProfile');
+      if (rp && (gaveAnswers || importState.report?.profile?.source !== 'seed')) {
+        window.budgetAPI.loadBankProfiles().then((store) => {
+          const profiles = (store?.profiles || []).filter((p) => p.fingerprint !== rp.fingerprint);
+          profiles.push({ ...rp, confirmedByUser: true, lastUsed: new Date().toISOString().slice(0, 10) });
+          return window.budgetAPI.saveBankProfiles({ version: 1, profiles });
+        }).catch(() => { /* profiles are a convenience — never block an import on them */ });
       }
       importState = null;
       markDirty();

@@ -164,6 +164,77 @@ for (const [file, expected] of Object.entries(baseline)) {
     JSON.stringify(got[0]) + ' vs ' + JSON.stringify(expected[0]));
 }
 
+// ---- Phase 3: profile registry ----
+// Seed profiles must recognise the fixtures for the institutions they cover —
+// and since the whole manifest suite above already ran with the registry
+// active, a profile whose stored shape diverged from inference would have
+// broken those totals. Here we pin the actual matches.
+{
+  const expectMatch = {
+    '01-chase-checking.csv': 'chase-checking-v3',
+    '03-chase-card-2019.csv': 'chase-card-v3',
+    '05-bofa-checking.csv': 'bofa-checking',
+    '07-wellsfargo-headerless.csv': 'wellsfargo',
+    '09-capitalone-card-iso.csv': 'capitalone-card',
+    '10-capitalone-card-us.csv': 'capitalone-card',
+    '11-capitalone-360.csv': 'capitalone-360',
+    '14-suntrust-legacy.csv': 'suntrust-legacy',
+    '17-amex-basic.csv': 'amex-basic',
+    '19-discover-card.csv': 'discover-card',
+    '20-apple-card.csv': 'apple-card',
+    '23-usaa-bk_download.csv': 'usaa-legacy',
+    '26-schwab-checking.csv': 'schwab-checking',
+    '27-fidelity-cma.csv': 'fidelity-cma',
+    '28-paypal-classic.csv': 'paypal-classic',
+    '29-mint-export.csv': 'mint-classic',
+  };
+  for (const [file, id] of Object.entries(expectMatch)) {
+    const out = parseBankFile(fs.readFileSync(path.join(FIX, file)));
+    check(`${file} [profile=${id}]`, out.report?.profile?.id === id,
+      `matched ${out.report?.profile?.id ?? 'nothing'}`);
+  }
+  // Citi's pendingRule fires through the profile path (and the row count in the
+  // manifest run above already proved the pending row was skipped).
+  const citi = parseBankFile(fs.readFileSync(path.join(FIX, '08-citi-card.csv')));
+  check('08-citi [profile pending skip]', citi.report.counts.pending === 1 && citi.report.counts.rows === 8,
+    JSON.stringify(citi.report.counts));
+}
+
+// Recognition-only (D1): Monzo is refused BY NAME, never imported.
+{
+  const out = parseBankFile(fs.readFileSync(path.join(FIX, '30-monzo-uk.csv')));
+  check('30-monzo [named refusal]', /Monzo/.test(out.error || ''), out.error || 'no error');
+}
+
+// A generic 3-column header collides with the Amex seed profile — the seed's
+// MDY/flip must NOT resolve an ambiguous file (that would be a smuggled guess).
+{
+  const out = parseBankFile(fs.readFileSync(path.join(FIX, '57-edge-duplicate-sameday.csv')));
+  const kinds = (out.report.questions || []).map((q) => q.kind);
+  check('57 [seed profile cannot answer for the user]',
+    kinds.includes('dateOrder') && kinds.includes('signConvention'), JSON.stringify(kinds));
+}
+
+// Round trip: answer the questions once → the resolved profile is persisted →
+// the next file of the same shape imports with ZERO questions (§6 steady state).
+{
+  const buf = fs.readFileSync(path.join(FIX, '57-edge-duplicate-sameday.csv'));
+  const answered = parseBankFile(buf, { answers: { dateOrder: 'MDY', signConvention: 'as-is' } });
+  const rp = answered.report.resolvedProfile;
+  check('57 [answers produce a resolvedProfile]',
+    !!rp && rp.dateOrder === 'MDY' && rp.signConvention === 'as-is' && rp.fingerprint?.startsWith('fnv1a:'),
+    JSON.stringify(rp));
+  const again = parseBankFile(buf, { profiles: [rp] });
+  check('57 [user profile remembers the answers]',
+    !again.error && again.report.questions.length === 0 && again.report.profile?.source === 'user'
+      && again.report.counts.rows === 4 && again.report.totals.netCents === 198500,
+    JSON.stringify({ q: again.report.questions, totals: again.report.totals, profile: again.report.profile }));
+  // …and the escape hatch brings inference (and its questions) back.
+  const ignored = parseBankFile(buf, { profiles: [rp], answers: { ignoreProfile: true } });
+  check('57 [not-this-bank re-runs inference]', ignored.report.questions.length > 0 && !ignored.report.profile,
+    JSON.stringify(ignored.report.questions.map((q) => q.kind)));
+}
+
 console.log(`\nCSV importer: ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\nFailures:'); for (const f of failures) console.log('  ✗ ' + f); }
 process.exit(fail ? 1 : 0);
