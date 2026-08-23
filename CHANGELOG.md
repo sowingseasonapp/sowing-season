@@ -9,7 +9,68 @@ so entries before that are dated by when the work happened, not by commit.
 
 ---
 
-## 2026-08-20 — Bank-agnostic CSV importer, Phases 1–4
+## 2026-08-22 — New-user onboarding wizard; seed.json no longer ships
+
+Implements `_cowork/onboarding-proposal.md` (rev 1.1). Resolves the distribution
+blocker: `data/seed.json` is the owner's real 9-month financial history and used to be
+copied to every new install. New installs now start **empty** and run a setup wizard.
+
+- **main.js**: first run returns a `BLANK()` state (version 6, no months) and writes
+  **nothing** — the wizard's Finish does the first save, so quitting mid-wizard leaves
+  no file and the wizard re-runs next launch. The corrupt-file fallback chain still
+  prefers the newest good backup but its last resort is now `BLANK()` (a `.corrupt`
+  copy of the unreadable file is kept first, since finishing the wizard later would
+  overwrite it). `data/seed.json` is untracked (`.gitignore`), dropped from the
+  packager's KEEP list, and the owner keeps his local copy; his install is untouched —
+  the wizard only fires when `data.months` is empty.
+- **The wizard** (`renderOnboarding` in app.js): full-screen 6-step stepper (hidden
+  sidebar, own paint loop — never `render()` while it owns the screen; no
+  `markDirty`/save before Finish). Welcome → optional bank file → paychecks → giving →
+  envelopes → finish. Plain-language copy throughout per the owner's hard requirement.
+  - **Bank file step** calls `parseBankFile` (never the legacy parser) and honours its
+    full contract: refusals show the importer's text verbatim plus one skip line;
+    blocking questions render through `csvQuestionsHtml`/`wireCsvQuestions` —
+    **extracted from the Import view, shared, not forked** — and Skip stays available
+    throughout. Multiple files add together (checking + card complement each other).
+    Resolved profiles persist on Finish via the shared `persistResolvedProfile`, so a
+    format confirmed in the wizard never asks again on the Import tab (verified).
+  - `suggestStarterFunds(recs)` in csv.js (pure, unit-tested): card `bankCategory`
+    mapping first, then ~10 conservative vendor keywords; monthly amount = total ÷
+    months spanned rounded **up** to $5; unmapped spending inflates Everything Else.
+    Paycheck detection clusters payroll-flavoured deposits (±10%), needs ≥2 hits on a
+    steady cadence, suggests the median and the last-full-month count — worded as a
+    suggestion the user confirms, never silently applied.
+  - Paychecks become Standard Income funds + `month.checks` entries (`titheAmount`
+    defaults to the net amount; hourly path sets `chk.variable`). `planned` is left at
+    0 and computed by `applyChecksRules` — never hand-set on a checks-rule fund. An
+    "Other Income" bonus fund is always added.
+  - Giving is **offered, not assumed** (not pre-checked): yes → `settings.tithePercent`
+    + a Giving category with a tithe-rule fund; no → nothing else changes.
+  - Envelopes: curated starter set with pre-assigned types (pacing for everyday
+    spending, build-mode Safety Net, target-mode Christmas/Vacation, Car Insurance
+    optionally `fixed` every-N-months). CSV suggestions arrive pre-checked with
+    amounts and a "from your bank file" chip. Unchecking everything still keeps
+    Everything Else so the month is never structurally empty.
+  - Finish builds the **current calendar month** only and imports only **current-month**
+    rows via the shared `pushImportedTx` (same stored shape as the Import view, trusted
+    external ids included). Older rows inform averages only — fabricating past months
+    would poison the first real month with negative carryover (deliberate; don't
+    "improve" it). Unmapped rows import with `fund: ''` into the unassigned flow.
+- **"Finish setting up" checklist** on the Budget page (`settings.setupChecklist`):
+  amounts / paycheck double-check / tithe base (if giving) / import (if CSV skipped) /
+  unassigned (if any). Items auto-latch done at render time (never un-latch) or by
+  clicking the check control; each is a link to the right spot; dismissible with a
+  confirm; 🎉 card when everything's done. Quiet styling — an invitation, not a nag.
+- `boot()` split: the wizard guard runs right after migrations (the old L2375
+  `data.months[length-1].id` crash on empty months can't be reached), and
+  `enterApp()` is shared by normal boot and wizard hand-off.
+- Dev harness: `?blank=1` boots the empty state; `?csv=/path1,/path2` feeds files to
+  "Choose file". Tested end-to-end in the browser: full path, skip-everything path,
+  refusal (semicolon), blocking questions (ambiguous dates + sign), profile
+  round-trip to the Import tab, checklist lifecycle, month rollover from the
+  wizard-built month, and a seeded boot (no wizard, no card).
+
+
 
 Implements `_cowork/bank-csv-research/` (research bundle from 2026-08-11; decisions in
 `03-DECISIONS-AND-WORK-ORDER.md` and `PHASE-4-GO-AHEAD.md`). Four commits, one per phase.
@@ -368,5 +429,6 @@ everywhere, so re-editing one of those months would recompute its tithe slightly
 - **Package with `npm run pack`.** Never use electron-packager's CLI `--ignore` on Windows.
 - **Never write `budget-data.json` with PowerShell `Set-Content -Encoding utf8`** — it adds
   a BOM. Use node.
-- `data/seed.json` is tracked and holds **real financial history**. Don't push this repo
-  to a public host without removing it first.
+- `data/seed.json` holds **real financial history**. Since 2026-08-22 it is untracked,
+  git-ignored and excluded from the packaged app — it must never come back into either.
+  the owner's local copy stays on disk; the app no longer reads it.

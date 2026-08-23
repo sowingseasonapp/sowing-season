@@ -13,19 +13,25 @@ const BACKUP_DIR = () => path.join(DATA_DIR(), 'backups');
 // configuration, not budget history — kept out of budget-data.json so the
 // rolling backups and the data version field never see it.
 const PROFILES_FILE = () => path.join(DATA_DIR(), 'bank-profiles.json');
-const SEED_FILE = path.join(__dirname, 'data', 'seed.json');
 const MAX_BACKUPS = 30;
+
+// A brand-new install starts empty: no months, current data version. The
+// renderer sees the empty months array and runs the onboarding wizard, which
+// does the first save when it finishes — deliberately nothing is written here,
+// so quitting mid-wizard leaves no file and the wizard runs again next launch.
+const BLANK = () => ({
+  version: 6, // current — no migrations may run on it
+  settings: { tithePercent: 0.10, appName: 'Family Budget' },
+  months: [],
+  aum: { assets: [], debts: [], snapshots: [], log: [] },
+});
 
 // Tolerate a UTF-8 BOM — some editors and PowerShell add one, and JSON.parse chokes on it.
 const parseJson = (text) => JSON.parse(text.charCodeAt(0) === 0xFEFF ? text.slice(1) : text);
 
 function loadData() {
   const file = DATA_FILE();
-  if (!fs.existsSync(file)) {
-    // First run: seed from the imported spreadsheet data.
-    fs.mkdirSync(DATA_DIR(), { recursive: true });
-    fs.copyFileSync(SEED_FILE, file);
-  }
+  if (!fs.existsSync(file)) return BLANK(); // first run → onboarding wizard
   try {
     return parseJson(fs.readFileSync(file, 'utf8'));
   } catch (err) {
@@ -44,9 +50,13 @@ function loadData() {
         return data;
       } catch { /* try the next backup */ }
     }
+    // Last resort: start fresh. Never overwrite the user's file in this path —
+    // but keep a .corrupt copy, because finishing the setup wizard later will
+    // write a new data file over the unreadable one.
+    try { fs.copyFileSync(file, file + '.corrupt'); } catch { /* read-only dir — leave it */ }
     dialog.showErrorBox('Budget data could not be read',
-      `${err.message}\n\nNo usable backup was found in:\n${BACKUP_DIR()}\n\nThe app will start from the imported spreadsheet snapshot; your file was left untouched.`);
-    return parseJson(fs.readFileSync(SEED_FILE, 'utf8'));
+      `${err.message}\n\nNo usable backup was found in:\n${BACKUP_DIR()}\n\nThe app will start fresh; your unreadable file was left untouched (a copy was kept as budget-data.json.corrupt).`);
+    return BLANK();
   }
 }
 

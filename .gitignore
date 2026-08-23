@@ -16,3 +16,6 @@ desktop.ini
 .DS_Store
 *.log
 *.corrupt
+
+# the owner's real financial history (the old first-run seed) — must never reach a repo.
+data/seed.json

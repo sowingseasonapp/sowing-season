@@ -1,7 +1,7 @@
 // Bank CSV parsing (Capital One export format) + auto-categorization.
 // parseBankFile is the bank-agnostic pipeline (src/csv/) — it infers the
 // format, refuses what it can't read safely, and asks instead of guessing.
-import { normFund } from './compute.js';
+import { normFund, r2, isTransferTx } from './compute.js';
 export { parseBankFile } from './csv/import.js';
 
 // Minimal RFC-4180 CSV parser (handles quoted fields, embedded commas/quotes).
@@ -330,4 +330,115 @@ export function findDuplicateScored(months, rec, claimed, opts) {
 // CONFIDENT scored match (≥0.9) — what the preview would auto-mark.
 export function findDuplicate(months, rec, claimed) {
   return bestDuplicate(months, rec, claimed, 0.9)?.t ?? null;
+}
+
+/* ---------------- Onboarding starter-fund suggestions ----------------
+ * Pure functions over parseBankFile records: map spending to the wizard's
+ * starter envelopes and sniff out a paycheck rhythm. Table-driven, precision
+ * over recall — a wrong suggestion erodes trust faster than a missing one.
+ * Keys match STARTER_FUNDS in app.js.
+ */
+
+// Card exports carry the bank's own category column — the strongest signal.
+const CATEGORY_TO_STARTER = [
+  [/dining/i, 'eatingOut'],
+  [/gas|automotive/i, 'gas'],
+  [/grocer/i, 'groceries'],
+  [/entertainment/i, 'funMoney'],
+  [/internet/i, 'internet'],
+  [/phone|cable/i, 'cellPhone'],
+  [/insurance/i, 'carInsurance'],
+  [/merchandise|other/i, 'everythingElse'],
+];
+
+// Checking exports have no category — a short list of unmistakable vendors.
+const VENDOR_TO_STARTER = [
+  [/kroger|publix|aldi\b|wal-?mart|costco|trader joe|whole foods|grocer/i, 'groceries'],
+  [/shell oil|exxon|chevron|marathon petro|speedway|wawa|racetrac|quiktrip|circle ?k|gas station|fuel/i, 'gas'],
+  [/mcdonald|chick-?fil|wendy|taco bell|pizza|chipotle|starbucks|dunkin|restaurant|grill|cafe|doordash|uber ?eats|grubhub/i, 'eatingOut'],
+  [/netflix|spotify|hulu|disney ?(plus|\+)|paramount\+|audible|prime video|youtube ?premium|apple\.com/i, 'subscriptions'],
+  [/xfinity|comcast|spectrum|centurylink|frontier comm/i, 'internet'],
+  [/verizon|t-?mobile|cricket wireless|mint mobile|boost mobile/i, 'cellPhone'],
+  [/geico|progressive ins|state farm|allstate/i, 'carInsurance'],
+  [/electric co|power co|duke energy|georgia power|fpl\b|power ?& ?light/i, 'electricity'],
+  [/amc theat|regal cinema|cinemark|playstation|nintendo|steam games/i, 'funMoney'],
+];
+
+// One record → starter fund key ('everythingElse' counts; null = no idea).
+// The memo often carries the real merchant string, so it's scanned too.
+export function starterFundFor(rec) {
+  if (rec.bankCategory) {
+    for (const [re, key] of CATEGORY_TO_STARTER) if (re.test(rec.bankCategory)) return key;
+  }
+  const hay = `${rec.vendor || ''} ${rec.memo || ''}`;
+  for (const [re, key] of VENDOR_TO_STARTER) if (re.test(hay)) return key;
+  return null;
+}
+
+const PAY_RE = /payroll|direct dep|dir dep|deposit/i;
+const DAY_MS = 86400000;
+const centsAbs = (r) => Math.abs(Number.isFinite(r.amountCents) ? r.amountCents : Math.round(r.amount * 100));
+
+// Records → { suggestions: [{starterKey, monthlyAmount, txCount, source}],
+//             paycheck: {amount, perMonth} | null }.
+// monthlyAmount = total ÷ months spanned, rounded UP to the nearest $5
+// (budgets should breathe). Pending rows never reach this function; card
+// payments and fund-to-fund transfers are excluded on both sides.
+export function suggestStarterFunds(recs) {
+  // ── paycheck detection (checking format): payroll-flavoured deposits,
+  // clustered by similar amount (±10%); a steady cluster of ≥2 wins.
+  const hits = recs
+    .filter((r) => r.amount > 0 && !r.isCardPayment && !isTransferTx({ vendor: r.vendor })
+      && (PAY_RE.test(r.vendor || '') || PAY_RE.test(r.memo || '')))
+    .sort((a, b) => a.amount - b.amount);
+  const clusters = [];
+  for (const r of hits) {
+    const c = clusters.find((c) => Math.abs(r.amount - c.center) <= c.center * 0.1);
+    if (c) { c.rows.push(r); c.center = c.rows.reduce((a, x) => a + x.amount, 0) / c.rows.length; }
+    else clusters.push({ center: r.amount, rows: [r] });
+  }
+  let paycheck = null;
+  const best = clusters.filter((c) => c.rows.length >= 2)
+    .sort((a, b) => b.rows.length - a.rows.length)[0];
+  if (best) {
+    const dates = best.rows.map((r) => r.date).sort();
+    const gaps = [];
+    for (let i = 1; i < dates.length; i++) gaps.push((Date.parse(dates[i]) - Date.parse(dates[i - 1])) / DAY_MS);
+    if (gaps.length && Math.max(...gaps) <= 40) { // roughly regular cadence
+      const amts = best.rows.map((r) => r.amount).sort((a, b) => a - b);
+      const median = amts[Math.floor(amts.length / 2)];
+      // Checks per month: count in the last FULL month — the newest month in
+      // the file is usually cut off mid-way and would undercount.
+      const byMonth = {};
+      for (const d of dates) byMonth[d.slice(0, 7)] = (byMonth[d.slice(0, 7)] || 0) + 1;
+      const months = Object.keys(byMonth).sort();
+      const newestData = recs.map((r) => r.date).sort()[recs.length - 1] || '';
+      let mo = months[months.length - 1];
+      if (months.length > 1 && mo === newestData.slice(0, 7)) mo = months[months.length - 2];
+      paycheck = { amount: r2(median), perMonth: Math.min(5, Math.max(1, byMonth[mo])) };
+    }
+  }
+
+  // ── spending → starter envelopes
+  const spend = recs.filter((r) => r.amount < 0 && !r.isCardPayment
+    && !isTransferTx({ vendor: r.vendor }));
+  const monthsSpanned = Math.max(1, new Set(spend.map((r) => r.date.slice(0, 7))).size);
+  const groups = {}; // starterKey → { cents, n, source }
+  for (const r of spend) {
+    const key = starterFundFor(r);
+    // Unmapped spending inflates the "Everything Else" suggestion — every
+    // dollar the file saw gets a home somewhere.
+    const g = groups[key || 'everythingElse'] =
+      groups[key || 'everythingElse'] || { cents: 0, n: 0, source: key ? 'mapped' : 'leftover' };
+    g.cents += centsAbs(r);
+    g.n++;
+    if (key) g.source = 'mapped';
+  }
+  const suggestions = Object.entries(groups).map(([starterKey, g]) => ({
+    starterKey,
+    monthlyAmount: Math.ceil(g.cents / 100 / monthsSpanned / 5) * 5,
+    txCount: g.n,
+    source: g.source,
+  })).filter((s) => s.monthlyAmount > 0);
+  return { suggestions, paycheck };
 }

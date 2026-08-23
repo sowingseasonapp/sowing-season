@@ -12,7 +12,13 @@ sinking funds for yearly charges (÷12, ÷6), tithe as a % of planned income, a 
 
 Your data lives in `%APPDATA%\Family Budget\budget-data.json` (auto-saved on every change,
 with rolling backups in `%APPDATA%\Family Budget\backups`, max 30, at most one per 10 min).
-The app ships with all 2026 spreadsheet history (Dec 2025 – Aug 2026) already imported.
+
+A brand-new install starts empty and opens a **setup wizard**: an optional bank-file step
+that suggests envelopes and paycheck numbers (the file never leaves the computer), then
+paychecks, giving, and a curated starter set of envelopes. Finishing builds the current
+month, imports the current month's bank rows, and leaves a quiet "Finish setting up"
+checklist on the Budget page. Quitting mid-wizard saves nothing — it simply runs again
+next launch. Existing installs (a data file already present) never see any of this.
 
 ## Views
 
@@ -118,17 +124,19 @@ packaging trap, the BOM crash). Start there before changing behaviour.
 - `npm test` — the verification suite: every month re-checked against the original
   workbook, plus the migration, tithe, savings, insight and CSV cases.
 - `npm run dev` — the browser dev harness on :5173 (in-memory, no persistence).
-- `tools/extract-workbook.js` — the one-time spreadsheet → `data/seed.json` importer.
+- `tools/extract-workbook.js` — the one-time spreadsheet → `data/seed.json` importer
+  (historical; the app no longer reads the seed).
 - `build/icon.ico` — the app icon, built by `node tools/build-ico.js` from the PNGs in
   `tools/icons/` (rendered from the emoji via the dev server's /save-icon helper).
 
-The seed data is only used on first run (when `%APPDATA%\Family Budget\budget-data.json`
-doesn't exist yet). Deleting that file resets the app to the spreadsheet snapshot.
+First run (no `%APPDATA%\Family Budget\budget-data.json` yet) starts empty and runs the
+onboarding wizard. Deleting that file resets the app to the wizard. Wizard testing:
+`npm run dev` then `http://localhost:5173/?blank=1` (add `&csv=/tools/fixtures/…` to feed
+files to the Choose-file button), or point `BUDGET_DATA_DIR` at an empty folder.
 
 ### Repository note
 
-`data/seed.json` is the imported spreadsheet snapshot — it contains **real transaction
-history, vendors and income figures**, and the app needs it to seed first run. That is
-fine for a local repo, but do not push this repository to a public host as-is.
-To publish the code without the data: `git rm --cached data/seed.json`, add it to
-`.gitignore`, and have first run start from an empty template instead.
+`data/seed.json` is the imported spreadsheet snapshot — **real transaction history,
+vendors and income figures**. Since 2026-08-22 it is git-ignored, untracked and excluded
+from the packaged app; it exists only as the owner's local file and must never reach a repo
+or a build.

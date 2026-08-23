@@ -2,9 +2,12 @@ import {
   computeMonth, applyTitheRules, applyChecksRules, buildNextMonth, fundSums,
   monthLabel, normFund, r2, migrateV2, migrateV3, migrateV4,
   autoPlanned, isOverridden, fundFlags, savingsMonthly, migrateV5,
-  migrateV6, aumTotals, upsertSnapshot, aumLastUpdated,
+  migrateV6, aumTotals, upsertSnapshot, aumLastUpdated, MONTH_NAMES,
 } from './compute.js';
-import { parseBankFile, buildVendorMap, suggestFund, findDuplicateScored } from './csv.js';
+import {
+  parseBankFile, buildVendorMap, suggestFund, findDuplicateScored,
+  suggestStarterFunds, starterFundFor,
+} from './csv.js';
 import { groupedBars, barList, lineArea } from './charts.js';
 
 const VIZ = { s1: '#2a78d6', s2: '#eb6834' };
@@ -431,6 +434,12 @@ function panelFund(month) {
 
 function showFundPanel(ref) {
   panelRef = ref;
+  // Setup checklist: opening an income fund panel once counts as having
+  // double-checked the paycheck numbers (latched, never un-latched).
+  if (ref.kind === 'income' && Array.isArray(data.settings.setupChecklist)) {
+    const item = data.settings.setupChecklist.find((i) => i.key === 'checks');
+    if (item && !item.done) { item.done = true; markDirty(); render(); } // render includes the panel
+  }
   document.addEventListener('keydown', panelEscHandler);
   renderFundPanel();
 }
@@ -946,6 +955,72 @@ function accordionHtml({ key, title, note, open, totals, actions, body, activity
   </div>`;
 }
 
+/* ---- "Finish setting up" checklist (onboarding hand-off) ----
+ * Lives at the top of the Budget page while settings.setupChecklist exists.
+ * Items are done EITHER automatically (detection below, run at render time,
+ * latched true, never un-latched) or by the user clicking the check control.
+ * Kept visually quiet — it's an invitation, not a nag.
+ */
+function checklistAutoDetect(month, comp) {
+  const list = data.settings.setupChecklist;
+  if (!Array.isArray(list)) return;
+  const detect = {
+    // Every counted expense fund has a number (excludeFromTotals skipped).
+    amounts: () => comp.categories.every((c) => c.excludeFromTotals
+      || c.funds.every((f) => Math.abs(f.planned) > 0.004)),
+    checks: () => false, // latched by opening an income fund panel (showFundPanel)
+    tithe: () => Object.values(month.checks || {})
+      .some((c) => Math.abs((c.titheAmount ?? 0) - (c.amount ?? 0)) > 0.004),
+    import: () => data.months.some((m) => m.transactions.some((t) => (t.account || '').trim())),
+    unassigned: () => comp.unassigned.length === 0,
+  };
+  let changed = false;
+  for (const item of list) {
+    if (!item.done && detect[item.key] && detect[item.key]()) { item.done = true; changed = true; }
+  }
+  if (changed) markDirty();
+}
+
+function checklistHtml(month) {
+  const list = data.settings.setupChecklist;
+  if (!Array.isArray(list) || !list.length) return '';
+  const labels = {
+    amounts: `Put a number in each envelope — how much is ${month.label} getting?`,
+    checks: 'Double-check your paycheck numbers',
+    tithe: 'Set the before-tax check amount your giving is based on',
+    import: 'Bring in your bank transactions',
+    unassigned: 'A few imported transactions need an envelope',
+  };
+  if (list.every((i) => i.done)) {
+    return `<div class="section checklist">
+      <div class="checklist-head"><b>🎉 You're set up.</b>
+        <button class="btn btn-sm" data-cl-done>Done</button></div>
+    </div>`;
+  }
+  return `<div class="section checklist">
+    <div class="checklist-head"><b>Finish setting up</b>
+      <button class="btn-ghost" data-cl-dismiss title="Dismiss this list for good">Dismiss</button></div>
+    ${list.map((i) => `<div class="checklist-item ${i.done ? 'done' : ''}">
+      <button class="cl-check" data-cl-mark="${i.key}" title="${i.done ? 'Done' : 'Mark as done'}">${i.done ? '✓' : ''}</button>
+      ${i.key === 'amounts'
+        ? `<span>${esc(labels[i.key])}</span>`
+        : `<a href="#" data-cl-go="${i.key}">${esc(labels[i.key])}</a>`}
+    </div>`).join('')}
+  </div>`;
+}
+
+function checklistNavigate(key) {
+  if (key === 'checks' || key === 'tithe') {
+    const month = curMonth();
+    const idx = month.income.findIndex((f) => (f.group || 'bonus') === 'standard');
+    if (idx >= 0) showFundPanel({ kind: 'income', idx });
+  } else if (key === 'import') {
+    view = 'import'; render();
+  } else if (key === 'unassigned') {
+    txFundFilter = '__unassigned__'; txSearch = ''; view = 'transactions'; render();
+  }
+}
+
 function renderBudget(main) {
   const month = curMonth();
   const comp = computeMonth(month);
@@ -988,7 +1063,10 @@ function renderBudget(main) {
   let openSet = loadOpenState(month.id) || defaultOpenState(comp, flagMap);
   const isOpen = (key) => (q ? true : openSet.has(key));
 
+  checklistAutoDetect(month, comp);
+
   let html = `
+    ${checklistHtml(month)}
     <div class="month-head">
       <div class="hero ${s.leftToAllocate >= -0.004 || roundingOnly ? 'good' : 'bad'}">
         <div class="k">Left to allocate</div>
@@ -1196,6 +1274,27 @@ function renderBudget(main) {
   if (cfs) cfs.onclick = () => { fundSearch = ''; render(); };
   const rv = $('#reviewBtn'); if (rv) rv.onclick = () => { flagPanel = flagPanel ? null : 'review'; render(); };
   main.onclick = (e) => {
+    // Setup checklist: navigate, mark, dismiss, or celebrate-and-close.
+    const clGo = e.target.closest('[data-cl-go]');
+    if (clGo) { e.preventDefault(); checklistNavigate(clGo.dataset.clGo); return; }
+    const clMark = e.target.closest('[data-cl-mark]');
+    if (clMark) {
+      const item = (data.settings.setupChecklist || []).find((i) => i.key === clMark.dataset.clMark);
+      if (item) { item.done = !item.done; markDirty(); render(); }
+      return;
+    }
+    if (e.target.closest('[data-cl-dismiss]')) {
+      if (confirm("You can't get this list back — dismiss it?")) {
+        delete data.settings.setupChecklist;
+        markDirty(); render();
+      }
+      return;
+    }
+    if (e.target.closest('[data-cl-done]')) {
+      delete data.settings.setupChecklist;
+      markDirty(); render();
+      return;
+    }
     // Accordion toggle — but not when the click lands on a header action button.
     const accHead = e.target.closest('[data-acc-toggle]');
     if (accHead && !e.target.closest('.acc-actions')) {
@@ -1425,6 +1524,93 @@ function fmtDateRange(min, max) {
   return `${fmtDateWords(min)} – ${fmtDateWords(max)}`;
 }
 
+/* One report, two consumers (importer work order §4): the Import view and the
+ * onboarding wizard render the importer's blocking questions identically —
+ * the copy comes from parseBankFile and is never rewritten here. */
+function csvQuestionsHtml(questions) {
+  let html = `<div class="section import-questions">
+    <div class="import-questions-head">Before this can be imported, the app needs your help — it won't guess:</div>`;
+  questions.forEach((q, qi) => {
+    html += `<div class="import-question"><p>${esc(q.message)}</p>`;
+    if (q.samples?.length && q.kind === 'dateOrder') {
+      html += `<table class="grid import-q-samples"><thead><tr><th style="text-align:left">In the file</th><th style="text-align:left">Month first</th><th style="text-align:left">Day first</th></tr></thead><tbody>`;
+      for (const s of q.samples) {
+        html += `<tr><td>${esc(s.raw)}${s.vendor ? ` <span class="fund-note">${esc(s.vendor.slice(0, 24))}</span>` : ''}</td>
+          <td>${fmtDateWords(s.asMDY)}</td><td>${fmtDateWords(s.asDMY)}</td></tr>`;
+      }
+      html += `</tbody></table>`;
+    }
+    if (q.answerable) {
+      for (const opt of q.options) {
+        html += `<label class="import-q-opt"><input type="radio" name="impq-${qi}" value="${esc(opt.value)}" data-imp-q="${qi}"> ${esc(opt.label)}</label>`;
+      }
+    }
+    html += `</div>`;
+  });
+  if (questions.some((q) => q.answerable)) {
+    html += `<div class="toolbar"><button class="btn btn-accent" id="applyAnswers" disabled>Use these answers</button></div>`;
+  }
+  html += `</div>`;
+  return html;
+}
+
+// Companion wiring for csvQuestionsHtml: enables the apply button once every
+// answerable question has an answer, then hands the merged answers back so the
+// caller re-runs parseBankFile with them.
+function wireCsvQuestions(root, questions, prevAnswers, onApply) {
+  if (!questions.some((q) => q.answerable)) return;
+  const applyBtn = $('#applyAnswers', root);
+  const chosen = () => questions.map((q, qi) => q.answerable
+    ? root.querySelector(`input[name="impq-${qi}"]:checked`)?.value : 'n/a');
+  root.querySelectorAll('[data-imp-q]').forEach((el) => {
+    el.onchange = () => { if (applyBtn) applyBtn.disabled = chosen().some((v) => !v); };
+  });
+  if (applyBtn) {
+    applyBtn.onclick = () => {
+      const answers = { ...prevAnswers };
+      questions.forEach((q, qi) => {
+        if (!q.answerable) return;
+        answers[q.answerKey] = root.querySelector(`input[name="impq-${qi}"]:checked`)?.value;
+      });
+      onApply(answers);
+    };
+  }
+}
+
+// One stored shape for imported rows, shared by the Import view and the
+// onboarding wizard — wizard-imported rows must dedupe correctly against the
+// user's next import, so the two paths can never drift apart.
+function pushImportedTx(month, rec, fund, idTrusted) {
+  // The memo (Comments / Extended Details) is often the real merchant string —
+  // keep it on the transaction as its description. A validated bank
+  // transaction id rides along so the next import of this account can dedupe
+  // exactly instead of heuristically.
+  const tx = {
+    id: newTxId(), date: rec.date, vendor: rec.vendor, amount: rec.amount,
+    fund, description: rec.memo || '', account: rec.account,
+  };
+  if (idTrusted && rec.externalId) tx.externalId = rec.externalId;
+  month.transactions.push(tx);
+  return tx;
+}
+
+// The import is the confirmation (importer §6): persist this file's resolved
+// shape so the next export from the same bank skips inference and questions.
+// Seed-recognised formats ship with the app and aren't re-persisted — unless
+// the user had to answer something (a seed match that still asked, like the
+// generic 3-column header), which is exactly what's worth saving.
+function persistResolvedProfile(report, answers) {
+  const rp = report?.resolvedProfile;
+  if (!rp) return;
+  const gaveAnswers = Object.keys(answers || {}).some((k) => k !== 'ignoreProfile');
+  if (!gaveAnswers && report?.profile?.source === 'seed') return;
+  window.budgetAPI.loadBankProfiles().then((store) => {
+    const profiles = (store?.profiles || []).filter((p) => p.fingerprint !== rp.fingerprint);
+    profiles.push({ ...rp, confirmedByUser: true, lastUsed: new Date().toISOString().slice(0, 10) });
+    return window.budgetAPI.saveBankProfiles({ version: 1, profiles });
+  }).catch(() => { /* profiles are a convenience — never block an import on them */ });
+}
+
 function renderImport(main) {
   let html = `<h1>Import bank CSV</h1>
     <p class="sub">Pick the CSV you export from your bank. The app works out the file's format, matches each row to a fund based on your history, flags duplicates and card payments, and nothing is saved until you click Import. If something about the file is unclear, it asks instead of guessing.</p>
@@ -1475,31 +1661,7 @@ function renderImport(main) {
 
     // Blocking questions: the importer refuses to guess — each answer re-reads
     // the file, and Import stays disabled until every question is resolved.
-    if (questions.length) {
-      html += `<div class="section import-questions">
-        <div class="import-questions-head">Before this can be imported, the app needs your help — it won't guess:</div>`;
-      questions.forEach((q, qi) => {
-        html += `<div class="import-question"><p>${esc(q.message)}</p>`;
-        if (q.samples?.length && q.kind === 'dateOrder') {
-          html += `<table class="grid import-q-samples"><thead><tr><th style="text-align:left">In the file</th><th style="text-align:left">Month first</th><th style="text-align:left">Day first</th></tr></thead><tbody>`;
-          for (const s of q.samples) {
-            html += `<tr><td>${esc(s.raw)}${s.vendor ? ` <span class="fund-note">${esc(s.vendor.slice(0, 24))}</span>` : ''}</td>
-              <td>${fmtDateWords(s.asMDY)}</td><td>${fmtDateWords(s.asDMY)}</td></tr>`;
-          }
-          html += `</tbody></table>`;
-        }
-        if (q.answerable) {
-          for (const opt of q.options) {
-            html += `<label class="import-q-opt"><input type="radio" name="impq-${qi}" value="${esc(opt.value)}" data-imp-q="${qi}"> ${esc(opt.label)}</label>`;
-          }
-        }
-        html += `</div>`;
-      });
-      if (questions.some((q) => q.answerable)) {
-        html += `<div class="toolbar"><button class="btn btn-accent" id="applyAnswers" disabled>Use these answers</button></div>`;
-      }
-      html += `</div>`;
-    }
+    if (questions.length) html += csvQuestionsHtml(questions);
 
     if (importState.rows.length) {
     html += `<div class="section"><table class="grid"><thead><tr>
@@ -1596,24 +1758,9 @@ function renderImport(main) {
       { ...importState.answers, ignoreProfile: true });
   }
 
-  if (importState && !importState.refusal && importState.report?.questions?.some((q) => q.answerable)) {
-    const questions = importState.report.questions;
-    const applyBtn = $('#applyAnswers');
-    const chosen = () => questions.map((q, qi) => q.answerable
-      ? main.querySelector(`input[name="impq-${qi}"]:checked`)?.value : 'n/a');
-    main.querySelectorAll('[data-imp-q]').forEach((el) => {
-      el.onchange = () => { if (applyBtn) applyBtn.disabled = chosen().some((v) => !v); };
-    });
-    if (applyBtn) {
-      applyBtn.onclick = () => {
-        const answers = { ...importState.answers };
-        questions.forEach((q, qi) => {
-          if (!q.answerable) return;
-          answers[q.answerKey] = main.querySelector(`input[name="impq-${qi}"]:checked`)?.value;
-        });
-        loadCsvForImport(importState.fileName, importState.fileData, answers);
-      };
-    }
+  if (importState && !importState.refusal && importState.report?.questions?.length) {
+    wireCsvQuestions(main, importState.report.questions, importState.answers,
+      (answers) => loadCsvForImport(importState.fileName, importState.fileData, answers));
   }
 
   if (importState && !importState.refusal) {
@@ -1626,32 +1773,10 @@ function renderImport(main) {
       for (const row of chosen) {
         const month = data.months.find((m) => m.id === row.monthId);
         if (!month) continue;
-        // The memo (Comments / Extended Details) is often the real merchant
-        // string — keep it on the transaction as its description. A validated
-        // bank transaction id rides along so the next import of this account
-        // can dedupe exactly instead of heuristically.
-        const tx = {
-          id: newTxId(), date: row.rec.date, vendor: row.rec.vendor, amount: row.rec.amount,
-          fund: row.fund, description: row.rec.memo || '', account: row.rec.account,
-        };
-        if (importState.report?.externalIdTrusted && row.rec.externalId) tx.externalId = row.rec.externalId;
-        month.transactions.push(tx);
+        pushImportedTx(month, row.rec, row.fund, importState.report?.externalIdTrusted);
         n++; lastMonth = month.id;
       }
-      // The import is the confirmation (§6): persist this file's resolved shape
-      // so the next export from the same bank skips inference and questions.
-      // Seed-recognised formats ship with the app and aren't re-persisted —
-      // unless the user had to answer something (a seed match that still asked,
-      // like the generic 3-column header), which is exactly what's worth saving.
-      const rp = importState.report?.resolvedProfile;
-      const gaveAnswers = Object.keys(importState.answers || {}).some((k) => k !== 'ignoreProfile');
-      if (rp && (gaveAnswers || importState.report?.profile?.source !== 'seed')) {
-        window.budgetAPI.loadBankProfiles().then((store) => {
-          const profiles = (store?.profiles || []).filter((p) => p.fingerprint !== rp.fingerprint);
-          profiles.push({ ...rp, confirmedByUser: true, lastUsed: new Date().toISOString().slice(0, 10) });
-          return window.budgetAPI.saveBankProfiles({ version: 1, profiles });
-        }).catch(() => { /* profiles are a convenience — never block an import on them */ });
-      }
+      persistResolvedProfile(importState.report, importState.answers);
       importState = null;
       markDirty();
       toast(`Imported ${n} transaction(s).`);
@@ -2372,7 +2497,559 @@ function showMonthCloseWorkflow(last, nid) {
   $('#wfGo', overlay).onclick = () => { close(); createNextMonth(last); };
 }
 
+/* ---------------- Onboarding wizard ----------------
+ * First-run setup for a blank install (data.months is empty). Full-screen
+ * stepper that owns #main with the sidebar hidden — this is data entry with
+ * branching, not a tour, so it isn't the walkthrough modal. Everything lives
+ * in a local state object until Finish: no markDirty()/saveData before the
+ * final step, so quitting mid-wizard leaves no data file and the wizard runs
+ * again next launch. It has its own paint loop — render() must not run while
+ * it owns the screen (renderShell reads #monthSelect etc. against months).
+ */
+
+// The curated starter set (Step 5). Keys line up with starterFundFor /
+// suggestStarterFunds in csv.js so bank-file suggestions land on these rows.
+const STARTER_FUNDS = [
+  { key: 'rent', name: 'Rent or Mortgage', cat: 'bills', type: 'basic', checked: true },
+  { key: 'electricity', name: 'Electricity', cat: 'bills', type: 'basic', checked: true },
+  { key: 'water', name: 'Water', cat: 'bills', type: 'basic', checked: true },
+  { key: 'internet', name: 'Internet', cat: 'bills', type: 'basic', checked: true },
+  { key: 'cellPhone', name: 'Cell Phone', cat: 'bills', type: 'basic', checked: true },
+  { key: 'subscriptions', name: 'Subscriptions', cat: 'bills', type: 'basic', checked: true,
+    note: 'Netflix, Spotify, all of it — one envelope is plenty to start' },
+  { key: 'carInsurance', name: 'Car Insurance', cat: 'bills', type: 'basic', checked: false, cadence: true },
+  { key: 'groceries', name: 'Groceries', cat: 'everyday', type: 'pacing', checked: true },
+  { key: 'gas', name: 'Gas', cat: 'everyday', type: 'pacing', checked: true },
+  { key: 'eatingOut', name: 'Eating Out', cat: 'everyday', type: 'pacing', checked: true },
+  { key: 'funMoney', name: 'Fun Money', cat: 'everyday', type: 'pacing', checked: true },
+  { key: 'everythingElse', name: 'Everything Else', cat: 'everyday', type: 'basic', checked: true,
+    note: 'for the stuff that fits nowhere else' },
+  { key: 'safetyNet', name: 'Safety Net', cat: 'saving', type: 'build', checked: true,
+    note: 'A cushion for the month something breaks. Even $25 a month counts.' },
+  { key: 'christmas', name: 'Christmas', cat: 'saving', type: 'target', checked: false,
+    note: 'Spread the cost across the year.' },
+  { key: 'vacation', name: 'Vacation', cat: 'saving', type: 'target', checked: false },
+];
+
+const WZ_GROUPS = [
+  { cat: 'bills', title: 'Bills', desc: 'Regular bills, roughly the same each month.' },
+  { cat: 'everyday', title: 'Everyday spending', desc: "Week-to-week spending — the app tells you if you're going through it too fast." },
+  { cat: 'saving', title: 'Saving up', desc: "Money you're setting aside on purpose." },
+];
+
+// The coming December — for the Christmas fund's target month.
+function comingDecember() {
+  const [y, m] = todayISO().slice(0, 7).split('-').map(Number);
+  return `${m === 12 ? y + 1 : y}-12`;
+}
+
+let wizard = null;
+
+function renderOnboarding() {
+  wizard = {
+    step: 0,
+    files: [],    // parsed OK: { name, records, report, answers }
+    pending: null, // a file mid-flight: { name, fileData, answers, refusal?, report? }
+    sources: [{ name: 'My paychecks', variable: false, count: 2, amount: null }],
+    givingChoice: null, // 'yes' | 'no'
+    givingPct: 10,
+    funds: {},    // key → { checked, amount, userChecked, userSet, fromCsv, everyMonths, targetMonth }
+    suggest: null, // suggestStarterFunds() over every parsed record
+    error: '',
+  };
+  for (const sf of STARTER_FUNDS) {
+    wizard.funds[sf.key] = { checked: !!sf.checked, amount: null, everyMonths: 1 };
+    if (sf.key === 'christmas') wizard.funds[sf.key].targetMonth = comingDecember();
+    if (sf.key === 'vacation') wizard.funds[sf.key].targetMonth = defaultTargetMonth(todayISO().slice(0, 7));
+  }
+  $('#sidebar').style.display = 'none';
+  paintWizard();
+}
+
+/* ---- step bodies ---- */
+
+function wzWelcomeHtml() {
+  return `
+    <h1>Let's set up your budget.</h1>
+    <p class="wz-body">This takes about five minutes, and you can change everything later.</p>
+    <p class="wz-body">The idea is simple: split your money into envelopes — one for groceries,
+      one for rent, one for fun — so every dollar has a job. Here we call them <b>funds</b>.</p>
+    <div class="wz-actions"><button class="btn btn-accent" data-wz-next>Let's go</button></div>`;
+}
+
+function wzCsvHtml() {
+  const p = wizard.pending;
+  let html = `
+    <h1>Want a head start?</h1>
+    <p class="wz-body">If you can download a file of your recent transactions from your bank's website
+      (usually called "Export" or "Download CSV" — grab the last 90 days, or whatever you have),
+      the app can use it to suggest envelopes and typical amounts for you.</p>
+    <p class="wz-body">No internet involved — the file never leaves your computer.</p>`;
+
+  // Files already read: one summary line each, straight from the report.
+  for (const f of wizard.files) {
+    html += `<div class="wz-file">✓ <b>${esc(f.name)}</b> — found ${f.report.counts.rows} transaction${f.report.counts.rows === 1 ? '' : 's'}
+      from ${fmtDateRange(f.report.totals.dateMin, f.report.totals.dateMax)}</div>`;
+  }
+
+  if (p && p.refusal) {
+    // The importer's refusal text verbatim — it's already plain-language and
+    // names unsupported formats. One wizard-added line follows it.
+    html += `<div class="section import-refusal">
+      <b>${esc(p.name)}</b> couldn't be read.
+      <p>${esc(p.refusal)}</p>
+      <p>No problem — skip this step and set up by hand; you can try a different file later from the Import tab.</p>
+    </div>`;
+  } else if (p && p.report?.questions?.length) {
+    html += csvQuestionsHtml(p.report.questions);
+  }
+
+  const haveFiles = wizard.files.length > 0;
+  html += `<div class="wz-actions">
+    <button class="btn ${haveFiles ? '' : 'btn-accent'}" data-wz-pick>${haveFiles ? 'Add another file…' : 'Choose file…'}</button>
+    ${haveFiles ? `<span class="muted" style="font-size:.82rem">checking + credit card files work well together — deposits live in one, categories in the other</span>` : ''}
+    <div class="spacer"></div>
+    ${haveFiles
+      ? `<button class="btn btn-accent" data-wz-next>Continue</button>`
+      : `<button class="btn" data-wz-next>Skip — I'll start from scratch</button>`}
+  </div>
+  ${p && p.report?.questions?.length ? `<p class="muted" style="margin-top:8px;font-size:.85rem">Can't answer? That's fine — skipping this step is always OK.</p>` : ''}`;
+  return html;
+}
+
+function wzIncomeHtml() {
+  const det = wizard.suggest?.paycheck;
+  let html = `<h1>How do you get paid?</h1>
+    <p class="wz-body">One paycheck at a time — you can add a second earner below.</p>`;
+  wizard.sources.forEach((src, i) => {
+    const cadence = det && src.detected
+      ? (det.perMonth === 2 ? 'every two weeks' : `${det.perMonth} time${det.perMonth === 1 ? '' : 's'} a month`)
+      : '';
+    html += `<div class="wz-card">
+      ${wizard.sources.length > 1 ? `<button class="btn-ghost wz-remove" data-wz-del-src="${i}" title="Remove this paycheck">✕</button>` : ''}
+      <div class="modal-row"><label class="wz-label">Whose paycheck is this?</label>
+        <input class="search" style="flex:1" data-wz-src="${i}" data-k="name" value="${esc(src.name)}" placeholder="e.g. Sam's paychecks" maxlength="60"></div>
+      <div class="modal-row" style="align-items:flex-start"><label class="wz-label">Is it the same amount every time?</label>
+        <div class="wz-radio-col">
+          <label><input type="radio" name="wzVar-${i}" value="no" data-wz-src="${i}" data-k="variable" ${src.variable ? '' : 'checked'}> Yes — same every check</label>
+          <label><input type="radio" name="wzVar-${i}" value="yes" data-wz-src="${i}" data-k="variable" ${src.variable ? 'checked' : ''}> No — it changes (hourly, tips, overtime)</label>
+          ${src.variable ? `<span class="fund-note">Give your best guess for a typical check — the app will help you adjust as real checks come in.</span>` : ''}
+        </div></div>
+      <div class="modal-row"><label class="wz-label">How many checks a month?</label>
+        <input class="search small-num" style="flex:none" data-wz-src="${i}" data-k="count" value="${src.count}" inputmode="numeric"></div>
+      <p class="fund-note" style="margin:-4px 0 8px">Paid every two weeks? Use 2 — a couple months a year you'll get a happy
+        third check, and you can bump this number in those months.</p>
+      <div class="modal-row"><label class="wz-label">How much is one check, after taxes?</label>
+        <input class="search" style="width:130px;flex:none" data-wz-src="${i}" data-k="amount" value="${src.amount != null ? money(src.amount) : ''}" placeholder="$0.00" inputmode="decimal"></div>
+      ${src.detected && det ? `<p class="fund-note" style="margin:-4px 0 0">Looks like about ${money(det.amount)} lands ${cadence} — sound right?</p>` : ''}
+    </div>`;
+  });
+  html += `<button class="btn btn-sm" data-wz-add-src>+ Add another paycheck</button>
+    ${wizard.error ? `<div class="modal-err">${esc(wizard.error)}</div>` : ''}
+    <div class="wz-actions">
+      <button class="btn" data-wz-back>Back</button>
+      <div class="spacer"></div>
+      <button class="btn btn-accent" data-wz-next>Next</button>
+    </div>`;
+  return html;
+}
+
+function wzGivingHtml() {
+  const c = wizard.givingChoice;
+  return `<h1>Do you give regularly?</h1>
+    <p class="wz-body">Some people set aside a share of what they earn for church or charity — often
+      called a tithe. If that's you, the app can work out the amount automatically from your paychecks.</p>
+    <div class="wz-radio-col wz-card">
+      <label><input type="radio" name="wzGiving" value="yes" ${c === 'yes' ? 'checked' : ''}> Yes, I give a share of what I earn</label>
+      ${c === 'yes' ? `<div class="modal-row" style="margin:6px 0 0 24px"><label style="width:auto">What share?</label>
+        <input class="search small-num" style="flex:none" id="wzPct" value="${wizard.givingPct}" inputmode="numeric"> <span class="muted">%</span></div>
+      <span class="fund-note" style="margin-left:24px">We'll base this on your take-home checks to start. If you give based on
+        your pay before taxes, you can set that number later — it's on the setup checklist.</span>` : ''}
+      <label><input type="radio" name="wzGiving" value="no" ${c === 'no' ? 'checked' : ''}> Not right now</label>
+    </div>
+    ${wizard.error ? `<div class="modal-err">${esc(wizard.error)}</div>` : ''}
+    <div class="wz-actions">
+      <button class="btn" data-wz-back>Back</button>
+      <div class="spacer"></div>
+      <button class="btn btn-accent" data-wz-next>Next</button>
+    </div>`;
+}
+
+function wzFundsHtml() {
+  let html = `<h1>Pick your envelopes</h1>
+    <p class="wz-body">Check the ones that fit your life. Amounts are optional — you can fill them in
+      later; it's on the checklist.</p>`;
+  for (const g of WZ_GROUPS) {
+    html += `<div class="wz-group"><div class="wz-group-head"><b>${g.title}</b> <span class="muted">— ${g.desc}</span></div>`;
+    for (const sf of STARTER_FUNDS.filter((s) => s.cat === g.cat)) {
+      const st = wizard.funds[sf.key];
+      html += `<div class="wz-fund-row ${st.checked ? '' : 'off'}">
+        <label class="wz-fund-main"><input type="checkbox" data-wz-fund="${sf.key}" ${st.checked ? 'checked' : ''}>
+          <span class="wz-fund-name">${sf.name}</span>
+          ${st.fromCsv ? '<span class="rule-chip">from your bank file</span>' : ''}
+        </label>
+        ${st.checked ? `<input class="search wz-amt" data-wz-amt="${sf.key}" value="${st.amount != null ? money(st.amount) : ''}"
+          placeholder="$ / month" inputmode="decimal" title="${sf.type === 'target' ? 'The total to save up' : 'How much to set aside each month'}">` : ''}
+      </div>`;
+      if (sf.note || (st.checked && (sf.cadence || sf.type === 'target'))) {
+        html += `<div class="wz-fund-sub">`;
+        if (sf.note) html += `<span class="fund-note">${sf.note}</span>`;
+        if (st.checked && sf.cadence) {
+          html += `<div class="modal-row" style="margin:4px 0 0"><label style="width:auto" class="muted">Do you pay this monthly, or every few months?</label>
+            <select class="inline" data-wz-cadence="${sf.key}">
+              <option value="1" ${st.everyMonths === 1 ? 'selected' : ''}>Every month</option>
+              <option value="3" ${st.everyMonths === 3 ? 'selected' : ''}>Every 3 months</option>
+              <option value="6" ${st.everyMonths === 6 ? 'selected' : ''}>Every 6 months</option>
+              <option value="12" ${st.everyMonths === 12 ? 'selected' : ''}>Once a year</option>
+            </select></div>`;
+          if (st.everyMonths > 1) {
+            html += `<span class="fund-note">Enter the whole bill above — the app sets aside a slice every month so the big bill never surprises you.</span>`;
+          }
+        }
+        if (st.checked && sf.type === 'target') {
+          html += `<div class="modal-row" style="margin:4px 0 0"><label style="width:auto" class="muted">saved up by</label>
+            ${sf.key === 'christmas'
+              ? `<b>${ymLabel(st.targetMonth)}</b>`
+              : `<input type="month" class="search" style="flex:none" data-wz-tmonth="${sf.key}" value="${st.targetMonth}" min="${todayISO().slice(0, 7)}">`}
+          </div>`;
+        }
+        html += `</div>`;
+      }
+    }
+    html += `</div>`;
+  }
+  html += `<p class="muted" style="font-size:.85rem">Envelopes aren't set in stone — add, rename, or remove any of them later on the Budget page.</p>
+    <div class="wz-actions">
+      <button class="btn" data-wz-back>Back</button>
+      <div class="spacer"></div>
+      <button class="btn btn-accent" data-wz-next>Next</button>
+    </div>`;
+  return html;
+}
+
+// Current-month rows the wizard will bring in (older rows inform averages
+// only — creating past months to hold them would start every fund in a hole).
+function wzImportableRecords() {
+  const nowMonth = todayISO().slice(0, 7);
+  const out = [];
+  for (const f of wizard.files) {
+    for (const rec of f.records) {
+      if (rec.date.slice(0, 7) === nowMonth && !rec.isCardPayment) {
+        out.push({ rec, idTrusted: !!f.report?.externalIdTrusted });
+      }
+    }
+  }
+  return out;
+}
+
+function wzFinishHtml() {
+  // Everything Else is kept even when nothing is checked (wzFinish) — never
+  // promise fewer envelopes than the month will actually have.
+  const nFunds = Math.max(1, STARTER_FUNDS.filter((sf) => wizard.funds[sf.key].checked).length)
+    + (wizard.givingChoice === 'yes' ? 1 : 0);
+  const nTx = wzImportableRecords().length;
+  const nPay = wizard.sources.length;
+  return `<h1>That's your foundation.</h1>
+    <p class="wz-body">Your budget: <b>${nPay} paycheck${nPay === 1 ? '' : 's'}</b>, <b>${nFunds} envelope${nFunds === 1 ? '' : 's'}</b>${
+      nTx ? `, <b>${nTx} transaction${nTx === 1 ? '' : 's'}</b> to bring in` : ''}.</p>
+    <p class="wz-body">The numbers don't need to be perfect — you'll sharpen them as real life happens.
+      The list on the next screen shows the few blanks worth filling in.</p>
+    <div class="wz-actions">
+      <button class="btn" data-wz-back>Back</button>
+      <div class="spacer"></div>
+      <button class="btn btn-accent" data-wz-finish>Finish setup</button>
+    </div>`;
+}
+
+/* ---- paint + wire ---- */
+
+const WZ_STEPS = [wzWelcomeHtml, wzCsvHtml, wzIncomeHtml, wzGivingHtml, wzFundsHtml, wzFinishHtml];
+
+function paintWizard() {
+  const main = $('#main');
+  main.onclick = null; main.onchange = null;
+  main.innerHTML = `<div class="wizard">
+    <div class="wz-dots">${WZ_STEPS.map((_, i) =>
+      `<span class="wz-dot ${i === wizard.step ? 'on' : i < wizard.step ? 'done' : ''}"></span>`).join('')}</div>
+    ${WZ_STEPS[wizard.step]()}
+  </div>`;
+  main.scrollTop = 0;
+  wireWizard(main);
+}
+
+function wzReadSources(main) {
+  // Pull every visible income field into state before validating/navigating.
+  main.querySelectorAll('[data-wz-src]').forEach((el) => {
+    const src = wizard.sources[Number(el.dataset.wzSrc)];
+    if (!src) return;
+    const k = el.dataset.k;
+    if (k === 'name') src.name = el.value.trim();
+    else if (k === 'count') { const n = parseInt(el.value, 10); if (!isNaN(n)) src.count = n; }
+    else if (k === 'amount') {
+      const v = parseMoney(el.value);
+      if (el.value.trim() === '') src.amount = null;
+      else if (!isNaN(v)) { src.amount = Math.abs(v); src.userSet = true; }
+    } else if (k === 'variable' && el.checked) src.variable = el.value === 'yes';
+  });
+}
+
+function wireWizard(main) {
+  wizard.error = '';
+  main.onclick = async (e) => {
+    if (e.target.closest('[data-wz-back]')) { wizard.step = Math.max(0, wizard.step - 1); paintWizard(); return; }
+    if (e.target.closest('[data-wz-next]')) {
+      if (wizard.step === 2) {
+        wzReadSources(main);
+        // Names must exist and not collide — they become fund names.
+        const names = wizard.sources.map((s) => normFund(s.name));
+        if (names.some((n) => !n)) { wizard.error = 'Give each paycheck a name.'; paintWizard(); return; }
+        if (new Set(names).size !== names.length) { wizard.error = 'Two paychecks have the same name — make them different.'; paintWizard(); return; }
+        if (names.some((n) => n === 'other income')) { wizard.error = '"Other Income" is reserved — pick another name.'; paintWizard(); return; }
+        if (wizard.sources.some((s) => !(s.count >= 1))) { wizard.error = 'Checks a month needs to be at least 1.'; paintWizard(); return; }
+      }
+      if (wizard.step === 3) {
+        if (!wizard.givingChoice) { wizard.error = 'Pick one — you can change it any time in Settings.'; paintWizard(); return; }
+      }
+      wizard.step = Math.min(WZ_STEPS.length - 1, wizard.step + 1);
+      wizard.pending = null; // an unanswered file question dies with the step
+      paintWizard();
+      return;
+    }
+    if (e.target.closest('[data-wz-pick]')) {
+      const file = await window.budgetAPI.openCsv();
+      if (!file) return;
+      wzParseFile(file.path.split(/[\\/]/).pop(), file.bytes ?? file.text, {});
+      return;
+    }
+    if (e.target.closest('[data-wz-add-src]')) {
+      wzReadSources(main);
+      wizard.sources.push({ name: '', variable: false, count: 2, amount: null });
+      paintWizard();
+      return;
+    }
+    const del = e.target.closest('[data-wz-del-src]');
+    if (del) {
+      wzReadSources(main);
+      wizard.sources.splice(Number(del.dataset.wzDelSrc), 1);
+      paintWizard();
+      return;
+    }
+    if (e.target.closest('[data-wz-finish]')) { wzFinish(); return; }
+  };
+
+  main.onchange = (e) => {
+    const el = e.target;
+    if (el.matches('[data-wz-src]')) {
+      wzReadSources(main);
+      if (el.dataset.k === 'variable') paintWizard(); // helper text appears/disappears
+      return;
+    }
+    if (el.matches('input[name="wzGiving"]')) { wizard.givingChoice = el.value; paintWizard(); return; }
+    if (el.id === 'wzPct') {
+      const v = parseFloat(el.value);
+      if (!isNaN(v) && v > 0 && v <= 100) wizard.givingPct = v;
+      return;
+    }
+    if (el.matches('[data-wz-fund]')) {
+      const st = wizard.funds[el.dataset.wzFund];
+      st.checked = el.checked;
+      st.userChecked = true;
+      paintWizard();
+      return;
+    }
+    if (el.matches('[data-wz-amt]')) {
+      const st = wizard.funds[el.dataset.wzAmt];
+      const v = parseMoney(el.value);
+      if (el.value.trim() === '') { st.amount = null; st.userSet = true; }
+      else if (!isNaN(v)) { st.amount = Math.abs(v); st.userSet = true; }
+      return;
+    }
+    if (el.matches('[data-wz-cadence]')) {
+      wizard.funds[el.dataset.wzCadence].everyMonths = parseInt(el.value, 10) || 1;
+      paintWizard();
+      return;
+    }
+    if (el.matches('[data-wz-tmonth]')) {
+      const st = wizard.funds[el.dataset.wzTmonth];
+      if (el.value && el.value >= todayISO().slice(0, 7)) st.targetMonth = el.value;
+      return;
+    }
+  };
+
+  // Blocking questions from the importer — shared rendering with the Import
+  // view; answers re-run the parse. Skip stays available throughout.
+  if (wizard.step === 1 && wizard.pending?.report?.questions?.length) {
+    const p = wizard.pending;
+    wireCsvQuestions(main, p.report.questions, p.answers,
+      (answers) => wzParseFile(p.name, p.fileData, answers));
+  }
+}
+
+async function wzParseFile(name, fileData, answers) {
+  let store = null;
+  try { store = await window.budgetAPI.loadBankProfiles(); } catch { /* first run / dev */ }
+  let result;
+  try { result = parseBankFile(fileData, { answers, profiles: store?.profiles || [] }); }
+  catch (err) { result = { error: err.message }; }
+  if (result.error) {
+    wizard.pending = { name, fileData, answers, refusal: result.error };
+  } else if (result.report.questions.length) {
+    wizard.pending = { name, fileData, answers, report: result.report };
+  } else if (!result.records.length) {
+    wizard.pending = { name, fileData, answers, refusal: 'No transactions were found in that file.' };
+  } else {
+    wizard.pending = null;
+    wizard.files.push({ name, records: result.records, report: result.report, answers });
+    wzApplySuggestions();
+  }
+  paintWizard();
+}
+
+// Fold the parsed files into pre-checked envelopes with suggested amounts and
+// a paycheck pre-fill. Suggestions never overwrite something the user already
+// touched, and every computed number is a suggestion the user confirms.
+function wzApplySuggestions() {
+  const all = wizard.files.flatMap((f) => f.records);
+  wizard.suggest = suggestStarterFunds(all);
+  for (const s of wizard.suggest.suggestions) {
+    const st = wizard.funds[s.starterKey];
+    if (!st) continue;
+    st.fromCsv = true;
+    if (!st.userChecked) st.checked = true;
+    if (!st.userSet) st.amount = s.monthlyAmount;
+  }
+  const p = wizard.suggest.paycheck;
+  const src = wizard.sources[0];
+  if (p && src && !src.userSet) {
+    src.amount = p.amount;
+    src.count = p.perMonth;
+    src.detected = true;
+  }
+}
+
+async function wzFinish() {
+  const s = data.settings;
+  const id = todayISO().slice(0, 7);
+  const month = {
+    id, label: MONTH_NAMES[Number(id.split('-')[1]) - 1],
+    checks: {}, income: [], categories: [], transactions: [],
+  };
+
+  // Income: one Standard fund per paycheck source. planned stays 0 here —
+  // NEVER hand-set it on a checks-rule fund; applyChecksRules computes it from
+  // count × amount below (writing planned directly clears the rule).
+  for (const src of wizard.sources) {
+    month.income.push({
+      fund: src.name, carryOver: 0, planned: 0, rule: { type: 'checks' },
+      titheExempt: false, carryForward: false, group: 'standard',
+    });
+    const chk = { count: src.count || 0, amount: src.amount || 0, titheAmount: src.amount || 0 };
+    if (src.variable) chk.variable = true;
+    month.checks[src.name] = chk;
+  }
+  // Gifts and bonuses always have a home.
+  month.income.push({
+    fund: 'Other Income', carryOver: 0, planned: 0, rule: null,
+    titheExempt: false, carryForward: false, group: 'bonus',
+  });
+
+  const giving = wizard.givingChoice === 'yes';
+  if (giving) {
+    s.tithePercent = r2((wizard.givingPct || 10) / 100);
+    month.categories.push({
+      name: 'Giving', excludeFromTotals: false,
+      funds: [{
+        fund: 'Tithe', carryOver: 0, planned: 0,
+        rule: { type: 'tithe', percent: s.tithePercent },
+        yearlyCharge: null, setup: blankSetup(),
+      }],
+    });
+  }
+
+  // Expense envelopes from the starter set. If literally everything was
+  // unchecked, keep Everything Else so the month isn't structurally empty.
+  const picked = STARTER_FUNDS.filter((sf) => wizard.funds[sf.key].checked);
+  if (!picked.length) {
+    wizard.funds.everythingElse.checked = true;
+    picked.push(STARTER_FUNDS.find((sf) => sf.key === 'everythingElse'));
+  }
+  const fundNameByKey = {};
+  const byCat = { bills: [], everyday: [], saving: [] };
+  for (const sf of picked) {
+    const st = wizard.funds[sf.key];
+    const setup = blankSetup();
+    if (sf.cadence && st.everyMonths > 1) {
+      setup.type = 'fixed'; setup.everyMonths = st.everyMonths; setup.totalAmount = st.amount || 0;
+    } else if (sf.type === 'pacing') setup.type = 'pacing';
+    else if (sf.type === 'build') {
+      setup.type = 'savings'; setup.savingsMode = 'build'; setup.monthlyAmount = st.amount || 0;
+    } else if (sf.type === 'target') {
+      setup.type = 'savings'; setup.savingsMode = 'target';
+      setup.targetAmount = st.amount || 0; setup.targetMonth = st.targetMonth;
+    }
+    const fund = { fund: sf.name, carryOver: 0, planned: st.amount || 0, rule: null, yearlyCharge: null, setup };
+    const auto = autoPlanned(fund, id);
+    if (auto != null) fund.planned = auto; // fixed/savings compute their own slice
+    byCat[sf.cat].push(fund);
+    fundNameByKey[sf.key] = sf.name;
+  }
+  for (const g of WZ_GROUPS) {
+    if (byCat[g.cat].length) {
+      month.categories.push({ name: g.title, excludeFromTotals: false, funds: byCat[g.cat] });
+    }
+  }
+
+  // Rules, in this order — the tithe base reads the checks.
+  applyChecksRules(month);
+  applyTitheRules(month, s.tithePercent ?? 0.10);
+
+  // Bring in the current month's rows. The same table that suggested the
+  // envelopes maps each row to its fund; unmapped rows import with fund: ''
+  // and surface in the existing "unassigned" flow, which the checklist points
+  // at. No duplicate check needed — the data file is empty by construction.
+  let unmapped = 0;
+  for (const { rec, idTrusted } of wzImportableRecords()) {
+    const key = starterFundFor(rec);
+    const fund = (key && fundNameByKey[key]) || '';
+    pushImportedTx(month, rec, fund, idTrusted);
+    if (!fund) unmapped++;
+  }
+
+  // The "Finish setting up" checklist that hands off to the Budget page.
+  const checklist = [{ key: 'amounts', done: false }, { key: 'checks', done: false }];
+  if (giving) checklist.push({ key: 'tithe', done: false });
+  if (!wizard.files.length) checklist.push({ key: 'import', done: false });
+  if (unmapped > 0) checklist.push({ key: 'unassigned', done: false });
+  s.setupChecklist = checklist;
+  s.onboardedAt = todayISO();
+
+  data.months.push(month);
+  await flushSave(); // the first write of the data file
+
+  // A first-run user who confirmed their bank once should never see those
+  // questions again on the Import tab.
+  for (const f of wizard.files) persistResolvedProfile(f.report, f.answers);
+
+  wizard = null;
+  $('#sidebar').style.display = '';
+  enterApp();
+}
+
 /* ---------------- boot ---------------- */
+// Wire the shell and show the app. Reached two ways: normal boot with months,
+// or the onboarding wizard finishing its first month.
+function enterApp() {
+  // Default to the current calendar month if it exists, else the latest.
+  const nowId = todayISO().slice(0, 7);
+  currentMonthId = data.months.some((m) => m.id === nowId) ? nowId : data.months[data.months.length - 1].id;
+  view = 'budget';
+
+  $('#monthSelect').onchange = (e) => { currentMonthId = e.target.value; txSearch = ''; txFundFilter = ''; txAccountFilter = ''; fundSearch = ''; flagPanel = null; render(); };
+  $('#newMonthBtn').onclick = startNextMonth;
+  $$('.nav-btn').forEach((b) => b.onclick = () => { view = b.dataset.view; txSearch = ''; txFundFilter = ''; txAccountFilter = ''; render(); });
+  render();
+}
+
 async function boot() {
   data = await window.budgetAPI.loadData();
   let migrated = migrateV2(data) | migrateV3(data) | migrateV4(data);
@@ -2384,17 +3061,16 @@ async function boot() {
   // Record the re-typed list before saving so it survives a restart — the
   // migration only runs once, and the user should be able to review it later.
   if (v5.retyped.length) data.settings.lastRetype = v5.retyped;
+
+  // A brand-new install has no months (and nothing downstream tolerates that —
+  // the wizard is the only code path that can create a FIRST month). Nothing
+  // is saved until the wizard finishes, so quitting mid-way is a clean no-op.
+  if (!data.months.length) { renderOnboarding(); return; }
+
   if (migrated) await window.budgetAPI.saveData(data);
   if (v5.retyped.length) {
     setTimeout(() => toast(`${v5.retyped.length} single-charge fund(s) re-typed from Pacing to Basic — see Settings for the list.`), 800);
   }
-  // Default to the current calendar month if it exists, else the latest.
-  const nowId = todayISO().slice(0, 7);
-  currentMonthId = data.months.some((m) => m.id === nowId) ? nowId : data.months[data.months.length - 1].id;
-
-  $('#monthSelect').onchange = (e) => { currentMonthId = e.target.value; txSearch = ''; txFundFilter = ''; txAccountFilter = ''; fundSearch = ''; flagPanel = null; render(); };
-  $('#newMonthBtn').onclick = startNextMonth;
-  $$('.nav-btn').forEach((b) => b.onclick = () => { view = b.dataset.view; txSearch = ''; txFundFilter = ''; txAccountFilter = ''; render(); });
-  render();
+  enterApp();
 }
 boot();

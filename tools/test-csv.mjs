@@ -10,7 +10,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseCsv, parseBankCsv, parseBankFile, scoreDuplicate, findDuplicateScored, findDuplicate } from '../src/csv.js';
+import {
+  parseCsv, parseBankCsv, parseBankFile, scoreDuplicate, findDuplicateScored,
+  findDuplicate, suggestStarterFunds, starterFundFor,
+} from '../src/csv.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FIX = path.join(HERE, 'fixtures');
@@ -417,6 +420,62 @@ for (const [file, expected] of Object.entries(baseline)) {
   check('direction [Debit/Credit family imports automatically]',
     !dc.error && !dc.report.questions.length && dc.report.totals.netCents === 6500,
     JSON.stringify({ err: dc.error, q: dc.report.questions, totals: dc.report.totals }));
+}
+
+// ---- Onboarding: starter-fund suggestions + paycheck detection ----
+{
+  const rec = (date, vendor, amount, extra = {}) => ({
+    date, vendor, amount, amountCents: Math.round(amount * 100),
+    account: '', bankCategory: '', isCardPayment: false, memo: '', ...extra,
+  });
+  // Card-style rows: bankCategory drives the mapping.
+  const s1 = suggestStarterFunds([
+    rec('2026-06-05', 'KROGER #1', -100, { bankCategory: 'Grocery' }),
+    rec('2026-07-05', 'KROGER #1', -120, { bankCategory: 'Grocery' }),
+    rec('2026-08-05', 'PUBLIX', -80, { bankCategory: 'Grocery' }),
+    rec('2026-07-09', 'CHIPOTLE', -31, { bankCategory: 'Dining' }),
+    rec('2026-07-12', 'RANDOM SHOP', -47, { bankCategory: 'Merchandise' }),
+    rec('2026-07-13', 'CAPITAL ONE MOBILE PYMT', -500, { isCardPayment: true }),
+    rec('2026-07-14', 'Transfer to Safety Net', -50),
+  ]);
+  const byKey = Object.fromEntries(s1.suggestions.map((s) => [s.starterKey, s]));
+  check('starter [groceries avg ÷ months, rounded up to $5]',
+    byKey.groceries?.monthlyAmount === 100 && byKey.groceries.txCount === 3, JSON.stringify(byKey.groceries));
+  check('starter [dining maps to eatingOut, rounds up]',
+    byKey.eatingOut?.monthlyAmount === 15, JSON.stringify(byKey.eatingOut));
+  check('starter [merchandise lands in everythingElse]',
+    byKey.everythingElse?.monthlyAmount === 20, JSON.stringify(byKey.everythingElse));
+  check('starter [card payments and transfers excluded]',
+    s1.suggestions.every((s) => s.monthlyAmount < 100 || s.starterKey === 'groceries'),
+    JSON.stringify(s1.suggestions));
+  check('starter [no payroll rows → no paycheck]', s1.paycheck === null, JSON.stringify(s1.paycheck));
+
+  // Checking-style: vendor keywords + a biweekly payroll cluster.
+  const s2 = suggestStarterFunds([
+    rec('2026-06-05', 'ACME CO PAYROLL - Deposit', 1840),
+    rec('2026-06-19', 'ACME CO PAYROLL - Deposit', 1850),
+    rec('2026-07-03', 'ACME CO PAYROLL - Deposit', 1845),
+    rec('2026-07-17', 'ACME CO PAYROLL - Deposit', 1860),
+    rec('2026-08-01', 'ACME CO PAYROLL - Deposit', 1850),
+    rec('2026-07-20', 'TAX REFUND Deposit', 4000), // different cluster, 1 hit — ignored
+    rec('2026-07-06', 'WAL-MART GROCER', -63),
+    rec('2026-07-08', 'SHELL OIL 1234', -41),
+  ]);
+  check('starter [paycheck cluster median ±10%]',
+    s2.paycheck && Math.abs(s2.paycheck.amount - 1850) <= 10, JSON.stringify(s2.paycheck));
+  check('starter [checks/month from the last full month]',
+    s2.paycheck?.perMonth === 2, JSON.stringify(s2.paycheck));
+  check('starter [vendor keywords map checking rows]',
+    s2.suggestions.some((s) => s.starterKey === 'groceries') && s2.suggestions.some((s) => s.starterKey === 'gas'),
+    JSON.stringify(s2.suggestions));
+
+  // Per-record mapping (used by the wizard's Step 6 import).
+  check('starter [starterFundFor: category first]',
+    starterFundFor(rec('2026-08-05', 'ANYTHING', -5, { bankCategory: 'Dining' })) === 'eatingOut');
+  check('starter [starterFundFor: memo scanned too]',
+    starterFundFor(rec('2026-08-05', 'POS 1234', -5, { memo: 'NETFLIX.COM' })) === 'subscriptions');
+  check('starter [starterFundFor: unknown → null]',
+    starterFundFor(rec('2026-08-05', 'SOME LOCAL SHOP', -5)) === null);
 }
 
 console.log(`\nCSV importer: ${pass} passed, ${fail} failed`);
