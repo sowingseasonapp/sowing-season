@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Garden scene preview (dev)</title>
+<link rel="stylesheet" href="/src/styles.css">
+<style>
+  body { padding: 18px 24px; max-width: 1100px; margin: 0 auto; }
+  .bar { display: flex; gap: 14px; align-items: center; font-size: .85rem; color: var(--ink-soft); margin-bottom: 12px; flex-wrap: wrap; }
+  .bar select, .bar input { font: inherit; }
+  .meta { font-size: .8rem; color: var(--ink-soft); margin-top: 8px; }
+</style>
+</head>
+<body>
+<!-- Dev-only: renders just the garden scene full-width from data/seed.json (or the
+     fixture month) so the art can be judged at size. Not packaged (tools/ is
+     outside the KEEP list). Query: ?month=2026-03&season=lean&tod=golden&labels=1&today=2026-08-23 -->
+<div class="bar">
+  <label>Month <select id="month"></select></label>
+  <label>Season <select id="season"><option>steady</option><option>growing</option><option>lean</option></select></label>
+  <label>Time <select id="tod"><option>midday</option><option>morning</option><option>golden</option><option>evening</option></select></label>
+  <label><input type="checkbox" id="labels"> Show labels</label>
+  <label><input type="checkbox" id="plain"> Without filters</label>
+</div>
+<div class="garden-wrap" id="wrap"></div>
+<div class="meta" id="meta"></div>
+<script type="module">
+  import { gardenState } from '/src/garden.js';
+  import { sceneSvg } from '/src/garden-scene.js';
+  const q = new URLSearchParams(location.search);
+  const data = await fetch('/data/seed.json').then((r) => r.json());
+  const monthSel = document.getElementById('month');
+  for (const m of data.months) monthSel.add(new Option(m.id, m.id));
+  monthSel.value = q.get('month') || data.months[data.months.length - 1].id;
+  document.getElementById('season').value = q.get('season') || 'steady';
+  document.getElementById('tod').value = q.get('tod') || 'midday';
+  document.getElementById('labels').checked = q.get('labels') === '1';
+  const money = (n) => '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  function draw() {
+    const id = monthSel.value, season = document.getElementById('season').value, tod = document.getElementById('tod').value;
+    const g = gardenState(data, { monthId: id, todayISO: q.get('today') || new Date().toISOString().slice(0, 10) });
+    g.season.kind = season; // preview override: tint only
+    const t0 = performance.now();
+    const { svg, height, symbols } = sceneSvg(g, { monthLabel: id, labels: document.getElementById('labels').checked, money, tod });
+    const wrap = document.getElementById('wrap');
+    wrap.className = `garden-wrap season-${season} tod-${tod}` + (document.getElementById('plain').checked ? ' plain' : '');
+    wrap.innerHTML = svg;
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      document.getElementById('meta').textContent = `${g.plants.length} plants · ${symbols} symbols · ${(svg.length / 1024).toFixed(1)} KB markup · height ${height} · ${JSON.stringify(g.counts)} · built+painted in ${(performance.now() - t0).toFixed(0)} ms`;
+    }));
+  }
+  for (const el of document.querySelectorAll('.bar select, .bar input')) el.onchange = draw;
+  draw();
+</script>
+<style>.plain .wc1, .plain .wc2, .plain .wc3 { filter: none; }</style>
+</body>
+</html>

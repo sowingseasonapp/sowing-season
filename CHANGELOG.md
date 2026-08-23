@@ -9,7 +9,149 @@ so entries before that are dated by when the work happened, not by commit.
 
 ---
 
-## 2026-08-22 — New-user onboarding wizard; seed.json no longer ships
+## 2026-08-23 — Sowing Season: rename, garden skin, and the Garden home view
+
+Implements `_cowork/proposal-sowing-season-garden.md` in full (all four phases). The app
+is now **Sowing Season**; the Garden is the landing view; the palette is warm
+parchment + leaf green; the budget maths, fund flags and AUM computation are untouched.
+
+- **Rename + data-folder move-in (the one dangerous line).** `productName` drives
+  Electron's `userData`, so the rename moved the data folder from
+  `%APPDATA%\Family Budget` to `%APPDATA%\Sowing Season`. `legacy-data.js`
+  (pure Node, CommonJS, shipped in the package) copies `budget-data.json`,
+  `bank-profiles.json` and `backups/*.json` forward on the first launch — **copy,
+  never move**; guarded on the new folder having no data file (runs at most once, never
+  clobbers); skipped entirely under `BUDGET_DATA_DIR` (demo runs must never pull real
+  data in); wrapped in try/catch with a `dialog.showErrorBox` that names both folders
+  and says nothing was removed. The data file is copied last so a half-failed copy
+  retries cleanly next launch. `npm run test:migrate` (17 checks, scratch dirs).
+  `settings.appName` now drives the sidebar brand; boot rewrites the stored
+  `'Family Budget'` value to `'Sowing Season'` (a value change — **version stays 6**).
+  The old `%APPDATA%\Family Budget` folder is deliberately left in place indefinitely.
+- **Palette** (`styles.css :root`): `--bg #f7f5ee`, `--ink #26301f`, `--ink-soft
+  #636a59`, `--line #e6e3d5`, `--accent #4a7c46`, `--red #b8543a` (terracotta),
+  `--amber #8f6a1c`, `--sidebar #283a24`, `--sidebar-ink #d5ddcc`, `--radius 12px`;
+  new helper tokens (`--accent-deep/-tint/-tint-line/-hover`, `--red-deep/-tint`,
+  `--amber-tint`, `--head-bg`, `--hover-row`, `--line-faint`, `--sidebar-ctl`) replace
+  the 40-odd hard-coded blues/greys. Every text-bearing pair checked ≥ 4.5:1
+  (ink/bg 12.6, sidebar-ink/sidebar 8.7, white/accent 4.9, accent-deep on tint 5.6).
+  Chart series colours (`--viz-s1/-s2`, the validated blue/orange pair) were left alone
+  on purpose — they are data colours, not accent, and green/orange is a weaker pair.
+- **Garden engine — `src/garden.js`** (pure; `npm run test:garden`, 81 checks).
+  `gardenState(data, {monthId, todayISO})` → plants (state from `fundFlags` +
+  `computeMonth`: exceeded → wilting, pace → thirsty, offset → harvest, zero budget &
+  no activity → resting, month done & leftover ≥ 0 → blooming, on-pace pacing fund at
+  ≥ 80 % of the month → blooming, no activity → planted, else growing), weeds
+  (`unassigned.length`), season (latest AUM snapshot vs. the one nearest 90 days back,
+  ≥ 30 days apart, flat within ±1 % or $100; no data → steady), maturity (milestones at
+  3/6/12/18/24 months; tree size by closed months 1/3/6/12; wall stones = all-time-high
+  snapshots, the first counting as the foundation stone), sown (|leftToAllocate| ≤ 2¢ —
+  the Budget hero's own rounding rule, not the proposal's 0.5¢, so the two surfaces
+  never disagree), and ≤ 3 messages. Species by type via FNV-1a of the normalized name.
+  **v3 two-register pass (2026-08-23):** every caption on an actionable state is plain budget
+  language ("Over by $40 — a transfer covers it.", "Spending faster than planned — on pace to go
+  over.", "$120 unspent — free to move."), status-only states (planted/growing/blooming/resting)
+  carry `action: null`, every plant carries a Budget `jump` (the click target, §3), a plain
+  one-line `phrase` for tooltips ("$40 over", "on plan"), and the only action labels the engine
+  emits are `ACTION_LABELS` (Transfer… / Open Budget / Open Import / Review N unassigned / Use
+  actual / Finish setting up). Messages follow suit ("2 transactions this month have no fund
+  yet." → Review 2 unassigned). The calm affirmation and season notes keep a light garden line
+  (status-only). Asserted in test-garden (96 checks): allowed-label regex, no metaphor words in
+  any actionable text or tooltip phrase, no banned words.
+  Savings plants grow with their pot, not the calendar. `incomeCheckIns` moved here from
+  `renderBudget` so the Budget strip and the Garden card share one rule.
+  **Decision:** the proposal's flat cap of ~16 visible plants made the owner's 51-fund
+  garden a thumbnail (one or two plants per bed, "+N" everywhere). The cap is now what
+  the beds physically fit (two columns past four beds, ~9 plants per bed, ceiling 60),
+  so "+N" appears only on a genuinely full bed; the scene stays 30–40 KB.
+- **Scene — `src/garden-scene.js`** (pure, string out) — **v3 watercolor rewrite
+  (2026-08-23)**, built on the approved proof of concept `_cowork/watercolor-svg-poc.html`:
+  every shape is 2–3 translucent washes (light / mid / dark from one ramp per material),
+  each pass pushed through a different `feTurbulence`+`feDisplacementMap` filter so the
+  edges misregister like real watercolour; exactly the POC's four filter defs
+  (`#wc1`–`#wc3`, `#paper` on the background rect only), applied at the *wash-group*
+  level (a `Painter` collects strokes per pass and emits three filtered `<g>`s per symbol
+  or fixture — never per tiny element). Plant drawings are the POC's six states ported to a
+  soil-origin `<symbol>` space plus growth stages and family variants (row crops, shrubs,
+  fruit trees, evergreens), emitted once and placed with `<use>`; ~45–60 KB for the owner's
+  51 funds (budget ≤ 80 KB). Layers: paper → sky washes → sun/clouds → hills → ground →
+  season light → fixtures → beds (soil washes + carved sign with the plain category name)
+  → plants → weeds → foreground grass → ambient. Colours are `--g-*` tokens; season and
+  time-of-day (morning/midday/golden/evening from the clock hour) are classes on
+  `.garden-wrap`. Every animated or hover-lifted element sits inside an outer positioning
+  `<g transform>` with the class on an inner group (the POC's CSS-transform gotcha).
+  Ambient: growing/steady → the POC butterfly; lean → one slowly falling leaf over three
+  static fallen ones (≤ 3 animated ambient elements, 7–11 s loops); blooming plants sway
+  (capped at 6), harvest fruit glows; `prefers-reduced-motion` turns all of it off.
+  Living feedback: `renderGarden` diffs plant states against the previous render of the
+  same month and stamps `was-<state>` so CSS eases a wilted plant upright (~600 ms) or
+  sparkles a newly harvest-ready one. `tools/scene-preview.html` (dev only) renders the
+  scene full-width from `data/seed.json` with season/time/labels switches.
+  **Perf decision — bitmap + live layer (2026-08-23, measured on the packaged build with
+  the owner's 51 funds):** with ~170 live filter regions in the page, Chromium re-rasterised
+  every one of them on every produced frame — the drifting butterfly alone idled the GPU
+  process at **1.7 cores**, and so did an unrelated sidebar opacity animation (0.7). Layer
+  promotion, a sprite-sized ambient SVG, compositor-thread transforms and stepped timing
+  all left it at 1.7; disabling the filters (not the animations) took it to 0.26. So the
+  app renders the scene in **bitmap mode**: `sceneSvg(g, { bitmap: true, palette, skip })`
+  returns one self-contained SVG (the wrapper's computed `--g-*` colours substituted,
+  styles inlined) that `renderGarden` rasterises once into a `<canvas>` at device
+  resolution (decoded images cached by SVG string; redrawn on resize via
+  ResizeObserver; nothing stored or shipped), a transparent **hit layer** (the same
+  data-plant / data-more / data-weeds targets, focusable, with aria labels) and a
+  `placed` manifest. **Live sprites** (`plantSprite`: one plant in its own small svg,
+  positioned by percent) sit between canvas and hit layer only where motion is wanted —
+  the hovered plant (lift is a transform on the HTML element), changed plants (was-*
+  transition), harvest glow and up to six swaying blooms (both `steps()`-timed) — and the
+  butterfly / falling leaf is a small sprite whose animation class is on the svg element
+  (compositor thread). Result: **0.15 cpu-s/s idle with the butterfly drifting at 60 fps**
+  (pure frame production), 0 when the window is occluded. Live mode (stacked inline SVGs)
+  remains for the dev preview, the tests and as the in-app fallback if rasterisation fails.
+- **Garden view** (`renderGarden`, v3): plain status line ("August · fully allocated ✓ ·
+  45 on plan · 0 need attention · 1 with money to move"), scene, season note, message
+  cards (weeds → wilting → thirsty → harvest → check-in → setup-checklist → unsown →
+  calm) whose buttons name their destination, maturity line, and a **Show labels**
+  toggle (fund name + left/over under every visible plant; a module variable, nothing
+  stored). Tooltips are numbers: fund, category · plain phrase, a progress bar,
+  planned/spent/left, then the caption. **Any plant click opens that fund in Budget**
+  (category opened, row highlighted via `budgetFocus`); "+N" → Budget filtered to the
+  category; weeds → the unassigned flow. Keyboard: plants/signs/weeds are focusable
+  buttons (Enter/Space). The Garden has no editing controls of its own.
+  `showTransferModal` gained a `presetTo` argument. One-slide intro on first visit
+  (`settings.gardenIntroSeen`, the only new stored key). `view` starts as `'garden'`;
+  `enterApp` lands there (so the wizard exits into the Garden); month-create and
+  Settings jumps still go to Budget.
+- **Ceremony + copy (v3 two-register rule):** the working views keep their vocabulary
+  exactly — the Budget hero still reads "Zero-based ✓ — every dollar has a job", the
+  sidebar button is still "+ Start next month", the month-created toast is still
+  "{Month} created — review planned amounts." and the month-close action button is
+  "Start {Month}" (an earlier v1-era pass had changed all four; reverted 2026-08-23).
+  Garden phrasing lives only in ceremony: month close is **"The {Month} harvest"**, opening
+  on a small static watercolor **vignette** of the month's final garden (`stripSvg`: up to
+  six plants, harvest and blooms first) with one framing line ("The beds are in for
+  August — here's what the month grew."), then the existing wins (+ "+N wall stone") and
+  the quiet basket row; the numbers stay literal. Errors and money math stay literal.
+  Banned words (failed/bad/behind/should have) are asserted absent; test-garden §11 guards
+  the working-view strings, the reduced-motion block, stepped plant motion, 6–12 s ambient
+  loops and the raster-asset rule (the only rasters in `src/` are the three AUM help
+  screenshots) — 139 checks.
+- **Ambient life (§4, Phase 4):** `ambientPlan(state, { tod, placed })` picks the accents
+  deterministically from season × time of day × month hash, ≤ 3: growing → butterfly
+  and/or a bee looping in the lawn band beside the first bloom (hash-gated, only when a
+  plant is blooming); steady → butterfly only; lean → one falling leaf over three static
+  fallen ones; evening light → the butterfly's slot becomes a single drifting firefly
+  glow. Each accent is its own small sprite `<svg>` with the animation class on the element
+  (compositor thread); all in the sky/lawn bands, never over cards, tooltips, the status
+  line or a plant that needs reading; `prefers-reduced-motion` stops all of it.
+- **AUM walkthrough screenshots** recaptured in the new palette by `tools/capture-help.js`
+  (Electron `capturePage` at 1:1 from a 1160×800 window, fabricated demo data in a scratch
+  folder via `BUDGET_DATA_DIR`, crops from element bounds) — 151 KB total.
+- **App icon:** `build/icon.svg` is the watercolor sprout mark (same filters, no raster
+  art); `tools/icon-export.html?save=1` (dev server) rasterises it to `tools/icons/` via
+  canvas and `node tools/build-ico.js` bundles `build/icon.ico` — the only raster in the
+  product, derived from the SVG.
+
+
 
 Implements `_cowork/onboarding-proposal.md` (rev 1.1). Resolves the distribution
 blocker: `data/seed.json` is the owner's real 9-month financial history and used to be

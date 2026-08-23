@@ -1,14 +1,16 @@
 {
-  "name": "family-budget",
+  "name": "sowing-season",
   "version": "1.0.0",
-  "description": "Envelope-style family budgeting app",
+  "description": "Envelope-style budgeting app — tend your money like a garden",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "pack": "node tools/package-app.js",
     "test": "node tools/test-compute.mjs",
     "test:csv": "node tools/test-csv.mjs",
-    "dev": "node tools/dev-server.js"
+    "dev": "node tools/dev-server.js",
+    "test:garden": "node tools/test-garden.mjs",
+    "test:migrate": "node tools/test-migrate.mjs"
   },
   "keywords": [],
   "author": "",
@@ -19,5 +21,5 @@
     "electron": "^43.3.0",
     "xlsx": "^0.18.5"
   },
-  "productName": "Family Budget"
+  "productName": "Sowing Season"
 }

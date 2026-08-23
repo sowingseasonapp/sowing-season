@@ -12,12 +12,12 @@ const { packager } = require('@electron/packager');
 
 const ROOT = path.join(__dirname, '..');
 const OUT = path.join(ROOT, 'dist');
-const APP_NAME = 'Family Budget';
+const APP_NAME = 'Sowing Season';
 
 // Only these top-level entries belong in the app bundle. NOTE: 'data' (the old
 // seed.json) must never come back — it holds real financial history; new
 // installs start blank and run the onboarding wizard instead.
-const KEEP = new Set(['main.js', 'preload.js', 'package.json', 'src', 'build']);
+const KEEP = new Set(['main.js', 'preload.js', 'legacy-data.js', 'package.json', 'src', 'build']);
 // Dev-only files that live inside kept folders.
 const EXCLUDE_FILES = new Set([path.join('src', 'dev.html')]);
 

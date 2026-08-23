@@ -2,8 +2,10 @@ import {
   computeMonth, applyTitheRules, applyChecksRules, buildNextMonth, fundSums,
   monthLabel, normFund, r2, migrateV2, migrateV3, migrateV4,
   autoPlanned, isOverridden, fundFlags, savingsMonthly, migrateV5,
-  migrateV6, aumTotals, upsertSnapshot, aumLastUpdated, MONTH_NAMES,
+  migrateV6, aumTotals, upsertSnapshot, aumLastUpdated, MONTH_NAMES, nextMonthId,
 } from './compute.js';
+import { gardenState, incomeCheckIns, stonesLaidIn, sownStreak } from './garden.js';
+import { sceneSvg, stripSvg, plantSprite, PALETTE_TOKENS, GARDEN_MILESTONE_LABELS } from './garden-scene.js';
 import {
   parseBankFile, buildVendorMap, suggestFund, findDuplicateScored,
   suggestStarterFunds, starterFundFor,
@@ -17,7 +19,7 @@ const $$ = (sel, el = document) => [...el.querySelectorAll(sel)];
 
 let data = null;
 let currentMonthId = null;
-let view = 'budget';
+let view = 'garden'; // the Garden is home; Budget & co. are where the work happens
 let txSearch = '';
 let txFundFilter = '';
 let txAccountFilter = '';
@@ -25,6 +27,7 @@ let fundSearch = '';
 let importState = null;
 let flagPanel = null; // 'att' | 'off' | null — which flag list is expanded on the Budget page
 let aumLogOpen = false; // AUM change-log section, collapsed by default
+let budgetFocus = null; // { fund } — arriving from the Garden: open its category, highlight the row
 
 /* ---------------- persistence ---------------- */
 let saveTimer = null;
@@ -158,12 +161,14 @@ function renderShell() {
   selEl.innerHTML = data.months.map((m) =>
     `<option value="${m.id}" ${m.id === currentMonthId ? 'selected' : ''}>${monthLabel(m.id)}</option>`).join('');
   $$('.nav-btn').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
+  $('.brand').textContent = '🌱 ' + (data.settings.appName || 'Sowing Season');
 }
 function render() {
   renderShell();
   const main = $('#main');
   main.onclick = null; main.onchange = null; // views own their handlers; clear the old view's
-  if (view === 'budget') renderBudget(main);
+  if (view === 'garden') renderGarden(main);
+  else if (view === 'budget') renderBudget(main);
   else if (view === 'transactions') renderTransactions(main);
   else if (view === 'import') renderImport(main);
   else if (view === 'reports') renderReports(main);
@@ -227,7 +232,7 @@ function parseUserDate(s) {
   let y = Number(m[3]); if (y < 100) y += 2000;
   return `${y}-${String(m[1]).padStart(2, '0')}-${String(m[2]).padStart(2, '0')}`;
 }
-function showTransferModal(presetFrom = '', onDone = null) {
+function showTransferModal(presetFrom = '', onDone = null, presetTo = '') {
   const month = curMonth();
   const iso = defaultDateFor(month);
   const lmap = leftoverMap(month);
@@ -239,7 +244,7 @@ function showTransferModal(presetFrom = '', onDone = null) {
       <p class="muted">Moves money in ${monthLabel(month.id)} by adding a matched pair of transactions —
         the "from" fund goes down, the "to" fund goes up. Income/expense totals are unaffected.</p>
       <div class="modal-row"><label>From</label><select id="tFrom" class="inline">${fundOptions(month, presetFrom, lmap)}</select></div>
-      <div class="modal-row"><label>To</label><select id="tTo" class="inline">${fundOptions(month, '', lmap)}</select></div>
+      <div class="modal-row"><label>To</label><select id="tTo" class="inline">${fundOptions(month, presetTo, lmap)}</select></div>
       <div class="modal-row"><label>Amount</label><input id="tAmt" class="search" placeholder="$0.00" inputmode="decimal"></div>
       <div class="modal-row"><label>Date</label><input id="tDate" class="search" value="${fmtDate(iso)}" placeholder="m/d/yy"></div>
       <div class="modal-row"><label>Note</label><input id="tNote" class="search" placeholder="optional"></div>
@@ -254,7 +259,7 @@ function showTransferModal(presetFrom = '', onDone = null) {
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
   overlay.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
   $('#tCancel', overlay).onclick = close;
-  ($('#tFrom', overlay).value ? $('#tTo', overlay) : $('#tFrom', overlay)).focus();
+  (!$('#tFrom', overlay).value ? $('#tFrom', overlay) : !$('#tTo', overlay).value ? $('#tTo', overlay) : $('#tAmt', overlay)).focus();
   $('#tGo', overlay).onclick = () => {
     const from = $('#tFrom', overlay).value, to = $('#tTo', overlay).value;
     const amt = Math.abs(parseMoney($('#tAmt', overlay).value));
@@ -1021,9 +1026,27 @@ function checklistNavigate(key) {
   }
 }
 
+// Variable-income true-up: snap the per-check estimate to what actually
+// arrived. Never writes planned directly — recalcRules recomputes it from
+// count × amount, which keeps the checks rule alive and rolls the real number
+// into next month. Shared by the Budget review strip and the Garden's message card.
+function applyActualChecks(month, fundName) {
+  const comp = computeMonth(month);
+  const fInc = comp.income.find((x) => normFund(x.fund) === normFund(fundName));
+  const chk = fInc && (month.checks || {})[fInc.fund];
+  if (!(chk && chk.count > 0)) return false;
+  chk.amount = r2(fInc.received / chk.count);
+  recalcRules(month); markDirty(); render();
+  toast(`"${fInc.fund}" estimate updated to ${money(chk.amount)} per check.`);
+  return true;
+}
+
 function renderBudget(main) {
   const month = curMonth();
   const comp = computeMonth(month);
+  // Arriving from the Garden: land on that fund with its category open.
+  const focus = budgetFocus; budgetFocus = null;
+  if (focus) { fundSearch = ''; flagPanel = null; }
   const s = comp.summary;
   const balanced = Math.abs(s.leftToAllocate) < 0.005;
   // Auto-calculated amounts (tithe %, yearly ÷ 12…) round to whole cents, so a
@@ -1037,23 +1060,9 @@ function renderBudget(main) {
   const flagMap = {};
   for (const x of flags) flagMap[normFund(x.fund)] = x;
 
-  // Variable-income true-up: nudge when a paycheck estimate has drifted from
-  // what actually arrived. Over-received nudges any time; under-received only
-  // once the month is done — mid-month a low number just means checks haven't
-  // landed yet, which the muted "still expected" leftover already covers.
-  const nowMonth = todayISO().slice(0, 7);
-  const [mYr, mMo] = month.id.split('-').map(Number);
-  const monthDone = month.id < nowMonth ||
-    (month.id === nowMonth && Number(todayISO().slice(8, 10)) >= new Date(mYr, mMo, 0).getDate());
-  const checkIns = [];
-  for (const f of comp.income) {
-    if ((f.group || 'bonus') !== 'standard') continue;
-    if (!(f.rule && f.rule.type === 'checks')) continue; // planned manually overridden — the estimate no longer drives it
-    const chk = (month.checks || {})[f.fund];
-    if (!chk || !chk.variable || !(chk.count > 0)) continue;
-    const diff = r2(f.received - f.planned);
-    if (diff > 1 || (diff < -1 && monthDone)) checkIns.push({ fund: f.fund, diff });
-  }
+  // Variable-income true-up nudges (garden.js owns the rule; the Garden's
+  // message cards use the same call).
+  const checkIns = incomeCheckIns(month, comp, todayISO());
 
   const reviewCount = attList.length + offList.length + checkIns.length + (comp.unassigned.length ? 1 : 0);
 
@@ -1061,6 +1070,15 @@ function renderBudget(main) {
   const q = fundSearch.trim().toLowerCase();
   const matches = (name) => !q || String(name).toLowerCase().includes(q);
   let openSet = loadOpenState(month.id) || defaultOpenState(comp, flagMap);
+  let focusRow = null;
+  if (focus) {
+    const ci = month.categories.findIndex((c) => c.funds.some((f) => normFund(f.fund) === normFund(focus.fund)));
+    if (ci >= 0) {
+      const fi = month.categories[ci].funds.findIndex((f) => normFund(f.fund) === normFund(focus.fund));
+      focusRow = `${ci}:${fi}`;
+      if (!openSet.has(`cat:${ci}`)) { openSet = new Set(openSet); openSet.add(`cat:${ci}`); saveOpenState(month.id, openSet); }
+    }
+  }
   const isOpen = (key) => (q ? true : openSet.has(key));
 
   checklistAutoDetect(month, comp);
@@ -1249,6 +1267,10 @@ function renderBudget(main) {
   html += `<button class="btn" data-add-cat title="Add a new expense category to this month (rolls into future months)">+ Add category</button>`;
 
   main.innerHTML = html;
+  if (focusRow) {
+    const row = main.querySelector(`a[data-fund-setup="${focusRow}"]`)?.closest('tr');
+    if (row) { row.classList.add('row-focus'); row.scrollIntoView({ block: 'center' }); }
+  }
 
   // --- wire events ---
   $('#transferBtn').onclick = () => showTransferModal();
@@ -1311,16 +1333,7 @@ function renderBudget(main) {
     // count × amount, which keeps the checks rule alive and rolls the real
     // number into next month.
     const useAct = e.target.closest('[data-use-actual]');
-    if (useAct) {
-      const fInc = comp.income.find((x) => normFund(x.fund) === normFund(useAct.dataset.useActual));
-      const chk = fInc && (month.checks || {})[fInc.fund];
-      if (chk && chk.count > 0) {
-        chk.amount = r2(fInc.received / chk.count);
-        recalcRules(month); markDirty(); render();
-        toast(`"${fInc.fund}" estimate updated to ${money(chk.amount)} per check.`);
-      }
-      return;
-    }
+    if (useAct) { applyActualChecks(month, useAct.dataset.useActual); return; }
     // Review-strip fund name → open that fund's panel wherever it lives.
     const rvFund = e.target.closest('[data-review-fund]');
     if (rvFund) {
@@ -2278,6 +2291,260 @@ function renderAum(main) {
   };
 }
 
+/* ---------------- Garden view ----------------
+ * The home view: an overview dashboard whose widgets happen to be plants. It
+ * READS state and POINTS into the existing tools — it never hosts an editing
+ * control of its own. Everything derives from gardenState (garden.js) on every
+ * render; the only stored flag is settings.gardenIntroSeen. The scene is one
+ * inline watercolor SVG (garden-scene.js). Two-register rule: the picture
+ * speaks garden, every word attached to an action speaks budget.
+ */
+let gardenLabels = false;          // "Show labels" toggle — transient per session, never stored
+let gardenPrev = null;             // { monthId, states: Map<'ci:fi', state> } — for the living-feedback diff
+// The static scene is rasterised once per render into a <canvas> (see
+// garden-scene.js "TWO OUTPUT MODES"); decoded images are cached by their SVG
+// string so revisiting a month is instant. Nothing is stored on disk.
+const gardenBitmaps = new Map();   // svgString → HTMLImageElement (bounded)
+let gardenResizeObs = null;
+
+// Read the wrapper's season/time-of-day palette so the off-DOM SVG can use literal colours.
+function gardenPalette(wrap) {
+  const cs = getComputedStyle(wrap);
+  const pal = {};
+  for (const t of PALETTE_TOKENS) pal[t] = cs.getPropertyValue('--g-' + t).trim();
+  return pal;
+}
+// Draw the scene bitmap into the canvas at device resolution (re-run on resize).
+function paintGardenCanvas(canvas, img, height) {
+  const cssW = canvas.clientWidth || canvas.parentElement.clientWidth;
+  if (!cssW) return;
+  const cssH = cssW * height / 1000;
+  const dpr = Math.min(3, window.devicePixelRatio || 1);
+  const pw = Math.round(cssW * dpr), ph = Math.round(cssH * dpr);
+  if (canvas.width !== pw || canvas.height !== ph) { canvas.width = pw; canvas.height = ph; }
+  canvas.style.height = cssH + 'px';
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, pw, ph);
+  ctx.drawImage(img, 0, 0, pw, ph);
+}
+function loadGardenBitmap(svg) {
+  if (gardenBitmaps.has(svg)) return Promise.resolve(gardenBitmaps.get(svg));
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      if (gardenBitmaps.size >= 8) gardenBitmaps.delete(gardenBitmaps.keys().next().value);
+      gardenBitmaps.set(svg, img); resolve(img);
+    };
+    img.onerror = reject;
+    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+  });
+}
+
+function runGardenAction(a) {
+  if (!a) return;
+  if (a.kind === 'transfer') showTransferModal(a.from || '', null, a.to || '');
+  else if (a.kind === 'budget') { budgetFocus = a.fund ? { fund: a.fund } : null; fundSearch = ''; view = 'budget'; render(); }
+  else if (a.kind === 'unassigned') { txFundFilter = '__unassigned__'; txSearch = ''; view = 'transactions'; render(); }
+  else if (a.kind === 'import') { view = 'import'; render(); }
+  else if (a.kind === 'useActual') applyActualChecks(curMonth(), a.fund);
+}
+
+// Time of day is cosmetic: a class on the scene wrapper, deterministic within the hour.
+function timeOfDayClass(h = new Date().getHours()) {
+  return h < 5 ? 'tod-evening' : h < 10 ? 'tod-morning' : h < 16 ? 'tod-midday' : h < 19 ? 'tod-golden' : 'tod-evening';
+}
+
+// First visit: one slide, one button. Ceremony, so the garden voice is allowed —
+// but it also sets the dashboard expectation. Reopenable from the ? in the title.
+function showGardenIntro() {
+  if ($('.walkthrough-overlay')) return;
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay walkthrough-overlay';
+  overlay.tabIndex = -1;
+  const demo = [
+    { fund: 'a', family: 'rowcrop', species: 'tomato', state: 'blooming', stage: 3 },
+    { fund: 'b', family: 'shrub', species: 'lavender', state: 'blooming', stage: 3 },
+    { fund: 'c', family: 'fruit', species: 'apple', state: 'harvest', stage: 3 },
+    { fund: 'd', family: 'evergreen', species: 'pine', state: 'growing', stage: 2 },
+  ];
+  overlay.innerHTML = `
+    <div class="modal walkthrough garden-intro">
+      <div class="wt-media garden-intro-art">${stripSvg(demo, { width: 520, height: 110 })}</div>
+      <h2>This is your garden.</h2>
+      <p class="wt-body">A living picture of your budget. Every fund is a plant; keep each one inside its envelope and watch what grows over the seasons.</p>
+      <p class="wt-body" style="margin-top:8px">When something needs you, a card below the garden will point you to the right tool — the garden itself never changes your numbers.</p>
+      <div class="modal-actions"><button class="btn btn-accent" id="giGo">Got it</button></div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => {
+    overlay.remove();
+    if (!data.settings.gardenIntroSeen) { data.settings.gardenIntroSeen = true; markDirty(); }
+  };
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  overlay.addEventListener('keydown', (e) => { if (e.key === 'Escape' || e.key === 'Enter') close(); });
+  $('#giGo', overlay).onclick = close;
+  overlay.focus();
+}
+
+function renderGarden(main) {
+  const month = curMonth();
+  const g = gardenState(data, { monthId: month.id, todayISO: todayISO() });
+
+  // Living feedback: diff against the last render of this month; changed
+  // plants get a was-* class so CSS can ease them into their new pose.
+  const states = new Map(g.plants.map((p) => [`${p.ci}:${p.fi}`, p.state]));
+  const changed = new Map();
+  if (gardenPrev && gardenPrev.monthId === month.id) {
+    for (const [k, st] of states) { const was = gardenPrev.states.get(k); if (was && was !== st) changed.set(k, was); }
+  }
+  gardenPrev = { monthId: month.id, states };
+
+  const c = g.counts;
+  const onPlan = c.planted + c.growing + c.blooming;
+  const attention = c.thirsty + c.wilting;
+  // Dashboard copy — the same facts the Budget hero speaks, condensed.
+  const allocBit = g.ctx.isFuture ? 'not started yet'
+    : g.sown ? 'fully allocated ✓'
+    : g.leftToAllocate > 0 ? `${money(g.leftToAllocate)} still to allocate`
+    : `${money(-g.leftToAllocate)} more planned than income`;
+  const status = [monthLabel(month.id), allocBit, `${onPlan} on plan`, `${attention} need${attention === 1 ? 's' : ''} attention`, `${c.harvest} with money to move`];
+  const mat = g.maturity;
+  const fixtureNames = mat.fixtures.map((id) => GARDEN_MILESTONE_LABELS[id]);
+  const matBits = [`Tended ${mat.monthsTended} month${mat.monthsTended === 1 ? '' : 's'}`];
+  if (fixtureNames.length) matBits.push(fixtureNames.join(', '));
+  if (mat.stones) matBits.push(`${mat.stones} wall stone${mat.stones === 1 ? '' : 's'}`);
+  if (mat.next) matBits.push(`${GARDEN_MILESTONE_LABELS[mat.next.id]} at ${mat.next.months} months`);
+
+  main.innerHTML = `
+    <div class="garden-head">
+      <h1>Your garden <button class="help-btn" id="gardenHelpBtn" title="How the garden works">?</button></h1>
+      <label class="garden-toggle"><input type="checkbox" id="gardenLabels" ${gardenLabels ? 'checked' : ''}> Show labels</label>
+    </div>
+    <p class="sub">A living picture of this month's budget. Hover a plant for its numbers; click it to open that fund in Budget.</p>
+    <p class="garden-status">${status.map(esc).join(' <span class="muted">·</span> ')}</p>
+    <div class="garden-wrap season-${g.season.kind} ${timeOfDayClass()}"><canvas class="garden-canvas" aria-hidden="true"></canvas><div class="garden-live-layer"></div><div class="garden-tip" id="gardenTip"></div></div>
+    ${g.season.note ? `<p class="garden-season-note season-${g.season.kind}">${esc(g.season.note)}</p>` : ''}
+    <div class="garden-msgs">${g.messages.map((m, i) => `
+      <div class="garden-msg msg-${m.kind}"><span>${esc(m.text)}</span>
+        ${m.action ? `<button class="btn btn-sm" data-garden-act="${i}">${esc(m.action.label)}</button>` : ''}</div>`).join('')}
+    </div>
+    <p class="garden-maturity muted">${matBits.map(esc).join(' · ')}</p>`;
+
+  const wrap = $('.garden-wrap', main);
+  const tip = $('#gardenTip', main);
+  const canvas = $('.garden-canvas', main);
+  const liveLayer = $('.garden-live-layer', main);
+
+  // Live sprites: plants that animate sit over the bitmap (and are left out of
+  // it): changed plants (was-* transition), harvest (glow), a few blooms (sway).
+  const changedKeys = new Set(changed.keys());
+  const tod = timeOfDayClass().slice(4);
+  const prelim = sceneSvg(g, { monthLabel: monthLabel(month.id), labels: gardenLabels, money, changed, bitmap: true, palette: {}, tod });
+  const liveKeys = new Set();
+  for (const e of prelim.placed) {
+    if (changedKeys.has(e.key) || e.p.state === 'harvest' || e.sway) liveKeys.add(e.key);
+  }
+  const scene = sceneSvg(g, { monthLabel: monthLabel(month.id), labels: gardenLabels, money, changed, bitmap: true, palette: gardenPalette(wrap), skip: liveKeys, tod });
+  const byKey = new Map(scene.placed.map((e) => [e.key, e]));
+  liveLayer.innerHTML = scene.placed.filter((e) => liveKeys.has(e.key))
+    .map((e) => plantSprite(e, scene.height, [e.sway ? 'sway' : '', e.changed ? `was-${e.changed}` : ''].filter(Boolean).join(' '))).join('')
+    + scene.ambient;
+  wrap.insertAdjacentHTML('beforeend', scene.hit);
+  wrap.style.minHeight = ''; // set once the canvas knows its size
+
+  // Rasterise (cached by SVG string) and keep it sharp on resize.
+  canvas.style.aspectRatio = `1000 / ${scene.height}`;
+  const paint = () => { const img = gardenBitmaps.get(scene.svg); if (img && canvas.isConnected) paintGardenCanvas(canvas, img, scene.height); };
+  loadGardenBitmap(scene.svg).then(paint).catch(() => {
+    // Fallback: the live SVG (bitmap rasterisation unavailable) — still correct, just costlier to animate.
+    const live = sceneSvg(g, { monthLabel: monthLabel(month.id), labels: gardenLabels, money, changed, tod });
+    canvas.replaceWith(document.createRange().createContextualFragment(live.bg + live.fg));
+    liveLayer.innerHTML = live.ambient;
+    $('.garden-hit', wrap)?.remove();
+  });
+  if (gardenResizeObs) gardenResizeObs.disconnect();
+  gardenResizeObs = new ResizeObserver(() => paint());
+  gardenResizeObs.observe(wrap);
+
+  const plantAt = (el) => {
+    const [ci, fi] = el.dataset.plant.split(':').map(Number);
+    return g.plants.find((p) => p.ci === ci && p.fi === fi) || null;
+  };
+  // Tooltip: numbers, not poetry — fund, planned/spent/left, a bar, the plain phrase.
+  const showTip = (p, x, y) => {
+    const pct = p.budget > 0.004 ? Math.min(1, p.spent / p.budget) : (p.spent > 0 ? 1 : 0);
+    tip.innerHTML = `<b class="t">${esc(p.fund)}</b><span class="muted">${esc(p.category)} · ${esc(p.phrase)}</span>
+      <div class="bar"><i class="${p.leftover < -0.004 ? 'over' : ''}" style="width:${Math.round(pct * 100)}%"></i></div>
+      <div class="nums">planned ${money(p.planned)}${Math.abs(p.carryOver) > 0.004 ? ` · carried ${money(p.carryOver)}` : ''} · spent ${money(p.spent)} · left <b class="${moneyCls(p.leftover)}">${money(p.leftover)}</b></div>
+      ${p.caption ? `<div class="cap">${esc(p.caption)}</div>` : ''}`;
+    tip.classList.add('show');
+    const r = wrap.getBoundingClientRect();
+    let tx = x - r.left + 14, ty = y - r.top + 14;
+    if (tx + tip.offsetWidth > r.width - 8) tx = x - r.left - tip.offsetWidth - 14;
+    if (ty + tip.offsetHeight > r.height - 8) ty = y - r.top - tip.offsetHeight - 10;
+    tip.style.left = tx + 'px'; tip.style.top = ty + 'px';
+  };
+  // Hover lift: a live sprite of the plant scales up over the bitmap (the
+  // transform is on the HTML element → compositor thread, nothing repaints).
+  let hoverKey = null, hoverSprite = null;
+  const unhover = () => {
+    tip.classList.remove('show');
+    if (hoverSprite) { if (hoverSprite.dataset.temp) hoverSprite.remove(); else hoverSprite.classList.remove('hover'); }
+    hoverKey = hoverSprite = null;
+  };
+  const hover = (el, x, y) => {
+    const p = plantAt(el); if (!p) return;
+    const key = el.dataset.plant;
+    if (key !== hoverKey) {
+      unhover();
+      hoverKey = key;
+      hoverSprite = liveLayer.querySelector(`[data-live="${key}"]`);
+      if (!hoverSprite) {
+        const e = byKey.get(key);
+        if (e) { liveLayer.insertAdjacentHTML('beforeend', plantSprite(e, scene.height)); hoverSprite = liveLayer.lastElementChild; hoverSprite.dataset.temp = '1'; }
+      }
+      if (hoverSprite) requestAnimationFrame(() => hoverSprite && hoverSprite.classList.add('hover'));
+    }
+    showTip(p, x, y);
+  };
+  wrap.onmousemove = (e) => {
+    const el = e.target.closest('[data-plant]');
+    if (!el) { unhover(); return; }
+    hover(el, e.clientX, e.clientY);
+  };
+  wrap.onmouseleave = unhover;
+  wrap.addEventListener('focusin', (e) => {
+    const el = e.target.closest('[data-plant]');
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    hover(el, r.right, r.top);
+  });
+  wrap.addEventListener('focusout', unhover);
+  wrap.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const el = e.target.closest('[data-plant],[data-more],[data-weeds]');
+    if (el) { e.preventDefault(); el.dispatchEvent(new MouseEvent('click', { bubbles: true })); }
+  });
+
+  $('#gardenLabels', main).onchange = (e) => { gardenLabels = e.target.checked; render(); };
+  main.onclick = (e) => {
+    if (e.target.closest('#gardenHelpBtn')) { showGardenIntro(); return; }
+    const act = e.target.closest('[data-garden-act]');
+    if (act) { runGardenAction(g.messages[Number(act.dataset.gardenAct)].action); return; }
+    const plant = e.target.closest('[data-plant]');
+    if (plant) { const p = plantAt(plant); if (p) runGardenAction(p.jump); return; } // §3: a plant click opens the fund in Budget
+    const more = e.target.closest('[data-more]');
+    if (more) {
+      const cat = month.categories[Number(more.dataset.more)];
+      if (cat) { fundSearch = cat.name; flagPanel = null; view = 'budget'; render(); }
+      return;
+    }
+    if (e.target.closest('[data-weeds]')) { runGardenAction({ kind: 'unassigned' }); }
+  };
+
+  if (!data.settings.gardenIntroSeen) showGardenIntro();
+}
+
 /* ---------------- Settings view ---------------- */
 function renderSettings(main) {
   const month = curMonth();
@@ -2451,14 +2718,31 @@ function showMonthCloseWorkflow(last, nid) {
       ? `🎯 "${esc(f.fund)}" hit its ${money(f.setup.targetAmount)} goal — enjoy it!`
       : `🎯 "${esc(f.fund)}" matured with ${money(set)} of ${money(f.setup.targetAmount)} saved`);
   }
+  // The garden's slow layer: a new all-time high in AUM lays a wall stone. A
+  // decline says nothing here — what you built stays built.
+  const laid = stonesLaidIn((data.aum || {}).snapshots, last.id);
+  if (laid) wins.push(`🧱 Your garden matured: +${laid} wall stone${laid === 1 ? '' : 's'} — what you manage reached a new high`);
   if (!wins.length) wins.push('📒 The month is logged and every dollar is accounted for — that\'s the win.');
+  // A quiet streak of sown months — shown here in the recap only, never as a nag.
+  const streak = sownStreak(data, last.id);
+  const baskets = streak ? `<p class="recap-baskets muted" title="Months in a row where every dollar had a bed">${'🧺'.repeat(Math.min(streak, 12))} ${streak} month${streak === 1 ? '' : 's'} sown in a row</p>` : '';
+
+  // The keepsake: a small static snapshot of the month's final garden — its
+  // blooms and harvest — above the wins. Ceremony, so garden voice is allowed
+  // in the framing line; the numbers below stay literal.
+  const gv = gardenState(data, { monthId: last.id, todayISO: todayISO() });
+  const order = { harvest: 0, blooming: 1, growing: 2, planted: 3, thirsty: 4, wilting: 5, resting: 6 };
+  const keep = gv ? gv.plants.slice().sort((p, q) => order[p.state] - order[q.state]).slice(0, 6) : [];
+  const vignette = keep.length ? `<div class="recap-vignette">${stripSvg(keep, { width: 560, height: 118 })}</div>
+      <p class="recap-line muted">The beds are in for ${MONTH_NAMES[Number(last.id.split('-')[1]) - 1]} — here's what the month grew.</p>` : '';
 
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   const li = (x, why) => `<li><b>${esc(x.fund)}</b> <span class="muted">(${esc(x.category)})</span> — ${why}</li>`;
   overlay.innerHTML = `
     <div class="modal modal-wide">
-      <h2>${monthLabel(last.id)} in review</h2>
+      <h2>The ${MONTH_NAMES[Number(last.id.split('-')[1]) - 1]} harvest</h2>
+      ${vignette}
       <div class="recap-stats">
         <div><span class="k">Income${exT() ? ' *' : ''}</span><span class="v pos">${money(actIncome(comp))}</span></div>
         <div><span class="k">Spent${exT() ? ' *' : ''}</span><span class="v">${money(Math.abs(actExpense(comp)))}</span></div>
@@ -2466,6 +2750,7 @@ function showMonthCloseWorkflow(last, nid) {
       </div>
       ${exT() ? '<p class="muted" style="font-size:.78rem;margin:-8px 0 10px">* fund-to-fund transfers excluded</p>' : ''}
       <ul class="modal-list recap-wins">${wins.map((w) => `<li>${w}</li>`).join('')}</ul>
+      ${baskets}
       <details class="recap-cats"><summary>Category breakdown</summary>
         <table class="grid compact"><thead><tr><th style="text-align:left">Category</th><th>Budget</th><th>Spent</th><th>Left</th></tr></thead><tbody>
         ${catRows.map((c) => `<tr><td>${esc(c.name)}</td><td>${money(c.planned)}</td><td>${money(c.spent)}</td>
@@ -2753,7 +3038,8 @@ function wzFinishHtml() {
     <p class="wz-body">Your budget: <b>${nPay} paycheck${nPay === 1 ? '' : 's'}</b>, <b>${nFunds} envelope${nFunds === 1 ? '' : 's'}</b>${
       nTx ? `, <b>${nTx} transaction${nTx === 1 ? '' : 's'}</b> to bring in` : ''}.</p>
     <p class="wz-body">The numbers don't need to be perfect — you'll sharpen them as real life happens.
-      The list on the next screen shows the few blanks worth filling in.</p>
+      Next you'll see your garden — every envelope you picked is a plant in it — and the Budget page
+      keeps a short list of the blanks worth filling in.</p>
     <div class="wz-actions">
       <button class="btn" data-wz-back>Back</button>
       <div class="spacer"></div>
@@ -3042,7 +3328,7 @@ function enterApp() {
   // Default to the current calendar month if it exists, else the latest.
   const nowId = todayISO().slice(0, 7);
   currentMonthId = data.months.some((m) => m.id === nowId) ? nowId : data.months[data.months.length - 1].id;
-  view = 'budget';
+  view = 'garden';
 
   $('#monthSelect').onchange = (e) => { currentMonthId = e.target.value; txSearch = ''; txFundFilter = ''; txAccountFilter = ''; fundSearch = ''; flagPanel = null; render(); };
   $('#newMonthBtn').onclick = startNextMonth;
@@ -3061,6 +3347,11 @@ async function boot() {
   // Record the re-typed list before saving so it survives a restart — the
   // migration only runs once, and the user should be able to review it later.
   if (v5.retyped.length) data.settings.lastRetype = v5.retyped;
+  // The app was "Family Budget" until 2026-08-23; the stored display name moves
+  // with it (no data version bump — a value change, not a shape change).
+  if (!data.settings.appName || data.settings.appName === 'Family Budget') {
+    data.settings.appName = 'Sowing Season'; migrated = true;
+  }
 
   // A brand-new install has no months (and nothing downstream tolerates that —
   // the wizard is the only code path that can create a FIRST month). Nothing

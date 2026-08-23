@@ -1,17 +1,22 @@
-# Family Budget
+# Sowing Season
 
-A desktop envelope-budgeting app built from the "2026 Budget.xlsx" spreadsheet. All of the
-spreadsheet's logic is preserved: monthly funds with carry-over → planned → spent → leftover,
-sinking funds for yearly charges (÷12, ÷6), tithe as a % of planned income, a zero-based
-"left to allocate" check, and a Work category excluded from totals.
+A desktop envelope-budgeting app built from the "2026 Budget.xlsx" spreadsheet — tend your
+money like a garden. All of the spreadsheet's logic is preserved: monthly funds with
+carry-over → planned → spent → leftover, sinking funds for yearly charges (÷12, ÷6), tithe
+as a % of planned income, a zero-based "left to allocate" check, and a Work category
+excluded from totals. (The app was called **Family Budget** until 2026-08-23; see the
+CHANGELOG for the rename and the data-folder move-in.)
 
 ## Running it
 
-- **Packaged app**: `dist/Family Budget-win32-x64/Family Budget.exe` — double-click to run.
+- **Packaged app**: `dist/Sowing Season-win32-x64/Sowing Season.exe` — double-click to run.
 - **From source**: `npm start` in this folder.
 
-Your data lives in `%APPDATA%\Family Budget\budget-data.json` (auto-saved on every change,
-with rolling backups in `%APPDATA%\Family Budget\backups`, max 30, at most one per 10 min).
+Your data lives in `%APPDATA%\Sowing Season\budget-data.json` (auto-saved on every change,
+with rolling backups in `%APPDATA%\Sowing Season\backups`, max 30, at most one per 10 min).
+An install that was running as Family Budget finds its history copied forward on the first
+launch after the rename (copy, never move — `%APPDATA%\Family Budget` is left untouched as
+a safety net; see `legacy-data.js`).
 
 A brand-new install starts empty and opens a **setup wizard**: an optional bank-file step
 that suggests envelopes and paycheck numbers (the file never leaves the computer), then
@@ -22,6 +27,42 @@ next launch. Existing installs (a data file already present) never see any of th
 
 ## Views
 
+- **Garden** — the home view. Every expense fund you tend is a plant in an inline-SVG
+  garden: beds are your categories, plants are your funds, and each plant's state is a
+  fact the Budget page already knows — **sown** (nothing spent yet), **growing** (within
+  its envelope), **in bloom** (month done, or a pacing fund on pace late in the month),
+  **thirsty** (off pace — a watering can appears), **wilted** (over — still green, a
+  transfer waters it), **ready to harvest** (money free to move — it glows), **resting**
+  (no budget, no activity). Work and excluded-from-insights funds grow no plants. Species
+  follow the fund type (pacing → row crops, basic/fixed → shrubs, savings goals → fruit
+  trees, build funds → evergreens) and are fixed per fund name. Stray unassigned
+  transactions are **weeds** at the garden's edge; clicking them opens the unassigned
+  flow ("Review N unassigned"). Hover a plant for its numbers (planned / spent / left, a
+  bar, and the plain state — "$40 over"); click it to open that fund in Budget with the
+  row highlighted. "Show labels" annotates every plant with its name and what's left.
+  Beds that don't fit show a "+N" sign that opens Budget filtered to the category. Under
+  the scene: a one-line plain status, up to three message cards (weeds → wilting → thirsty
+  → harvest → paycheck check-in → setup → unsown), each with a button that names the tool
+  it opens (Transfer…, Open Budget, Review N unassigned), and the garden's maturity. The
+  Garden never edits anything itself — **the picture speaks garden, the words speak budget.**
+
+  **The design rule:** behaviours drive the garden, outcomes decorate it. Plants respond
+  only to what you control this month. AUM never wilts a plant — it sets the **season**
+  (latest snapshot vs. ~90 days earlier: rising = growing light, flat = steady, falling =
+  a lean autumn tint with a gentle note; no AUM data = steady) and lays **wall stones**
+  (one per all-time-high snapshot; never removed). **Maturity** fixtures appear with
+  months of history (3 path · 6 fence · 12 arbor · 18 pond · 24 bee hive) and the border
+  tree grows with months closed; none of it ever regresses. Nothing dies, nothing nags:
+  no points, badges, streaks-as-pressure or notifications. A one-slide intro shows on the
+  first visit (`settings.gardenIntroSeen`; reopen via the ? by the title). Switching
+  months in the sidebar shows that month's garden — past months as their final state,
+  future months freshly sown. Engine: `src/garden.js` (pure, tested by
+  `npm run test:garden`); drawing: `src/garden-scene.js` (pure, string out) — procedural
+  **watercolor SVG**: layered translucent washes through three displacement filters plus a
+  paper-grain filter, no image assets anywhere; season and time-of-day are tints; motion is
+  CSS only (≤ 3 ambient elements, slow) and honours `prefers-reduced-motion`. The app draws
+  the static scene into a canvas once per render (filters are expensive to keep live while
+  anything animates — see CHANGELOG) with live SVG sprites only where something moves.
 - **Budget** — the month, in layers. A hero figure (*Left to allocate*, with planned income
   and allocated beneath it) plus three stats: income, spent, net.
 
@@ -67,10 +108,11 @@ next launch. Existing installs (a data file already present) never see any of th
 - **Exclude transfers from reporting** (Settings) — fund-to-fund transfers stay visible
   inside each fund, but stop counting toward actual income/spending in the summary,
   Year Overview and month recap. Income funds named "Transfer …" count wholly as transfers.
-- **End-of-month workflow** — "Start next month" opens a recap of the closing month
-  (income/spent/net, wins, pacing results, matured savings goals, category breakdown),
-  lists outstanding insights with inline transfer links, then creates the month —
-  or skip it all with one click.
+- **End-of-month workflow** — "🌱 Sow {Month}" opens *The {Month} harvest*: a recap of the
+  closing month (income/spent/net, wins, pacing results, matured savings goals, a wall
+  stone when AUM hit a new high that month, a quiet row of baskets for consecutive sown
+  months, category breakdown), lists outstanding insights with inline transfer links, then
+  creates the month — or skip it all with one click.
 - **Transactions** — add/edit/delete entries for the month. Expenses negative, income positive.
 - **⇄ Transfer** — move money between any two funds in the month (toolbar button on the
   Budget and Transactions pages, or the ⇄ in a fund's panel or the Review strip to prefill "From"). A transfer is
@@ -105,7 +147,7 @@ next launch. Existing installs (a data file already present) never see any of th
 - **Settings** — tithe %, fund rename (updates all months + transactions), new categories,
   data export.
 
-**+ Start next month** rolls every expense fund's leftover into the new month's carry-over,
+**🌱 Sow {Month}** rolls every expense fund's leftover into the new month's carry-over,
 resets income carry-overs to zero, and re-applies planned rules — exactly like copying the
 spreadsheet tab, minus the manual work.
 
@@ -123,13 +165,22 @@ packaging trap, the BOM crash). Start there before changing behaviour.
   which once bundled each previous build inside the next one).
 - `npm test` — the verification suite: every month re-checked against the original
   workbook, plus the migration, tithe, savings, insight and CSV cases.
+- `npm run test:garden` — the garden engine: every plant state, seasons, maturity, the
+  scene cap and the message ladder against fixture months (self-contained).
+- `npm run test:migrate` — the Family Budget → Sowing Season data-folder copy against
+  scratch folders (never touches `%APPDATA%`).
 - `npm run dev` — the browser dev harness on :5173 (in-memory, no persistence).
 - `tools/extract-workbook.js` — the one-time spreadsheet → `data/seed.json` importer
   (historical; the app no longer reads the seed).
-- `build/icon.ico` — the app icon, built by `node tools/build-ico.js` from the PNGs in
-  `tools/icons/` (rendered from the emoji via the dev server's /save-icon helper).
+- `build/icon.svg` — the watercolor sprout mark. `tools/icon-export.html?save=1` (on the
+  dev server) rasterises it to `tools/icons/icon-*.png`; `node tools/build-ico.js` bundles
+  them into `build/icon.ico` (the only raster in the product, derived from the SVG).
+- `tools/scene-preview.html` (dev server) — the garden scene alone, full-width, from
+  `data/seed.json`, with month / season / time-of-day / labels switches for judging the art.
+- `node_modules.binelectron toolscapture-help.js` — recaptures the AUM walkthrough
+  screenshots from fabricated demo data (never real data) at 1:1.
 
-First run (no `%APPDATA%\Family Budget\budget-data.json` yet) starts empty and runs the
+First run (no `%APPDATA%\Sowing Season\budget-data.json` yet) starts empty and runs the
 onboarding wizard. Deleting that file resets the app to the wizard. Wizard testing:
 `npm run dev` then `http://localhost:5173/?blank=1` (add `&csv=/tools/fixtures/…` to feed
 files to the Choose-file button), or point `BUDGET_DATA_DIR` at an empty folder.

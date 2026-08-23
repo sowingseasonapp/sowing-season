@@ -1,9 +1,10 @@
 const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { migrateLegacyData, LEGACY_APP_NAME } = require('./legacy-data');
 
 // Dev escape hatch: point userData at a scratch folder (demo data, screenshot
-// capture) so the real %APPDATA%\Family Budget file is never touched.
+// capture) so the real %APPDATA%\Sowing Season file is never touched.
 if (process.env.BUDGET_DATA_DIR) app.setPath('userData', process.env.BUDGET_DATA_DIR);
 
 const DATA_DIR = () => app.getPath('userData');
@@ -21,7 +22,7 @@ const MAX_BACKUPS = 30;
 // so quitting mid-wizard leaves no file and the wizard runs again next launch.
 const BLANK = () => ({
   version: 6, // current — no migrations may run on it
-  settings: { tithePercent: 0.10, appName: 'Family Budget' },
+  settings: { tithePercent: 0.10, appName: 'Sowing Season' },
   months: [],
   aum: { assets: [], debts: [], snapshots: [], log: [] },
 });
@@ -87,8 +88,8 @@ function createWindow() {
     height: 920,
     minWidth: 980,
     minHeight: 640,
-    backgroundColor: '#f4f5f7',
-    title: 'Family Budget',
+    backgroundColor: '#f7f5ee',
+    title: 'Sowing Season',
     icon: path.join(__dirname, 'build', 'icon.ico'),
     autoHideMenuBar: true,
     webPreferences: {
@@ -100,7 +101,26 @@ function createWindow() {
   win.loadFile(path.join(__dirname, 'src', 'index.html'));
 }
 
+// The app was "Family Budget" until 2026-08-23. Its data folder followed the
+// name, so the first launch after the rename copies the old folder forward
+// (copy, never move — the old folder stays as a safety net). Demo/scratch runs
+// (BUDGET_DATA_DIR) must never pull real data into themselves. A failure here
+// is surfaced before anything else happens: silently booting the first-run
+// wizard over nine months of history is exactly what this exists to prevent.
+function migrateLegacyDataDir() {
+  if (process.env.BUDGET_DATA_DIR) return;
+  const oldDir = path.join(app.getPath('appData'), LEGACY_APP_NAME);
+  try {
+    const res = migrateLegacyData(oldDir, app.getPath('userData'));
+    if (res.migrated) console.log(`Copied ${res.files.length} file(s) from "${oldDir}"`);
+  } catch (err) {
+    dialog.showErrorBox('Could not move your budget data in',
+      `Sowing Season tried to copy your existing data from\n${oldDir}\nto\n${app.getPath('userData')}\nbut hit an error:\n\n${err.message}\n\nNothing was removed. The app will open without your history — close it, fix the problem (disk space, permissions), and launch again; the copy is retried on every start until it succeeds.`);
+  }
+}
+
 app.whenReady().then(() => {
+  migrateLegacyDataDir();
   ipcMain.handle('data:load', () => loadData());
   ipcMain.handle('data:save', (_e, data) => saveData(data));
   ipcMain.on('data:save-sync', (e, data) => { e.returnValue = saveData(data); });

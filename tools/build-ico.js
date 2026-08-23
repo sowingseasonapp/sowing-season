@@ -1,4 +1,5 @@
-// Bundles the canvas-rendered PNGs (tools/icons/icon-*.png) into build/icon.ico.
+// Bundles the canvas-rendered PNGs (tools/icons/icon-*.png — rasterised from the
+// watercolor mark build/icon.svg by tools/icon-export.html) into build/icon.ico.
 // Windows Vista+ supports PNG-compressed ICO entries, so no BMP conversion needed.
 const fs = require('fs');
 const path = require('path');

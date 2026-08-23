@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Icon export (dev)</title>
+<style>body{font-family:Segoe UI,sans-serif;padding:24px;background:#f7f5ee;color:#26301f} .row{display:flex;gap:16px;align-items:flex-end;margin:16px 0} canvas{background:#fff;border:1px solid #e6e3d5} #log{white-space:pre;font:12px Consolas,monospace}</style>
+</head>
+<body>
+<!-- Dev-only (tools/ is not packaged). Rasterises build/icon.svg — the
+     watercolor app mark — into tools/icons/icon-*.png via canvas, posting each
+     to the dev server's /save-icon helper. Then: node tools/build-ico.js
+     The only raster in the product (build/icon.ico) is derived from that SVG. -->
+<h1>Sowing Season icon export</h1>
+<p>Renders <code>build/icon.svg</code> at 256/128/64/48/32/16 and saves the PNGs. Open with <code>?save=1</code> to write them.</p>
+<div class="row" id="row"></div>
+<div id="log"></div>
+<script>
+(async () => {
+  const sizes = [256, 128, 64, 48, 32, 16];
+  const svgText = await fetch('/build/icon.svg').then((r) => r.text());
+  const blob = new Blob([svgText], { type: 'image/svg+xml' });
+  const url = URL.createObjectURL(blob);
+  const img = new Image();
+  await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = url; });
+  const save = new URLSearchParams(location.search).get('save') === '1';
+  const log = (t) => { document.getElementById('log').textContent += t + '\n'; };
+  for (const s of sizes) {
+    const c = document.createElement('canvas');
+    c.width = s; c.height = s; c.style.width = c.style.height = Math.max(s, 16) + 'px';
+    const ctx = c.getContext('2d');
+    ctx.imageSmoothingQuality = 'high';
+    // draw at 2× then downsample for the small sizes so the washes keep their body
+    if (s < 64) {
+      const big = document.createElement('canvas'); big.width = big.height = 256;
+      big.getContext('2d').drawImage(img, 0, 0, 256, 256);
+      const mid = document.createElement('canvas'); mid.width = mid.height = s * 2;
+      mid.getContext('2d').drawImage(big, 0, 0, s * 2, s * 2);
+      ctx.drawImage(mid, 0, 0, s, s);
+    } else ctx.drawImage(img, 0, 0, s, s);
+    document.getElementById('row').appendChild(c);
+    if (save) {
+      const b64 = c.toDataURL('image/png').split(',')[1];
+      const r = await fetch('/save-icon', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: `icon-${s}.png`, b64 }) });
+      log(`icon-${s}.png ${r.ok ? 'saved' : 'FAILED'} (${Math.round(b64.length * 3 / 4)} bytes)`);
+    }
+  }
+  log(save ? 'done — now run: node tools/build-ico.js' : 'preview only (add ?save=1 to write)');
+})();
+</script>
+</body>
+</html>

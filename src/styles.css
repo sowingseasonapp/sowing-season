@@ -1,17 +1,32 @@
+/* Sowing Season palette â€” warm parchment and leaf green. Every pair that
+   carries text clears WCAG AA (ink/bg 12.6:1, sidebar-ink/sidebar 8.7:1,
+   white/accent 4.9:1, accent-deep on its tint 5.6:1). */
 :root {
-  --bg: #f4f5f7;
+  --bg: #f7f5ee;            /* warm parchment */
   --panel: #ffffff;
-  --ink: #1c2330;
-  --ink-soft: #5b6577;
-  --line: #e3e6ec;
-  --accent: #2f6fed;
+  --ink: #26301f;           /* deep moss-ink */
+  --ink-soft: #636a59;      /* sage grey */
+  --line: #e6e3d5;          /* straw line */
+  --line-faint: #f0efe7;    /* table row rules */
+  --accent: #4a7c46;        /* leaf green */
   --accent-ink: #ffffff;
-  --green: #178a4c;
-  --red: #c93b3b;
-  --amber: #b97d10;
-  --sidebar: #1c2330;
-  --sidebar-ink: #cfd6e4;
-  --radius: 10px;
+  --accent-deep: #3d6a3a;   /* accent as small text on a tint */
+  --accent-hover: #3f6d3c;
+  --accent-tint: #edf3ea;   /* chip / selected-card background */
+  --accent-tint-line: #cfe0ca;
+  --hover-row: #f5f8f2;
+  --head-bg: #faf9f4;       /* panel heads, total rows */
+  --green: #178a4c;         /* "good money" â€” unchanged */
+  --red: #b8543a;           /* terracotta: wilt, not fire */
+  --red-deep: #9e4630;
+  --red-tint: #fbeee9;
+  --amber: #8f6a1c;         /* harvest gold */
+  --amber-tint: #fff4e0;
+  --sidebar: #283a24;       /* deep pine */
+  --sidebar-ink: #d5ddcc;
+  --sidebar-ctl: #34482f;
+  --sidebar-ctl-line: #46593f;
+  --radius: 12px;
   font-size: 15px;
 }
 * { box-sizing: border-box; }
@@ -31,7 +46,7 @@ body {
 .month-picker { display: flex; flex-direction: column; gap: 6px; }
 .month-picker label { font-size: .72rem; text-transform: uppercase; letter-spacing: .8px; opacity: .7; }
 .month-picker select {
-  background: #2a3347; color: #fff; border: 1px solid #3a465e; border-radius: 8px;
+  background: var(--sidebar-ctl); color: #fff; border: 1px solid var(--sidebar-ctl-line); border-radius: 8px;
   padding: 8px 10px; font-size: .95rem;
 }
 #nav { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
@@ -39,7 +54,7 @@ body {
   text-align: left; background: none; border: none; color: var(--sidebar-ink);
   padding: 10px 12px; border-radius: 8px; font-size: .95rem; cursor: pointer;
 }
-.nav-btn:hover { background: #2a3347; }
+.nav-btn:hover { background: var(--sidebar-ctl); }
 .nav-btn.active { background: var(--accent); color: #fff; }
 .sidebar-foot { margin-top: auto; font-size: .78rem; opacity: .7; }
 
@@ -77,17 +92,17 @@ h2 { font-size: 1.05rem; margin: 0; }
 .month-stats { margin: 0; }
 .month-head-note { font-size: .78rem; margin: 8px 0 0; }
 
-/* Accordions — the header is a row on the same grid as the funds below it */
+/* Accordions â€” the header is a row on the same grid as the funds below it */
 .acc {
   background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
   margin-bottom: 8px; overflow: clip; /* not hidden: keeps .acc-col-head sticky */
 }
 .acc.open { margin-bottom: 14px; }
 .acc-head-table { cursor: pointer; user-select: none; }
-.acc-head-table:hover .acc-head-row td { background: #f6f9ff; }
-.acc.open .acc-head-row td { background: #fafbfc; border-bottom: 1px solid var(--line); }
+.acc-head-table:hover .acc-head-row td { background: var(--hover-row); }
+.acc.open .acc-head-row td { background: var(--head-bg); border-bottom: 1px solid var(--line); }
 .acc-head-row td { padding: 9px 12px; border-bottom: none; font-weight: 600; }
-/* Flex lives on an inner wrapper, not the td — a flexed td stops being a
+/* Flex lives on an inner wrapper, not the td â€” a flexed td stops being a
    table-cell box and colspan (used when the card is open) would be ignored. */
 .acc-title-wrap { display: flex; align-items: center; gap: 8px; }
 .acc-caret { color: var(--ink-soft); font-size: .8rem; width: 10px; flex: none; }
@@ -106,7 +121,7 @@ h2 { font-size: 1.05rem; margin: 0; }
    top must offset #main's 26px padding-top: sticky elements pin inside the
    scroll container's padding, so top:0 would float 26px down with rows
    scrolling visibly through the gap above. */
-.acc-col-head { position: sticky; top: -26px; z-index: 3; background: #f2f4f8; }
+.acc-col-head { position: sticky; top: -26px; z-index: 3; background: #f3f2ea; }
 .acc-col-head th { padding: 5px 12px; }
 table.tbl-fixed { table-layout: fixed; }
 
@@ -117,7 +132,7 @@ table.tbl-fixed { table-layout: fixed; }
 }
 .section-head {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 12px 16px; border-bottom: 1px solid var(--line); background: #fafbfc;
+  padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--head-bg);
 }
 .section-head .actions { display: flex; gap: 8px; }
 table.grid { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
@@ -126,30 +141,30 @@ table.grid th {
   color: var(--ink-soft); font-weight: 600; padding: 8px 12px; border-bottom: 1px solid var(--line);
 }
 table.grid th:first-child { text-align: left; }
-table.grid td { padding: 6px 12px; text-align: right; border-bottom: 1px solid #f0f2f5; }
+table.grid td { padding: 6px 12px; text-align: right; border-bottom: 1px solid var(--line-faint); }
 table.grid td:first-child { text-align: left; }
 table.grid tr:last-child td { border-bottom: none; }
-table.grid tr.total td { font-weight: 600; border-top: 2px solid var(--line); background: #fafbfc; }
-table.grid tr:hover:not(.total) td { background: #f6f9ff; }
+table.grid tr.total td { font-weight: 600; border-top: 2px solid var(--line); background: var(--head-bg); }
+table.grid tr:hover:not(.total) td { background: var(--hover-row); }
 td.pos { color: var(--green); }
 td.neg { color: var(--red); }
 .fund-note { font-size: .75rem; color: var(--ink-soft); }
 .rule-chip {
-  display: inline-block; font-size: .68rem; background: #eef3ff; color: var(--accent);
+  display: inline-block; font-size: .68rem; background: var(--accent-tint); color: var(--accent-deep);
   border-radius: 4px; padding: 1px 6px; margin-left: 6px; vertical-align: 1px;
   white-space: nowrap;
 }
-.rule-chip.clickable { cursor: pointer; border: 1px solid #d5e2fb; }
-.rule-chip.clickable:hover { background: #dfe9fd; }
-.rule-chip.chip-warn { background: #fff4e0; color: var(--amber); }
-.rule-chip.chip-danger { background: #fdeeee; color: var(--red); }
+.rule-chip.clickable { cursor: pointer; border: 1px solid var(--accent-tint-line); }
+.rule-chip.clickable:hover { background: #dfeadb; }
+.rule-chip.chip-warn { background: var(--amber-tint); color: var(--amber); }
+.rule-chip.chip-danger { background: var(--red-tint); color: var(--red-deep); }
 .rule-chip.chip-good { background: #e9f7ef; color: var(--green); }
-.rule-chip.chip-muted { background: #f0f1f4; color: var(--ink-soft); }
-a.fund-name { color: inherit; text-decoration: none; border-bottom: 1px dashed #c8cedb; }
+.rule-chip.chip-muted { background: #f0efe8; color: var(--ink-soft); }
+a.fund-name { color: inherit; text-decoration: none; border-bottom: 1px dashed #cfd2c4; }
 a.fund-name:hover { color: var(--accent); border-bottom-color: var(--accent); }
 /* Review badge + strip: one entry point for every insight */
-.review-badge.has-att { border-color: #f0c8c8; background: #fdeeee; color: var(--red); }
-.review-badge.has-att:hover, .review-badge.has-att.active { background: #fbdddd; border-color: var(--red); }
+.review-badge.has-att { border-color: #ecc9bd; background: var(--red-tint); color: var(--red-deep); }
+.review-badge.has-att:hover, .review-badge.has-att.active { background: #f7ddd3; border-color: var(--red); }
 .review-badge.all-good { border-color: #c4e6d2; background: #e9f7ef; color: var(--green); }
 .review-badge.all-good:hover, .review-badge.all-good.active { background: #d8f0e2; border-color: var(--green); }
 .review-strip {
@@ -162,7 +177,7 @@ a.fund-name:hover { color: var(--accent); border-bottom-color: var(--accent); }
   display: flex; align-items: baseline; gap: 8px;
 }
 .review-hint { font-weight: 400; font-size: .78rem; }
-.review-strip table.grid td { border-bottom: 1px solid #f6f7f9; text-align: left; }
+.review-strip table.grid td { border-bottom: 1px solid #f5f4ee; text-align: left; }
 .review-strip table.grid td:nth-child(3) { text-align: right; font-variant-numeric: tabular-nums; }
 .review-strip tr:last-child td { border-bottom: none; }
 
@@ -180,7 +195,7 @@ a.fund-name:hover { color: var(--accent); border-bottom-color: var(--accent); }
 .modal-wide { width: 560px; max-height: 86vh; overflow-y: auto; }
 .recap-stats { display: flex; gap: 12px; margin: 10px 0 14px; }
 .recap-stats > div {
-  flex: 1; background: #fafbfc; border: 1px solid var(--line); border-radius: 8px;
+  flex: 1; background: var(--head-bg); border: 1px solid var(--line); border-radius: 8px;
   padding: 10px 12px; display: flex; flex-direction: column; gap: 2px;
 }
 .recap-stats .k { font-size: .72rem; text-transform: uppercase; letter-spacing: .5px; color: var(--ink-soft); }
@@ -196,7 +211,7 @@ a.fund-name:hover { color: var(--accent); border-bottom-color: var(--accent); }
   cursor: pointer; user-select: none;
 }
 .type-opt input { margin-right: 4px; }
-.type-opt.sel { border-color: var(--accent); background: #eef3ff; color: var(--accent); font-weight: 600; }
+.type-opt.sel { border-color: var(--accent); background: var(--accent-tint); color: var(--accent-deep); font-weight: 600; }
 
 /* Editable money cells */
 input.money {
@@ -207,7 +222,7 @@ input.money {
 input.money:hover { border-color: var(--line); background: #fff; }
 input.money:focus { border-color: var(--accent); background: #fff; outline: none; }
 input.small-num { width: 60px; }
-/* In the fixed-grid budget tables the input must fit its 15% column — a fixed
+/* In the fixed-grid budget tables the input must fit its 15% column â€” a fixed
    108px overflows into the neighbouring cell once the window narrows. */
 table.tbl-fixed input.money { width: 100%; min-width: 0; }
 
@@ -216,20 +231,20 @@ table.tbl-fixed input.money { width: 100%; min-width: 0; }
   border: 1px solid var(--line); background: var(--panel); color: var(--ink);
   border-radius: 8px; padding: 8px 14px; font-size: .9rem; cursor: pointer;
 }
-.btn:hover { border-color: #c8cedb; background: #f6f7f9; }
+.btn:hover { border-color: #c9ccbd; background: #f5f4ee; }
 .btn-accent { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
-.btn-accent:hover { background: #2559c4; border-color: #2559c4; }
+.btn-accent:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
 .btn-danger { color: var(--red); }
 .btn-sm { padding: 5px 10px; font-size: .82rem; }
 .btn-ghost { border: none; background: none; color: var(--ink-soft); cursor: pointer; padding: 4px 6px; border-radius: 6px; }
-.btn-ghost:hover { background: #eef1f5; color: var(--ink); }
+.btn-ghost:hover { background: #eeeee5; color: var(--ink); }
 td.row-actions { white-space: nowrap; }
 td.row-actions .btn-ghost { padding: 4px 5px; }
 td.row-actions .btn-ghost[disabled] { opacity: .25; cursor: default; }
 td.row-actions .btn-ghost[disabled]:hover { background: none; color: var(--ink-soft); }
 a.tx-count {
   display: inline-block; min-width: 18px; margin-left: 6px; padding: 0 6px; border-radius: 9px;
-  background: #eef1f6; color: var(--ink-soft); text-decoration: none;
+  background: #ecece3; color: var(--ink-soft); text-decoration: none;
   font-size: .72rem; font-weight: 600; text-align: center; vertical-align: 1px;
 }
 a.tx-count:hover { background: var(--accent); color: #fff; }
@@ -246,7 +261,7 @@ select.inline {
   border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; font: inherit;
   font-size: .85rem; background: #fff; max-width: 200px;
 }
-select.inline.missing { border-color: var(--amber); background: #fff8ec; }
+select.inline.missing { border-color: var(--amber); background: var(--amber-tint); }
 input.inline-text {
   border: 1px solid transparent; background: transparent; font: inherit; border-radius: 6px;
   padding: 3px 6px; width: 100%;
@@ -257,11 +272,11 @@ input.inline-date { width: 120px; }
 
 /* Badges */
 .badge { display: inline-block; font-size: .7rem; border-radius: 5px; padding: 2px 7px; font-weight: 600; }
-.badge.dup { background: #fdeeee; color: var(--red); }
-.badge.dup-maybe { background: #fff4e0; color: var(--amber); border: 1px dashed var(--amber); }
-.badge.pay { background: #f0f0f3; color: var(--ink-soft); }
+.badge.dup { background: var(--red-tint); color: var(--red-deep); }
+.badge.dup-maybe { background: var(--amber-tint); color: var(--amber); border: 1px dashed var(--amber); }
+.badge.pay { background: #f0efe8; color: var(--ink-soft); }
 .badge.new { background: #e9f7ef; color: var(--green); }
-.badge.warn { background: #fff4e0; color: var(--amber); }
+.badge.warn { background: var(--amber-tint); color: var(--amber); }
 
 /* Import table */
 .import-row-off td { opacity: .45; }
@@ -285,7 +300,7 @@ input.inline-date { width: 120px; }
 
 /* Fund side panel */
 .panel-wrap { position: fixed; inset: 0; z-index: 45; }
-.panel-scrim { position: absolute; inset: 0; background: rgba(15, 20, 30, .28); }
+.panel-scrim { position: absolute; inset: 0; background: rgba(20, 28, 16, .28); }
 .side-panel {
   position: absolute; top: 0; right: 0; bottom: 0; width: 460px; max-width: 94vw;
   background: var(--panel); border-left: 1px solid var(--line);
@@ -301,7 +316,7 @@ input.inline-date { width: 120px; }
 .panel-sub { font-size: .82rem; }
 .panel-close { font-size: 1rem; }
 .panel-body { overflow-y: auto; padding: 4px 18px 24px; }
-.panel-sec { padding: 14px 0; border-bottom: 1px solid #f0f2f5; }
+.panel-sec { padding: 14px 0; border-bottom: 1px solid var(--line-faint); }
 .panel-sec:last-child { border-bottom: none; }
 .panel-sec h3 {
   margin: 0 0 10px; font-size: .78rem; text-transform: uppercase; letter-spacing: .6px;
@@ -323,22 +338,22 @@ input.inline-date { width: 120px; }
 .panel-tx td:first-child { white-space: nowrap; color: var(--ink-soft); }
 .panel-tx { margin-bottom: 10px; }
 
-/* Behaviour cards (fund type) — one flat choice, description on the card */
+/* Behaviour cards (fund type) â€” one flat choice, description on the card */
 .behavior-picker { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
 .behavior {
   display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; align-items: baseline;
   border: 1px solid var(--line); border-radius: 8px; padding: 8px 11px; cursor: pointer;
 }
-.behavior:hover { border-color: #c8cedb; background: #fafbfc; }
-.behavior.sel { border-color: var(--accent); background: #eef3ff; }
+.behavior:hover { border-color: #c9ccbd; background: var(--head-bg); }
+.behavior.sel { border-color: var(--accent); background: var(--accent-tint); }
 .behavior input { grid-row: span 2; align-self: center; }
 .behavior-name { font-size: .9rem; font-weight: 600; }
-.behavior.sel .behavior-name { color: var(--accent); }
+.behavior.sel .behavior-name { color: var(--accent-deep); }
 .behavior-desc { grid-column: 2; font-size: .78rem; color: var(--ink-soft); }
 .setup-fields .modal-row { margin-bottom: 6px; flex-wrap: wrap; }
 .setup-result {
   font-size: .88rem; margin: 6px 0 10px; padding: 8px 11px;
-  background: #f6f9ff; border-radius: 8px; border: 1px solid #e3ebfb;
+  background: var(--accent-tint); border-radius: 8px; border: 1px solid var(--accent-tint-line);
 }
 .setup-options { display: flex; flex-direction: column; gap: 6px; font-size: .88rem; }
 .setup-options label { cursor: pointer; }
@@ -367,11 +382,11 @@ input.inline-date { width: 120px; }
 /* Reports */
 .report-wrap { overflow-x: auto; }
 table.grid.compact td, table.grid.compact th { padding: 5px 9px; font-size: .85rem; }
-td.dim { color: #a6adbb; }
+td.dim { color: #a8ab9c; }
 
 /* Charts */
 :root {
-  --viz-s1: #2a78d6;   /* series 1 (blue) — validated pair on white */
+  --viz-s1: #2a78d6;   /* series 1 (blue) â€” validated pair on white */
   --viz-s2: #eb6834;   /* series 2 (orange) */
   --viz-grid: #e1e0d9;
   --viz-baseline: #c3c2b7;
@@ -411,7 +426,7 @@ span.neg { color: var(--red); }
 
 /* Modal */
 .modal-overlay {
-  position: fixed; inset: 0; background: rgba(15,20,30,.45); z-index: 40;
+  position: fixed; inset: 0; background: rgba(20,28,16,.45); z-index: 40;
   display: flex; align-items: center; justify-content: center;
 }
 .modal {
@@ -461,7 +476,7 @@ span.neg { color: var(--red); }
 .field-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; }
 .field-row label { flex: 1; }
 
-/* Onboarding wizard — full-screen stepper (the sidebar is hidden) */
+/* Onboarding wizard â€” full-screen stepper (the sidebar is hidden) */
 .wizard { max-width: 640px; margin: 6vh auto 40px; }
 .wizard h1 { font-size: 1.5rem; margin: 0 0 10px; }
 .wz-body { font-size: .95rem; line-height: 1.55; margin: 0 0 12px; }
@@ -470,7 +485,7 @@ span.neg { color: var(--red); }
   width: 9px; height: 9px; border-radius: 50%; background: var(--line);
 }
 .wz-dot.on { background: var(--accent); }
-.wz-dot.done { background: #9db9ee; }
+.wz-dot.done { background: #a9c7a2; }
 .wz-actions { display: flex; gap: 10px; align-items: center; margin-top: 22px; flex-wrap: wrap; }
 .wz-actions .spacer { flex: 1; }
 .wz-card {
@@ -498,19 +513,189 @@ span.neg { color: var(--red); }
 .wz-amt { width: 120px; padding: 5px 9px; text-align: right; font-variant-numeric: tabular-nums; }
 .wz-fund-sub { margin: -2px 0 6px 26px; display: flex; flex-direction: column; gap: 2px; }
 
-/* "Finish setting up" checklist — quiet, an invitation not a nag */
+/* "Finish setting up" checklist â€” quiet, an invitation not a nag */
 .checklist { padding: 10px 16px 12px; }
 .checklist-head {
   display: flex; align-items: center; justify-content: space-between; padding: 2px 0 6px;
 }
 .checklist-head .btn-ghost { font-size: .8rem; }
 .checklist-item { display: flex; align-items: center; gap: 10px; padding: 4px 0; font-size: .9rem; }
-.checklist-item a { color: inherit; text-decoration: none; border-bottom: 1px dashed #c8cedb; }
+.checklist-item a { color: inherit; text-decoration: none; border-bottom: 1px dashed #cfd2c4; }
 .checklist-item a:hover { color: var(--accent); border-bottom-color: var(--accent); }
 .checklist-item.done span, .checklist-item.done a { color: var(--ink-soft); text-decoration: line-through; border-bottom: none; }
 .cl-check {
-  width: 20px; height: 20px; flex: none; border-radius: 50%; border: 1px solid #c8cedb;
+  width: 20px; height: 20px; flex: none; border-radius: 50%; border: 1px solid #cfd2c4;
   background: #fff; color: var(--green); font-size: .75rem; line-height: 1; cursor: pointer; padding: 0;
 }
 .cl-check:hover { border-color: var(--accent); }
 .checklist-item.done .cl-check { background: #e9f7ef; border-color: #c4e6d2; }
+
+/* ---------- Garden (home view) â€” watercolor SVG ----------
+   Every --g-* token is a wash colour drawn from one ramp per material (leaf,
+   soil, petal, wood, stone, water, sky). The season tint and the time-of-day
+   sky are classes on .garden-wrap that re-point the same tokens â€” no new SVG.
+   Tokens live on :root so the intro strip and month-close vignette share them. */
+:root {
+  --g-paper: #fdfcf7;
+  --g-sky-1: #d7e4dc; --g-sky-2: #f2e2c4; --g-sun: #f1cf6a;
+  --g-hill-1: #b9c6a6; --g-hill-2: #9fb08a;
+  --g-grass-1: #c9d9a6; --g-grass-2: #9fb884; --g-grass-3: #7fa06b;
+  --g-soil-l: #c9ad7e; --g-soil-m: #a58a5e; --g-soil-d: #7d6743;
+  --g-leaf-l: #9dc08a; --g-leaf-m: #4a7c46; --g-leaf-d: #3d6a3a;
+  --g-dry-l: #b6bf8c; --g-dry-m: #6e8a50;
+  --g-petal-l: #e9c46a; --g-petal-m: #d9a53f; --g-petal-c: #b8543a;
+  --g-wood-l: #b99a6b; --g-wood-m: #d8bd8f; --g-wood-d: #8a6f4d;
+  --g-stone-l: #d9d2c0; --g-stone-m: #b8ae98; --g-stone-d: #8f8672;
+  --g-water-l: #cfe3ea; --g-water-m: #9cc6d6; --g-water-d: #6fa7bd;
+  --g-path-l: #e3d3b0; --g-path-m: #cdb890;
+  --g-weed-l: #b9c77a; --g-weed-m: #8aa84f;
+  --g-glow: #e9c46a;
+  --g-light: #f6dc8a; --g-light-op: 0;
+}
+/* Season: light and colour only â€” never plant states, never maturity. */
+.garden-wrap.season-growing {
+  --g-sky-1: #cfe3da; --g-sky-2: #f6e9c8; --g-leaf-l: #a6c98d; --g-leaf-m: #478047; --g-grass-1: #cde0a6;
+  --g-light: #f8e7a0; --g-light-op: .06;
+}
+.garden-wrap.season-lean {
+  --g-sky-1: #e6dcc6; --g-sky-2: #f0d9b0; --g-sun: #e9b866;
+  --g-hill-1: #c9c39c; --g-hill-2: #b3ad7e; --g-grass-1: #d8d3a4; --g-grass-2: #b8b07e; --g-grass-3: #9d9a66;
+  --g-leaf-l: #b7c08a; --g-leaf-m: #6f8c48; --g-leaf-d: #5b733b; --g-dry-l: #bcc194; --g-dry-m: #7a8c56;
+  --g-light: #e8b15a; --g-light-op: .10;
+}
+/* Time of day: purely cosmetic, from the local clock hour at render. */
+.garden-wrap.tod-morning { --g-sky-1: #dde8e4; --g-sky-2: #f7e3cf; --g-light: #ffe9c2; --g-light-op: .05; }
+.garden-wrap.tod-golden { --g-sky-1: #e6d9c4; --g-sky-2: #f4cf9d; --g-sun: #f0b45a; --g-light: #f2b560; --g-light-op: .12; }
+.garden-wrap.tod-evening { --g-sky-1: #b8c1cc; --g-sky-2: #d9c3b8; --g-sun: #e8c98a; --g-hill-1: #a3ad9a; --g-hill-2: #8c9a82; --g-light: #6b7aa3; --g-light-op: .14; }
+.garden-wrap.season-lean.tod-evening { --g-light: #8c6f62; --g-light-op: .16; }
+
+.garden-wrap {
+  position: relative; background: var(--g-paper); border: 1px solid var(--line);
+  border-radius: var(--radius); overflow: hidden; margin-bottom: 12px;
+}
+.garden-svg { width: 100%; height: auto; display: block; }
+/* Two layers (see sceneSvg): the background is static and composited on its
+   own so foreground repaints (hover, sway, the butterfly) never re-run the
+   paper/sky filters. */
+.garden-bg { position: absolute; inset: 0; height: 100%; will-change: transform; pointer-events: none; }
+.garden-fg { position: relative; }
+.garden-ambient { position: absolute; height: auto; pointer-events: none; overflow: visible; will-change: transform; } /* a small sprite, sized/placed in % by the scene; its transform animates on the compositor */
+/* Bitmap mode (the app): the static scene is a <canvas>; a transparent hit
+   layer carries the focusable targets; live sprites sit in between. */
+.garden-canvas { width: 100%; height: auto; display: block; }
+.garden-hit { position: absolute; inset: 0; height: 100%; }
+.garden-hit .hit { fill: transparent; pointer-events: all; cursor: pointer; }
+.garden-hit [tabindex]:focus { outline: none; }
+.garden-hit [tabindex]:focus-visible .hit { fill: rgba(74,124,70,.14); stroke: var(--accent); stroke-width: 1.5; }
+.garden-live-layer { position: absolute; inset: 0; pointer-events: none; }
+.garden-live { position: absolute; height: auto; overflow: visible; pointer-events: none; transform-origin: 50% 87%; transition: transform .25s ease; }
+.garden-live.hover { transform: scale(1.08); will-change: transform; } /* only the lifted sprite needs its own compositor layer */
+.garden-svg text { font-family: inherit; }
+.g-label { font-size: 12px; fill: var(--ink-soft); }
+.g-sign-text { font-size: 11px; font-weight: 600; fill: #4a3b28; }
+.g-plant-label { font-size: 10px; fill: #fbf7ec; paint-order: stroke; stroke: rgba(74,59,40,.55); stroke-width: 2.5px; stroke-linejoin: round; }
+.g-plant-label.num { font-variant-numeric: tabular-nums; }
+.g-plant-label.num.neg { fill: #ffd9cc; }
+
+/* ---- watercolor filter classes (same-document refs) ---- */
+.wc1 { filter: url(#wc1); }
+.wc2 { filter: url(#wc2); }
+.wc3 { filter: url(#wc3); }
+
+/* ---- plants: the hover lift and state lean are CSS transforms on inner
+   groups; the outer <g> keeps the attribute transform (POC gotcha). ---- */
+.plant, .more-sign, .weeds { cursor: pointer; outline: none; }
+.plant .body, .plant .lift { transform-box: fill-box; transform-origin: 50% 100%; }
+.plant .lift { transition: transform .25s ease; }
+.plant:hover .lift, .plant:focus-visible .lift { transform: scale(1.06); }
+.plant:focus-visible .hit { fill: rgba(74,124,70,.12); rx: 8px; }
+.plant.st-thirsty .body { transform: rotate(4deg); }
+.plant.st-wilting .body { transform: rotate(12deg) scale(1, .88); opacity: .88; }
+.plant.st-resting .body { opacity: .65; }
+/* Continuous motion uses steps(): a 0.2Â° increment is invisible, and a filtered
+   plant is re-rasterised ~2Ã—/s instead of 60Ã—/s. Measured: the packaged build
+   idled at ~1.5 cores with smooth sway/glow over the watercolor filters. */
+.plant.sway .body { animation: sway 7s steps(16, jump-none) infinite; }
+.glow { opacity: .22; }
+.plant.st-harvest .glow { animation: glow 4.2s steps(10, jump-none) infinite; }
+.more-sign:hover .wc1, .more-sign:focus-visible .wc1 { opacity: .9; }
+.weeds:hover .g-label, .weeds:focus-visible .g-label { fill: var(--ink); }
+/* Living feedback: a plant whose state changed since the last visit eases in
+   from its previous pose (was-*) to the new one. */
+.plant .body { transition: transform .6s ease, opacity .6s ease; }
+.plant[class*="was-"] .lift { animation: growIn .6s ease-out; }
+.plant.was-wilting .body, .plant.was-thirsty .body { animation: unlean .6s ease-out; }
+.plant.was-growing.st-harvest .lift, .plant.was-planted.st-harvest .lift, .plant.was-blooming.st-harvest .lift { animation: sparkleIn 1.1s ease-out; }
+@keyframes unlean { from { transform: rotate(12deg) scale(1, .88); } }
+@keyframes growIn { from { transform: scale(.9); opacity: .5; } }
+@keyframes sparkleIn { 0% { filter: drop-shadow(0 0 0 rgba(233,196,106,0)); } 40% { filter: drop-shadow(0 0 6px rgba(233,196,106,.9)); } 100% { filter: drop-shadow(0 0 0 rgba(233,196,106,0)); } }
+
+/* ---- ambient life: â‰¤3 concurrently animated elements, slow, drift not dart ---- */
+@keyframes sway { 0%, 100% { transform: rotate(-1.6deg); } 50% { transform: rotate(1.6deg); } }
+@keyframes glow { 0%, 100% { opacity: .18; } 50% { opacity: .38; } }
+.flutter { animation: flutter 9s ease-in-out infinite; }
+@keyframes flutter {
+  0% { transform: translate(0, 0); } 25% { transform: translate(26px, -10px); } 50% { transform: translate(52px, 2px); }
+  75% { transform: translate(30px, -14px); } 100% { transform: translate(0, 0); }
+}
+/* Sprite keyframes run on the HTML sprite element (compositor thread). */
+.leaf-fall { animation: leafFall 11s linear infinite; }
+.bee-loop { animation: beeLoop 8s ease-in-out infinite; }
+@keyframes beeLoop {
+  0% { transform: translate(0, 0); } 25% { transform: translate(18px, -6px); } 50% { transform: translate(34px, 2px); }
+  75% { transform: translate(14px, 6px); } 100% { transform: translate(0, 0); }
+}
+.firefly { animation: fireflyDrift 12s ease-in-out infinite; }
+@keyframes fireflyDrift {
+  0% { transform: translate(0, 0); opacity: .35; } 20% { opacity: .95; } 40% { transform: translate(22px, -12px); opacity: .4; }
+  60% { opacity: .9; } 80% { transform: translate(40px, 4px); opacity: .35; } 100% { transform: translate(0, 0); opacity: .35; }
+}
+@keyframes leafFall {
+  0% { transform: translate(0, 0) rotate(0); opacity: 0; } 8% { opacity: .8; }
+  100% { transform: translate(-60px, 180px) rotate(300deg); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .plant .body, .plant .lift, .plant.sway .body, .plant.st-harvest .glow, .flutter, .leaf-fall, .bee-loop, .firefly, .plant[class*="was-"] .lift, .plant.was-wilting .body, .plant.was-thirsty .body, .garden-live { animation: none !important; transition: none !important; }
+  .firefly { opacity: .8; }
+  .leaf-fall { opacity: .5; transform: translate(-30px, 90px); }
+}
+
+/* ---- the rest of the view ---- */
+.garden-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.garden-toggle { font-size: .85rem; color: var(--ink-soft); display: inline-flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
+.garden-toggle input { accent-color: var(--accent); }
+.garden-tip {
+  display: none; position: absolute; z-index: 5; pointer-events: none; max-width: 280px;
+  background: #fff; border: 1px solid var(--line); border-radius: 8px;
+  box-shadow: 0 4px 14px rgba(38,48,31,.14); padding: 8px 11px; font-size: .82rem; line-height: 1.4;
+}
+.garden-tip.show { display: block; }
+.garden-tip b.t { display: block; font-size: .9rem; }
+.garden-tip .nums { font-variant-numeric: tabular-nums; color: var(--ink-soft); margin-top: 3px; }
+.garden-tip .bar { height: 5px; border-radius: 3px; background: var(--line); margin: 5px 0 2px; overflow: hidden; }
+.garden-tip .bar i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+.garden-tip .bar i.over { background: var(--red); }
+.garden-tip .cap { margin-top: 4px; }
+.garden-tip b.neg { color: var(--red); }
+.garden-tip b.pos { color: var(--green); }
+.garden-status { font-size: .95rem; margin: 0 0 10px; }
+.garden-season-note { margin: 0 0 12px; font-size: .9rem; padding: 8px 12px; border-radius: 8px; }
+.garden-season-note.season-lean { background: #f7ecd9; color: #6e4c1b; }
+.garden-season-note.season-growing { background: var(--accent-tint); color: var(--accent-deep); }
+.garden-msgs { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; margin-bottom: 12px; }
+.garden-msg {
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; justify-content: space-between;
+  font-size: .92rem; line-height: 1.45;
+}
+.garden-msg .btn { align-self: flex-start; }
+.garden-msg.msg-calm { background: var(--accent-tint); border-color: var(--accent-tint-line); }
+.garden-msg.msg-wilting, .garden-msg.msg-thirsty { border-color: #ecd9c8; }
+.garden-maturity { font-size: .82rem; }
+.garden-intro .wt-media svg, .garden-strip { width: 100%; height: auto; display: block; border-radius: 8px; }
+.recap-baskets { font-size: .85rem; margin: -4px 0 8px; letter-spacing: 1px; }
+.recap-vignette svg { width: 100%; height: auto; display: block; border-radius: 8px; border: 1px solid var(--line); }
+.recap-line { font-size: .88rem; margin: 6px 0 12px; }
+/* Landing on a fund from the Garden: a soft highlight that fades. */
+tr.row-focus td { animation: rowFocus 2.8s ease-out; }
+@keyframes rowFocus { 0%, 35% { background: #f3ecb8; } 100% { background: transparent; } }
