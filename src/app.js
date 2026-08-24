@@ -161,7 +161,7 @@ function renderShell() {
   selEl.innerHTML = data.months.map((m) =>
     `<option value="${m.id}" ${m.id === currentMonthId ? 'selected' : ''}>${monthLabel(m.id)}</option>`).join('');
   $$('.nav-btn').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
-  $('.brand').textContent = '🌱 ' + (data.settings.appName || 'Sowing Season');
+  $('.brand-label').textContent = data.settings.appName || 'Sowing Season';
 }
 function render() {
   renderShell();

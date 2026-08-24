@@ -9,6 +9,36 @@ so entries before that are dated by when the work happened, not by commit.
 
 ---
 
+## 2026-08-23 — Watercolor sidebar icons (Option A)
+
+Implements `_cowork/proposal-watercolor-nav-icons.md`: the 8 sidebar emoji (🌱 brand +
+7 nav) replaced with procedural watercolor SVG icons lifted from the POC
+(`_cowork/watercolor-nav-icons-poc.html`). the owner locked in **Option A** — washes
+painted straight on the pine, no paper chips, no retint blocks. Pure chrome: no data,
+schema, or engine changes; version stays 6.
+
+- **`src/index.html`** (and its mirror **`src/dev.html`** — the dev harness serves the
+  same sidebar markup and crashes at boot if it drifts): one hidden defs `<svg>` at the
+  top of `<body>` with the four filters **namespaced `#nav-wc1/2/3`/`#nav-paper`** and
+  the eight `ni-*` groups. Namespacing matters: `garden-scene.js` emits its own
+  `#wc1–#wc3`/`#paper` inside each scene SVG; duplicate ids would resolve to whichever
+  def comes first in document order. Icons are drawn in a 120-unit viewBox, rendered at
+  20 px nav / 26 px brand (displacement 5–9 units ≈ 1–1.5 px on screen — calibrated,
+  don't redraw in a small viewBox; detail strokes must be ≥ 7 units or they vanish).
+  Pigments are CSS vars with Option-A fallbacks (`var(--cm,#efe6cc)` …) — they always
+  resolve to fallbacks today but keep the retint machinery for a future in-view icon
+  pass on light backgrounds.
+- **`src/styles.css`**: `.nav-btn`/`.brand` became flex rows (gap 10/8 px), `.ni`
+  sizes, and `.nw1/.nw2/.nw3 { filter:url(#nav-wc…) }`. Static chrome — no animation,
+  nothing for reduced-motion.
+- **`src/app.js`** (one line): the boot-time brand writer used
+  `$('.brand').textContent = …`, which would destroy the icon node; it now writes
+  `$('.brand-label')` only. `data-view` wiring untouched (app.js only toggles
+  `.active` and binds clicks — verified no other sidebar content writers).
+- Verified in the dev harness: all 8 icons render, no emoji left, nav clicks and the
+  `appName` write behave, garden view unaffected. `test:garden` 139 / `test:migrate`
+  17 pass; repackaged (asar 0.7 MB).
+
 ## 2026-08-23 — Sowing Season: rename, garden skin, and the Garden home view
 
 Implements `_cowork/proposal-sowing-season-garden.md` in full (all four phases). The app

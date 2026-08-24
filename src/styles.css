@@ -42,7 +42,17 @@ body {
   width: 230px; flex: 0 0 230px; background: var(--sidebar); color: var(--sidebar-ink);
   display: flex; flex-direction: column; padding: 18px 14px; gap: 18px;
 }
-.brand { font-size: 1.15rem; font-weight: 600; color: #fff; letter-spacing: .2px; }
+.brand {
+  font-size: 1.15rem; font-weight: 600; color: #fff; letter-spacing: .2px;
+  display: flex; align-items: center; gap: 8px;
+}
+.brand .ni { width: 26px; height: 26px; }
+.ni { display: block; }
+/* Watercolor filter classes — namespaced so they never collide with
+   garden-scene.js's #wc1–#wc3/#paper defs in the same document. */
+.nw1 { filter: url(#nav-wc1); }
+.nw2 { filter: url(#nav-wc2); }
+.nw3 { filter: url(#nav-wc3); }
 .month-picker { display: flex; flex-direction: column; gap: 6px; }
 .month-picker label { font-size: .72rem; text-transform: uppercase; letter-spacing: .8px; opacity: .7; }
 .month-picker select {
@@ -53,7 +63,9 @@ body {
 .nav-btn {
   text-align: left; background: none; border: none; color: var(--sidebar-ink);
   padding: 10px 12px; border-radius: 8px; font-size: .95rem; cursor: pointer;
+  display: flex; align-items: center; gap: 10px;
 }
+.nav-btn .ni { width: 20px; height: 20px; flex: 0 0 20px; }
 .nav-btn:hover { background: var(--sidebar-ctl); }
 .nav-btn.active { background: var(--accent); color: #fff; }
 .sidebar-foot { margin-top: auto; font-size: .78rem; opacity: .7; }
