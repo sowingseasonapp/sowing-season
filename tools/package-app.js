@@ -17,7 +17,9 @@ const APP_NAME = 'Sowing Season';
 // Only these top-level entries belong in the app bundle. NOTE: 'data' (the old
 // seed.json) must never come back — it holds real financial history; new
 // installs start blank and run the onboarding wizard instead.
-const KEEP = new Set(['main.js', 'preload.js', 'legacy-data.js', 'package.json', 'src', 'build']);
+// node_modules rides along for electron-updater (the app's only production
+// dependency); prune:true strips devDependencies from it.
+const KEEP = new Set(['main.js', 'preload.js', 'legacy-data.js', 'updater.js', 'package.json', 'src', 'build', 'node_modules']);
 // Dev-only files that live inside kept folders.
 const EXCLUDE_FILES = new Set([path.join('src', 'dev.html')]);
 

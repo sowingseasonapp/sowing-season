@@ -2874,6 +2874,51 @@ async function showRestoreModal() {
   };
 }
 
+/* ---------------- Check for updates (U7) ----------------
+ * Strictly manual: idle → checking → result → (confirm) downloading → restart.
+ * The user clicks every transition; nothing retries or runs in the background.
+ * On a platform without in-app install (future unsigned Mac), the button opens
+ * the releases page instead — decided by the main process's capability flag.
+ */
+let updProgressCb = null; // single ipc listener, registered once in boot
+
+function wireUpdateButton() {
+  const btn = $('#updateBtn');
+  if (!btn) return;
+  if (!window.budgetAPI.checkForUpdate) { btn.disabled = true; return; } // dev harness
+  const status = $('#updateStatus');
+  btn.onclick = async () => {
+    btn.disabled = true;
+    status.textContent = 'Checking…';
+    const res = await window.budgetAPI.checkForUpdate();
+    btn.disabled = false;
+    if (res.error) { status.textContent = res.error; return; }
+    if (!res.available) { status.textContent = "You're up to date."; return; }
+    const caps = await window.budgetAPI.getUpdateCaps();
+    if (caps.mode !== 'full') {
+      // Check-only tier: the download happens in the browser, on the releases page.
+      status.textContent = `Version ${res.version} is available.`;
+      btn.textContent = 'Open download page';
+      btn.onclick = () => window.budgetAPI.openExternal(caps.releasesUrl);
+      return;
+    }
+    if (!confirm(`Version ${res.version} is available (you have ${appVersion}). Download it now?`)) {
+      status.textContent = `Version ${res.version} is available — download skipped.`;
+      return;
+    }
+    btn.disabled = true;
+    status.textContent = 'Downloading… 0%';
+    updProgressCb = (p) => { status.textContent = `Downloading… ${Math.round(p.percent || 0)}%`; };
+    const dl = await window.budgetAPI.downloadUpdate();
+    updProgressCb = null;
+    btn.disabled = false;
+    if (dl !== true) { status.textContent = `Couldn't download: ${dl}`; return; }
+    status.textContent = 'Downloaded — the update installs on restart.';
+    btn.textContent = 'Restart & install';
+    btn.onclick = () => window.budgetAPI.installUpdate();
+  };
+}
+
 /* ---------------- Settings view ---------------- */
 function renderSettings(main) {
   const month = curMonth();
@@ -2925,7 +2970,10 @@ function renderSettings(main) {
             <button class="btn btn-sm" id="exportBtn">Export JSON…</button></div>
           <div class="field-row"><label>Restore from a backup</label>
             <button class="btn btn-sm" id="restoreBtn">Restore…</button></div>
-          ${appVersion ? `<p class="muted" style="font-size:.8rem;margin:8px 0 0">Sowing Season v${esc(appVersion)}</p>` : ''}
+          <div class="field-row"><label>Sowing Season v${esc(appVersion || 'dev')}</label>
+            <button class="btn btn-sm" id="updateBtn">Check for updates</button></div>
+          <p class="muted" id="updateStatus" style="font-size:.8rem;margin:2px 0 0">Updates only happen
+            when you press this button — the app never connects to the internet otherwise.</p>
         </div></div>
     </div>`;
 
@@ -2973,6 +3021,7 @@ function renderSettings(main) {
   if (dr) dr.onclick = () => { delete data.settings.lastRetype; markDirty(); renderSettings(main); };
   $('#revealBtn').onclick = () => window.budgetAPI.revealData();
   $('#restoreBtn').onclick = () => showRestoreModal();
+  wireUpdateButton();
   $('#exportBtn').onclick = async () => {
     try {
       const res = await window.budgetAPI.exportData(data);
@@ -3708,6 +3757,11 @@ async function boot() {
   // draft so tester reports name the build they came from.
   try { if (window.budgetAPI.getVersion) appVersion = await window.budgetAPI.getVersion(); }
   catch { /* dev harness has no main process */ }
+  // One progress listener for the whole session; the update button points
+  // updProgressCb at its status line only while a download runs.
+  if (window.budgetAPI.onUpdateProgress) {
+    window.budgetAPI.onUpdateProgress((p) => { if (updProgressCb) updProgressCb(p); });
+  }
   data = await window.budgetAPI.loadData();
   let migrated = migrateV2(data) | migrateV3(data) | migrateV4(data);
   const v5 = migrateV5(data);

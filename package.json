@@ -1,11 +1,13 @@
 {
   "name": "sowing-season",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Envelope-style budgeting app — tend your money like a garden",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "pack": "node tools/package-app.js",
+    "dist": "electron-builder",
+    "release": "electron-builder --publish always",
     "test": "node tools/test-compute.mjs",
     "test:csv": "node tools/test-csv.mjs",
     "dev": "node tools/dev-server.js",
@@ -13,13 +15,48 @@
     "test:migrate": "node tools/test-migrate.mjs"
   },
   "keywords": [],
-  "author": "",
+  "author": "the owner",
   "license": "ISC",
   "type": "commonjs",
   "devDependencies": {
     "@electron/packager": "^20.2.0",
     "electron": "^43.3.0",
+    "electron-builder": "^26.15.3",
     "xlsx": "^0.18.5"
   },
-  "productName": "Sowing Season"
+  "productName": "Sowing Season",
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  },
+  "build": {
+    "appId": "com.sowingseason.app",
+    "productName": "Sowing Season",
+    "directories": {
+      "output": "dist-installer"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "legacy-data.js",
+      "updater.js",
+      "package.json",
+      "src/**/*",
+      "!src/dev.html",
+      "build/icon.ico"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": true,
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "OWNER_TBD",
+      "repo": "sowing-season"
+    }
+  }
 }

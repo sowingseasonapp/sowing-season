@@ -164,6 +164,8 @@ packaging trap, the BOM crash). Start there before changing behaviour.
 - `npm run pack` — rebuild the packaged exe into `dist/` (via `tools/package-app.js`, which
   drives the packager's JS API: CLI `--ignore` regexes silently match nothing on Windows,
   which once bundled each previous build inside the next one).
+- `npm run dist` — build the NSIS one-click installer into `dist-installer/` (electron-builder).
+  Releases, updates and the SmartScreen note are covered in [RELEASING.md](RELEASING.md).
 - `npm test` — the verification suite: every month re-checked against the original
   workbook, plus the migration, tithe, savings, insight and CSV cases.
 - `npm run test:garden` — the garden engine: every plant state, seasons, maturity, the

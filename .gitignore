@@ -1,10 +1,11 @@
 # Dependencies
 node_modules/
 
-# Build output (regenerate with `npm run pack`)
+# Build output (regenerate with `npm run pack` / `npm run dist`)
 dist/
 dist-tmp/
 dist[0-9]*/
+dist-installer/
 
 # Rendered icon PNGs — regenerate via the dev server's /save-icon helper.
 # build/icon.ico is committed; the intermediates are not.

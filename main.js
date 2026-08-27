@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { migrateLegacyData, LEGACY_APP_NAME } = require('./legacy-data');
+const { registerUpdaterIpc } = require('./updater');
 
 // Dev escape hatch: point userData at a scratch folder (demo data, screenshot
 // capture) so the real %APPDATA%\Sowing Season file is never touched.
@@ -201,6 +202,8 @@ app.whenReady().then(() => {
   // Which build is this? Reads package.json version — bump it per build so
   // tester feedback can name the version it came from (U3).
   ipcMain.handle('app:version', () => app.getVersion());
+  // Manual update flow (U7) — see updater.js for the no-network-until-clicked contract.
+  registerUpdaterIpc(ipcMain, () => mainWin);
   // System-browser / mail-client links. https:// or mailto: only —
   // never pass arbitrary strings or other schemes to openExternal.
   const EXTERNAL_URL_OK = /^(?:https:\/\/|mailto:)[^\s]+$/i;
