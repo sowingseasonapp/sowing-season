@@ -26,10 +26,15 @@ http.createServer((req, res) => {
     return;
   }
   if (url === '/sample.csv' || url === '/sample2.csv') {
-    // serve the real bank exports for import-flow testing
-    const p = url === '/sample.csv'
-      ? 'C:/Users/redacted/Desktop/2026-07-26_transaction_download.csv'
-      : 'C:/Users/redacted/Desktop/2026-08-08_redacted.csv';
+    // Serve local bank exports for import-flow testing. Paths come from env
+    // vars so no personal path or filename lives in the repo:
+    //   set SAMPLE_CSV=C:\path\to\export.csv (and SAMPLE_CSV2) before npm run dev.
+    const p = url === '/sample.csv' ? process.env.SAMPLE_CSV : process.env.SAMPLE_CSV2;
+    if (!p || !fs.existsSync(p)) {
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      res.end('Set SAMPLE_CSV / SAMPLE_CSV2 to a local bank export to use this route.');
+      return;
+    }
     res.writeHead(200, { 'Content-Type': 'text/csv' });
     res.end(fs.readFileSync(p));
     return;

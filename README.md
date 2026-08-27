@@ -108,7 +108,7 @@ next launch. Existing installs (a data file already present) never see any of th
 - **Exclude transfers from reporting** (Settings) — fund-to-fund transfers stay visible
   inside each fund, but stop counting toward actual income/spending in the summary,
   Year Overview and month recap. Income funds named "Transfer …" count wholly as transfers.
-- **End-of-month workflow** — "🌱 Sow {Month}" opens *The {Month} harvest*: a recap of the
+- **End-of-month workflow** — "+ Start next month" opens *The {Month} harvest*: a recap of the
   closing month (income/spent/net, wins, pacing results, matured savings goals, a wall
   stone when AUM hit a new high that month, a quiet row of baskets for consecutive sown
   months, category breakdown), lists outstanding insights with inline transfer links, then
@@ -118,7 +118,7 @@ next launch. Existing installs (a data file already present) never see any of th
   Budget and Transactions pages, or the ⇄ in a fund's panel or the Review strip to prefill "From"). A transfer is
   stored as a matched pair of transactions ("Transfer to X" / "Transfer from Y"), so the
   audit trail is kept and income/expense totals are unaffected.
-- **Import CSV** — pick any US bank's CSV export. The importer works the format out itself
+- **Import** — pick any US bank's CSV export. The importer works the format out itself
   (delimiter, header row, column roles, date order, sign convention), proves amounts against
   a running-balance column whenever one exists, and **refuses or asks a plain-language
   question instead of guessing** — day-first dates, comma decimals, semicolon files and
@@ -144,10 +144,11 @@ next launch. Existing installs (a data file already present) never see any of th
   Stored in the data file's `aum` block (data version 6). A 5-slide walkthrough opens on
   the first visit (and any time via the `?` button next to the title), ending with a link
   to the SeedTime podcast episode the concept comes from (opens in the system browser).
-- **Settings** — tithe %, fund rename (updates all months + transactions), new categories,
-  data export.
+- **Settings** — tithe %, fund rename (updates all months + transactions, also available in
+  the fund panel), new categories, data export, and restore — pick any rolling backup or a
+  previously exported file; the current data is backed up first and the app reloads.
 
-**🌱 Sow {Month}** rolls every expense fund's leftover into the new month's carry-over,
+**Starting the next month** rolls every expense fund's leftover into the new month's carry-over,
 resets income carry-overs to zero, and re-applies planned rules — exactly like copying the
 spreadsheet tab, minus the manual work.
 

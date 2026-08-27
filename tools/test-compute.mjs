@@ -8,12 +8,21 @@ import {
 } from '../src/compute.js';
 import { parseBankCsv, buildVendorMap, suggestFund, findDuplicate } from '../src/csv.js';
 import fs from 'fs';
+import os from 'os';
+import path from 'path';
 
 const require = createRequire(import.meta.url);
 const XLSX = require('xlsx');
 
+// Machine-specific inputs (this suite verifies against the real spreadsheet and
+// bank exports, which never live in the repo). Override with env vars:
+//   BUDGET_XLSX   — the source workbook (default: Desktop\2026 Budget.xlsx)
+//   CHECKING_CSV  — a checking-account export (section skipped when unset)
+//   CARD_CSV      — a card export (section skipped when unset)
+const XLSX_PATH = process.env.BUDGET_XLSX || path.join(os.homedir(), 'Desktop', '2026 Budget.xlsx');
+
 const seed = JSON.parse(fs.readFileSync(new URL('../data/seed.json', import.meta.url), 'utf8'));
-const wb = XLSX.readFile('C:/Users/redacted/Desktop/2026 Budget.xlsx', { cellFormula: true });
+const wb = XLSX.readFile(XLSX_PATH, { cellFormula: true });
 
 const MONTHS = [
   ['December', '2025-12'], ['January', '2026-01'], ['February', '2026-02'],
@@ -373,8 +382,10 @@ console.log(`\nCompute engine vs spreadsheet: ${ok} checks passed, ${bad} failed
 }
 
 // ---- checking-account CSV format ----
-{
-  const text = fs.readFileSync('C:/Users/redacted/Desktop/2026-08-08_redacted.csv', 'utf8');
+if (!process.env.CHECKING_CSV) {
+  console.log('\nChecking CSV section skipped — set CHECKING_CSV to a real checking export to run it.');
+} else {
+  const text = fs.readFileSync(process.env.CHECKING_CSV, 'utf8');
   const recs = parseBankCsv(text);
   console.log(`\nChecking CSV: ${recs.length} records`);
   for (const r of recs) {
@@ -391,8 +402,10 @@ console.log(`\nCompute engine vs spreadsheet: ${ok} checks passed, ${bad} failed
 }
 
 // ---- CSV import pipeline on the real bank file ----
-{
-  const text = fs.readFileSync('C:/Users/redacted/Desktop/2026-07-26_transaction_download.csv', 'utf8');
+if (!process.env.CARD_CSV) {
+  console.log('\nCard CSV section skipped — set CARD_CSV to a real card export to run it.');
+} else {
+  const text = fs.readFileSync(process.env.CARD_CSV, 'utf8');
   const recs = parseBankCsv(text);
   console.log(`\nCSV parse: ${recs.length} records`);
   const vendorMap = buildVendorMap(seed.months);

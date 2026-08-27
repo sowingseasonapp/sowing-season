@@ -2,13 +2,13 @@
  * extract-workbook.js — one-time importer.
  * Reads "2026 Budget.xlsx" and produces data/seed.json in the app's data model.
  *
- * Usage: node tools/extract-workbook.js "C:/Users/redacted/Desktop/2026 Budget.xlsx"
+ * Usage: node tools/extract-workbook.js "C:/path/to/2026 Budget.xlsx"
  */
 const path = require('path');
 const fs = require('fs');
 const XLSX = require('xlsx');
 
-const wbPath = process.argv[2] || 'C:/Users/redacted/Desktop/2026 Budget.xlsx';
+const wbPath = process.argv[2] || path.join(require('os').homedir(), 'Desktop', '2026 Budget.xlsx');
 const wb = XLSX.readFile(wbPath, { cellFormula: true, cellDates: false });
 
 const MONTHS = [
