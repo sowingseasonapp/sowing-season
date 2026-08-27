@@ -496,6 +496,19 @@ span.neg { color: var(--red); }
 .modal-row select, .modal-row input { flex: 1; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; }
 .modal-err { color: var(--red); font-size: .85rem; min-height: 1.2em; margin-top: 6px; }
+.modal-warn {
+  background: var(--amber-tint); color: var(--amber); border-radius: 8px;
+  padding: 8px 12px; font-size: .88rem; margin: 10px 0 0;
+}
+
+/* Restore-from-backup modal (W3) */
+.restore-list { max-height: 300px; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; margin-top: 10px; }
+.restore-row {
+  display: flex; align-items: center; gap: 10px; padding: 7px 12px;
+  font-size: .85rem; border-bottom: 1px solid #f0efe8;
+}
+.restore-row:last-child { border-bottom: none; }
+.restore-row > span:first-child { flex: 1; }
 
 /* AUM walkthrough */
 .help-btn {

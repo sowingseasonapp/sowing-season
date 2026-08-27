@@ -8,6 +8,9 @@ contextBridge.exposeInMainWorld('budgetAPI', {
   loadBankProfiles: () => ipcRenderer.invoke('profiles:load'),
   saveBankProfiles: (store) => ipcRenderer.invoke('profiles:save', store),
   revealData: () => ipcRenderer.invoke('data:reveal'),
+  listBackups: () => ipcRenderer.invoke('backups:list'),
+  restoreBackup: (name) => ipcRenderer.invoke('data:restore', name),
+  importDataFile: () => ipcRenderer.invoke('data:import-file'),
   exportData: (data) => ipcRenderer.invoke('data:export', data),
   openExternal: (url) => ipcRenderer.invoke('shell:open-external', url),
 });

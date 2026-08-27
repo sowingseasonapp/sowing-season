@@ -141,6 +141,16 @@ function canonicalFund(month, name) {
   for (const c of month.categories) for (const f of c.funds) if (normFund(f.fund) === n) return f.fund;
   return null;
 }
+// True when the name matches an expense fund (income wins if somehow both) —
+// drives the W1 "money in on a spending fund" warning. The app never alters a
+// typed sign; it only says what a positive amount on an expense fund means.
+function isExpenseFund(month, name) {
+  const n = normFund(name);
+  if (!n) return false;
+  if (month.income.some((f) => normFund(f.fund) === n)) return false;
+  return month.categories.some((c) => c.funds.some((f) => normFund(f.fund) === n));
+}
+
 function recalcRules(month) {
   applyChecksRules(month);
   applyTitheRules(month, data.settings.tithePercent ?? 0.15);
@@ -238,8 +248,12 @@ function defaultDateFor(month) {
 function parseUserDate(s) {
   const m = String(s).trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
   if (!m) return null;
+  // Impossible month/day numbers are a typo, not a date (U10) — mirror the CSV
+  // pipeline's range check so no entry point can store "2026-13-45".
+  const mo = Number(m[1]), d = Number(m[2]);
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
   let y = Number(m[3]); if (y < 100) y += 2000;
-  return `${y}-${String(m[1]).padStart(2, '0')}-${String(m[2]).padStart(2, '0')}`;
+  return `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
 }
 function showTransferModal(presetFrom = '', onDone = null, presetTo = '') {
   const month = curMonth();
@@ -591,7 +605,11 @@ function renderFundPanel() {
     el.onchange = () => {
       const v = parseMoney(el.value);
       if (isNaN(v)) return;
-      if (key === 'planned' && f.rule) f.rule = null;
+      if (key === 'planned' && f.rule) {
+        const wasChecks = isIncome && f.rule.type === 'checks' && (f.group || 'bonus') === 'standard';
+        f.rule = null;
+        if (wasChecks) toast(`"${f.fund}" planned is now set by hand — Reconnect below puts it back on checks × amount.`);
+      }
       f[key] = v;
       recalcRules(month); markDirty(); render();
     };
@@ -605,9 +623,23 @@ function renderFundPanel() {
       $$('.behavior', wrap).forEach((el) => el.classList.toggle('sel', el.querySelector('input').checked));
       $('#pnlChecks', wrap).style.display = t === 'standard' ? '' : 'none';
       const c = (month.checks || {})[f.fund];
-      $('#pnlIncCalc', wrap).innerHTML = t === 'standard' && c
-        ? `Planned this month: <b>${money(r2((c.count || 0) * (c.amount || 0)))}</b> <span class="muted">· tithed on ${money(r2((c.count || 0) * (c.titheAmount || 0)))}</span>`
-        : `Planned this month: <b>you set it</b> <span class="muted">— enter the amount you expect.</span>`;
+      // A Standard fund whose checks rule was cleared (a hand-typed planned) must
+      // say so — the paycheck fields below are NOT driving the number (W2a).
+      if (t === 'standard' && !(f.rule && f.rule.type === 'checks')) {
+        $('#pnlIncCalc', wrap).innerHTML = `Planned this month: <b>set by hand</b>
+          <span class="muted">— the paycheck fields below aren't driving it.</span>
+          <button class="btn btn-sm" id="pnlReconnect">Reconnect</button>`;
+        $('#pnlReconnect', wrap).onclick = () => {
+          f.rule = { type: 'checks' };
+          if (!month.checks[f.fund]) month.checks[f.fund] = { count: 0, amount: 0, titheAmount: 0 };
+          recalcRules(month); markDirty(); render();
+          toast(`"${f.fund}" planned follows checks × amount again.`);
+        };
+      } else {
+        $('#pnlIncCalc', wrap).innerHTML = t === 'standard' && c
+          ? `Planned this month: <b>${money(r2((c.count || 0) * (c.amount || 0)))}</b> <span class="muted">· tithed on ${money(r2((c.count || 0) * (c.titheAmount || 0)))}</span>`
+          : `Planned this month: <b>you set it</b> <span class="muted">— enter the amount you expect.</span>`;
+      }
     };
     $$('input[name="pnlIncType"]', wrap).forEach((r) => r.onchange = () => {
       const t = wrap.querySelector('input[name="pnlIncType"]:checked').value;
@@ -617,7 +649,12 @@ function renderFundPanel() {
           f.rule = { type: 'checks' };
           if (!month.checks[f.fund]) month.checks[f.fund] = { count: 0, amount: 0, titheAmount: 0 };
           applyChecksRules(month);
-        } else { f.rule = null; delete month.checks[f.fund]; }
+        } else {
+          // Keep month.checks[f.fund]: toggling Extra → Standard restores the
+          // saved count/amount/titheable instead of zeros (W2c). Orphaned
+          // entries are harmless — the rules only read entries for standard funds.
+          f.rule = null;
+        }
         recalcRules(month); markDirty(); render();
       }
     });
@@ -1112,6 +1149,10 @@ function renderBudget(main) {
       </div>
       ${exT() ? '<p class="muted month-head-note">Income, spent and net exclude fund-to-fund transfers.</p>' : ''}
     </div>
+    ${(month === data.months[data.months.length - 1] && month.id > todayISO().slice(0, 7)
+      && month.transactions.length === 0 && data.months.length > 1)
+      ? `<p class="muted" style="margin:-6px 0 12px;font-size:.85rem">Created by accident?
+          <button class="btn btn-sm" id="rmFutureMonth">Remove ${monthLabel(month.id)}</button></p>` : ''}
     <div class="toolbar">
       <input class="search" id="fundSearch" placeholder="Find a fund…" value="${esc(fundSearch)}"
         title="Filters the funds shown below. Categories with no match are hidden.">
@@ -1209,8 +1250,10 @@ function renderBudget(main) {
         : '';
       body += `<tr>
         <td><a href="#" class="fund-name" data-inc-setup="${i}" title="Open this fund — income type, tithe, carry-over, paycheck">${esc(f.fund)}</a>${
-          f.titheExempt ? '<span class="type-mark quiet" title="Exempt from tithe — not counted in the tithe base.">⊘</span>' : ''}${
-          f.carryForward ? '<span class="type-mark" title="Leftover rolls into next month\'s carry-over instead of resetting to $0.">↷</span>' : ''}${txChip(f)}${caption}</td>
+          f.titheExempt ? '<span class="rule-chip chip-muted" title="Exempt from tithe — not counted in the tithe base.">no tithe</span>' : ''}${
+          f.carryForward ? '<span class="type-mark" title="Leftover rolls into next month\'s carry-over instead of resetting to $0.">↷</span>' : ''}${
+          isStd && !(f.rule && f.rule.type === 'checks')
+            ? '<span class="rule-chip chip-warn" title="Planned no longer follows the paycheck numbers — it was typed by hand. Open the fund (click its name) to reconnect it.">set by hand</span>' : ''}${txChip(f)}${caption}</td>
         <td><input class="money" data-inc="${i}" data-k="carryOver" value="${money(f.carryOver)}"></td>
         <td><input class="money" data-inc="${i}" data-k="planned" value="${money(f.planned)}"></td>
         <td class="${moneyCls(f.received)}"><a href="#" class="mono" data-txfund="${esc(f.fund)}" style="color:inherit">${money(f.received)}</a></td>
@@ -1318,6 +1361,18 @@ function renderBudget(main) {
   const cfs = $('#clearFundSearch');
   if (cfs) cfs.onclick = () => { fundSearch = ''; render(); };
   const rv = $('#reviewBtn'); if (rv) rv.onclick = () => { flagPanel = flagPanel ? null : 'review'; render(); };
+  // Undo (W4): the newest month may be removed while it is future and empty.
+  // pop() is correct only because the removable month is by definition the last.
+  const rmMonth = $('#rmFutureMonth');
+  if (rmMonth) rmMonth.onclick = () => {
+    if (!confirm(`Remove ${monthLabel(month.id)}? Nothing has been entered in it.`)) return;
+    data.months.pop();
+    currentMonthId = data.months[data.months.length - 1].id;
+    flagPanel = null;
+    closeFundPanel(); // an open panel's indices would resolve against the wrong month
+    markDirty(); render();
+    toast(`${monthLabel(month.id)} removed.`);
+  };
   main.onclick = (e) => {
     // Setup checklist: navigate, mark, dismiss, or celebrate-and-close.
     const clGo = e.target.closest('[data-cl-go]');
@@ -1423,7 +1478,13 @@ function renderBudget(main) {
       const f = month.income[Number(el.dataset.inc)];
       const v = parseMoney(el.value);
       if (!isNaN(v)) {
-        if (el.dataset.k === 'planned' && f.rule) f.rule = null; // manual override clears auto rule
+        if (el.dataset.k === 'planned' && f.rule) {
+          // Disconnecting a paycheck-driven fund must be said out loud (W2d) —
+          // the silent version cost real money before it was caught.
+          const wasChecks = f.rule.type === 'checks' && (f.group || 'bonus') === 'standard';
+          f.rule = null; // manual override clears auto rule
+          if (wasChecks) toast(`"${f.fund}" planned is now set by hand — open the fund to reconnect it to your paycheck numbers.`);
+        }
         f[el.dataset.k] = v;
         recalcRules(month); markDirty();
       }
@@ -1489,10 +1550,15 @@ function renderTransactions(main) {
     </tr></thead><tbody>`;
   for (const { t, i } of list) {
     const bad = !known.has(normFund(t.fund)) || !normFund(t.fund);
+    // W1: a positive amount on an expense fund is money flowing INTO the
+    // envelope (a refund shape). Legit refunds get a quiet accurate chip;
+    // a missing minus sign gets found. Transfers and income funds never marked.
+    const moneyIn = t.amount > 0.004 && !t.isTransfer && isExpenseFund(month, t.fund);
     html += `<tr>
       <td><input class="inline-text inline-date" data-tx="${i}" data-k="date" value="${t.date ? fmtDate(t.date) : ''}" placeholder="m/d/yy"></td>
       <td><input class="inline-text" data-tx="${i}" data-k="vendor" value="${esc(t.vendor)}"></td>
-      <td><input class="money" data-tx="${i}" data-k="amount" value="${money(t.amount)}"></td>
+      <td><input class="money" data-tx="${i}" data-k="amount" value="${money(t.amount)}">${moneyIn
+        ? '<span class="rule-chip chip-warn" title="This positive amount adds money to the fund — a refund does that. If it was spending, it needs a minus sign.">money in</span>' : ''}</td>
       <td><select class="inline ${bad ? 'missing' : ''}" data-tx="${i}" data-k="fund">${fundOptions(month, t.fund, lmap)}</select>
         ${bad && t.fund ? `<div class="fund-note">was: ${esc(t.fund)}</div>` : ''}</td>
       <td><input class="inline-text" data-tx="${i}" data-k="description" value="${esc(t.description || '')}"></td>
@@ -1521,21 +1587,64 @@ function renderTransactions(main) {
   const cf = $('#clearFilter');
   if (cf) cf.onclick = () => { txFundFilter = ''; render(); };
 
+  // W5: the first edit to an amount/fund on a transfer leg each render warns
+  // that the other half won't follow (the pair is matched, never linked).
+  let warnedTransferEdit = false;
+  // W1: the entry-time half of the warning — the row chip is the persistent half.
+  const warnMoneyIn = (t) =>
+    toast('+' + money(t.amount) + ` was added TO "${t.fund}" as money in. Spending is entered with a minus sign (-50); money in like a refund stays positive.`);
   main.onchange = (e) => {
     const el = e.target;
     if (!el.matches('[data-tx]')) return;
     const t = month.transactions[Number(el.dataset.tx)];
     const k = el.dataset.k;
+    if (t.isTransfer && (k === 'amount' || k === 'fund') && !warnedTransferEdit) {
+      warnedTransferEdit = true;
+      toast("This is one half of a transfer — the other half won't change.");
+    }
     if (k === 'amount') {
       const v = parseMoney(el.value);
-      if (!isNaN(v)) t.amount = v;
+      if (!isNaN(v)) {
+        t.amount = v;
+        if (v > 0.004 && !t.isTransfer && isExpenseFund(month, t.fund)) warnMoneyIn(t);
+      }
     } else if (k === 'date') {
-      const m = el.value.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
-      if (m) {
-        let y = Number(m[3]); if (y < 100) y += 2000;
-        t.date = `${y}-${String(m[1]).padStart(2, '0')}-${String(m[2]).padStart(2, '0')}`;
-      } else if (!el.value.trim()) t.date = null;
-    } else t[k] = el.value;
+      const raw = el.value.trim();
+      if (!raw) t.date = null;
+      else {
+        const iso = parseUserDate(raw);
+        if (!iso) {
+          // W9: keep the typed text in the field, mark it, store nothing —
+          // a re-render (which would erase the evidence) waits for valid input.
+          el.classList.add('missing');
+          el.title = 'Enter the date as m/d/yy';
+          return;
+        }
+        if (iso.slice(0, 7) !== month.id) {
+          // W6: a date in another month moves the transaction there — or reverts.
+          // A cross-month date must never sit in the wrong month's math.
+          const targetId = iso.slice(0, 7);
+          const target = data.months.find((mm) => mm.id === targetId);
+          if (!target) {
+            toast(`${monthLabel(targetId)} doesn't exist yet, so the date must stay inside ${monthLabel(month.id)}.`);
+            render(); return;
+          }
+          let msg = `Move this transaction to ${monthLabel(targetId)}?`;
+          if (t.isTransfer) msg += ` This is half of a transfer — the other half stays in ${monthLabel(month.id)}.`;
+          if (!confirm(msg)) { render(); return; }
+          t.date = iso;
+          month.transactions.splice(Number(el.dataset.tx), 1);
+          target.transactions.push(t);
+          markDirty(); render();
+          toast(`Moved to ${monthLabel(targetId)}.`);
+          return;
+        }
+        t.date = iso;
+      }
+    } else {
+      t[k] = el.value;
+      if (k === 'fund' && t.amount > 0.004 && !t.isTransfer && isExpenseFund(month, t.fund)) warnMoneyIn(t);
+    }
     markDirty(); render();
   };
   main.onclick = (e) => {
@@ -2585,6 +2694,83 @@ function renderGarden(main) {
   if (!data.settings.gardenIntroSeen) showGardenIntro();
 }
 
+/* ---------------- Restore / import (W3) ----------------
+ * The recovery net: pick a rolling backup (or an exported file) and swap it in.
+ * Main validates and keeps the current file as a budget-prerestore-* backup
+ * first; on success the app reloads so boot re-runs migrations on the restored
+ * data. The pending debounced save is cancelled before reloading — otherwise
+ * beforeunload would write the abandoned in-memory state over the restore.
+ */
+
+// Backup stamps are UTC (the saver uses toISOString) — show them as local time.
+function fmtBackupStamp(stamp) {
+  const m = String(stamp).match(/(\d{4})-(\d{2})-(\d{2})-(\d{2})-(\d{2})$/);
+  if (!m) return stamp;
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]));
+  const dd = `${MONTH_SHORT[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
+  let h = d.getHours();
+  const ap = h >= 12 ? 'PM' : 'AM';
+  h = h % 12 || 12;
+  return `${dd} — ${h}:${String(d.getMinutes()).padStart(2, '0')} ${ap}`;
+}
+
+function fmtBytes(n) {
+  return n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
+}
+
+// The user is deliberately abandoning the in-memory state — a pending save
+// must not land after the restored file is written (see block comment above).
+function reloadIntoRestoredData() {
+  clearTimeout(saveTimer); saveTimer = null;
+  location.reload();
+}
+
+async function showRestoreModal() {
+  const backups = await window.budgetAPI.listBackups();
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal" style="width:480px">
+      <h2>Restore your data</h2>
+      <p class="muted">Pick a backup to go back to, or bring in a file you exported.
+        Your current data is saved as a backup first, then replaced, and the app reloads.</p>
+      ${backups.length ? `<div class="restore-list">
+        ${backups.map((b) => `<div class="restore-row">
+          <span>${esc(fmtBackupStamp(b.stamp))}${b.stamp.startsWith('prerestore-') ? ' <span class="muted">· saved before a restore</span>' : ''}</span>
+          <span class="muted">${fmtBytes(b.bytes)}</span>
+          <button class="btn btn-sm" data-restore="${esc(b.name)}">Restore</button>
+        </div>`).join('')}
+      </div>` : `<p class="muted">No backups yet — they're written automatically as you make changes.</p>`}
+      <div class="modal-row" style="margin-top:12px">
+        <button class="btn" id="rstImport">Choose exported file…</button>
+      </div>
+      <div class="modal-err" id="rstErr"></div>
+      <div class="modal-actions"><button class="btn" id="rstCancel">Cancel</button></div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  overlay.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+  $('#rstCancel', overlay).onclick = close;
+  const err = $('#rstErr', overlay);
+  overlay.onclick = (e) => {
+    const btn = e.target.closest('[data-restore]');
+    if (!btn) return;
+    const b = backups.find((x) => x.name === btn.dataset.restore);
+    if (!b) return;
+    if (!confirm(`Replace your current data with the backup from ${fmtBackupStamp(b.stamp)}?\n\nYour current data is saved as a backup first, then the app reloads.`)) return;
+    window.budgetAPI.restoreBackup(b.name).then((res) => {
+      if (res === true) reloadIntoRestoredData();
+      else err.textContent = `Couldn't restore: ${res}`;
+    });
+  };
+  $('#rstImport', overlay).onclick = async () => {
+    const res = await window.budgetAPI.importDataFile();
+    if (res === true) reloadIntoRestoredData();
+    else if (typeof res === 'string') err.textContent = `Couldn't import: ${res}`;
+  };
+}
+
 /* ---------------- Settings view ---------------- */
 function renderSettings(main) {
   const month = curMonth();
@@ -2634,6 +2820,8 @@ function renderSettings(main) {
             <button class="btn btn-sm" id="revealBtn">Show in folder</button></div>
           <div class="field-row"><label>Export a copy of all data</label>
             <button class="btn btn-sm" id="exportBtn">Export JSON…</button></div>
+          <div class="field-row"><label>Restore from a backup</label>
+            <button class="btn btn-sm" id="restoreBtn">Restore…</button></div>
         </div></div>
     </div>`;
 
@@ -2691,6 +2879,7 @@ function renderSettings(main) {
   const dr = $('#dismissRetype');
   if (dr) dr.onclick = () => { delete data.settings.lastRetype; markDirty(); renderSettings(main); };
   $('#revealBtn').onclick = () => window.budgetAPI.revealData();
+  $('#restoreBtn').onclick = () => showRestoreModal();
   $('#exportBtn').onclick = async () => { if (await window.budgetAPI.exportData(data)) toast('Exported.'); };
 }
 
@@ -2716,6 +2905,9 @@ function startNextMonth() {
 function showMonthCloseWorkflow(last, nid) {
   const comp = computeMonth(last);
   const s = comp.summary;
+  // Guard (W4): "closing" a month that hasn't even started is almost always a
+  // slip of the mouse — say so plainly before another future month is created.
+  const isFutureClose = last.id > todayISO().slice(0, 7);
   const flags = fundFlags(last, comp, todayISO());
   const attList = flags.filter((x) => x.attention);
   const offList = flags.filter((x) => x.offset);
@@ -2807,9 +2999,12 @@ function showMonthCloseWorkflow(last, nid) {
         ${attList.map((x) => li(x, x.attention === 'exceeded' ? `over by <span class="neg">${money(-x.leftover)}</span>` : 'off pace')).join('')}</ul>` : ''}
       ${offList.length ? `<p style="margin:10px 0 4px"><b>${icon('move')} Available to move (${offList.length})</b></p><ul class="modal-list">
         ${offList.map((x, i) => li(x, `<span class="pos">${money(x.leftover)}</span> free — <a href="#" data-wf-xfer="${esc(x.fund)}">transfer it</a>`)).join('')}</ul>` : ''}
+      ${isFutureClose ? `<p class="modal-warn">${monthLabel(last.id)} hasn't started yet —
+        creating ${monthLabel(nid)} now is probably not what you want.</p>` : ''}
       <div class="modal-actions">
         <button class="btn" id="wfCancel">Cancel</button>
-        <button class="btn btn-accent" id="wfGo">${attList.length || offList.length ? `Start ${monthLabel(nid)} anyway` : `Start ${monthLabel(nid)}`}</button>
+        <button class="btn btn-accent" id="wfGo">${isFutureClose ? `Create ${monthLabel(nid)} anyway`
+          : attList.length || offList.length ? `Start ${monthLabel(nid)} anyway` : `Start ${monthLabel(nid)}`}</button>
       </div>
     </div>`;
   document.body.appendChild(overlay);

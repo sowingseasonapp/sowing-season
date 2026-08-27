@@ -30,6 +30,27 @@ const BLANK = () => ({
 // Tolerate a UTF-8 BOM — some editors and PowerShell add one, and JSON.parse chokes on it.
 const parseJson = (text) => JSON.parse(text.charCodeAt(0) === 0xFEFF ? text.slice(1) : text);
 
+// Valid JSON isn't necessarily budget data — a hand-edited file or some other
+// app's JSON must not sail into the renderer and TypeError in the migrations.
+// Shared by loadData and the restore/import handlers.
+const looksLikeBudget = (parsed) => !!parsed && Array.isArray(parsed.months);
+
+// Replace the data file with restored/imported content: validate it, keep the
+// current file as a backup first, then write atomically (tmp + rename).
+// Throws with a plain message on any failure; callers return err.message.
+function applyRestoredData(json) {
+  const parsed = parseJson(json);
+  if (!looksLikeBudget(parsed)) throw new Error("that file isn't budget data (it has no months in it)");
+  fs.mkdirSync(BACKUP_DIR(), { recursive: true });
+  if (fs.existsSync(DATA_FILE())) {
+    const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 16);
+    fs.copyFileSync(DATA_FILE(), path.join(BACKUP_DIR(), `budget-prerestore-${stamp}.json`));
+  }
+  const tmp = DATA_FILE() + '.tmp';
+  fs.writeFileSync(tmp, json);
+  fs.renameSync(tmp, DATA_FILE());
+}
+
 function loadData() {
   const file = DATA_FILE();
   if (!fs.existsSync(file)) return BLANK(); // first run → onboarding wizard
@@ -154,6 +175,44 @@ app.whenReady().then(() => {
   ipcMain.handle('shell:open-external', (_e, url) => {
     if (typeof url === 'string' && EXTERNAL_URL_OK.test(url)) shell.openExternal(url);
     return true;
+  });
+  // Recovery (W3): list the rolling backups, restore one, or import a file the
+  // user exported. Restore/import return true, or an error message string.
+  ipcMain.handle('backups:list', () => {
+    try {
+      if (!fs.existsSync(BACKUP_DIR())) return [];
+      return fs.readdirSync(BACKUP_DIR())
+        .filter((f) => /^budget-[\w-]+\.json$/.test(f))
+        .sort().reverse()
+        .map((name) => ({
+          name,
+          stamp: name.replace(/^budget-|\.json$/g, ''),
+          bytes: fs.statSync(path.join(BACKUP_DIR(), name)).size,
+        }));
+    } catch { return []; }
+  });
+  ipcMain.handle('data:restore', (_e, name) => {
+    try {
+      // The name must be one of the saver's own files, resolved inside the
+      // backups folder — never a path the renderer composed.
+      if (typeof name !== 'string' || !/^budget-[\w-]+\.json$/.test(name)) throw new Error('not a backup file name');
+      const file = path.join(BACKUP_DIR(), name);
+      if (path.dirname(path.resolve(file)) !== path.resolve(BACKUP_DIR())) throw new Error('not a backup file name');
+      applyRestoredData(fs.readFileSync(file, 'utf8'));
+      return true;
+    } catch (err) { return err.message; }
+  });
+  ipcMain.handle('data:import-file', async () => {
+    const res = await dialog.showOpenDialog({
+      title: 'Choose an exported budget file',
+      filters: [{ name: 'JSON', extensions: ['json'] }],
+      properties: ['openFile'],
+    });
+    if (res.canceled || !res.filePaths.length) return false;
+    try {
+      applyRestoredData(fs.readFileSync(res.filePaths[0], 'utf8'));
+      return true;
+    } catch (err) { return err.message; }
   });
   ipcMain.handle('data:export', async (_e, data) => {
     const res = await dialog.showSaveDialog({
