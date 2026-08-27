@@ -9,6 +9,10 @@ function el(tag, attrs = {}, children = []) {
   return e;
 }
 const fmtUSD = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
+// barList labels are user text (category names) going into innerHTML — escape
+// them (same 5-entity map as app.js). Other chart labels are app-generated.
+const esc = (s) =>
+  String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const fmtFull = (v) => fmtUSD.format(v);
 // Negative ticks put the sign before the $ (lineArea can dip below zero).
 const fmtTick = (v) => (v < 0 ? '-' : '') +
@@ -215,7 +219,7 @@ export function barList({ rows, color }) {
     line.className = 'viz-bl-row';
     const pct = Math.max(0.5, (r.value / max) * 100);
     line.innerHTML = `
-      <span class="viz-bl-label" title="${r.label}">${r.label}</span>
+      <span class="viz-bl-label" title="${esc(r.label)}">${esc(r.label)}</span>
       <span class="viz-bl-track"><span class="viz-bl-bar" style="width:${pct}%;background:${color}"></span></span>
       <span class="viz-bl-val">${fmtFull(r.value)}</span>`;
     wrap.appendChild(line);

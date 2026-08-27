@@ -8,7 +8,7 @@ import { gardenState, incomeCheckIns, stonesLaidIn, sownStreak } from './garden.
 import { sceneSvg, stripSvg, plantSprite, butterflySymbol, PALETTE_TOKENS, GARDEN_MILESTONE_LABELS } from './garden-scene.js';
 import {
   parseBankFile, buildVendorMap, suggestFund, findDuplicateScored,
-  suggestStarterFunds, starterFundFor,
+  suggestStarterFunds, starterFundFor, normVendor,
 } from './csv.js';
 import { groupedBars, barList, lineArea } from './charts.js';
 import { spotTx, spotBudget, spotImport, spotAum } from './spots.js';
@@ -37,6 +37,7 @@ let importState = null;
 let flagPanel = null; // 'att' | 'off' | null — which flag list is expanded on the Budget page
 let aumLogOpen = false; // AUM change-log section, collapsed by default
 let budgetFocus = null; // { fund } — arriving from the Garden: open its category, highlight the row
+let appVersion = ''; // package.json version via IPC (U3); '' in the dev harness
 
 /* ---------------- persistence ---------------- */
 let saveTimer = null;
@@ -65,6 +66,35 @@ window.addEventListener('beforeunload', () => {
     if (window.budgetAPI.saveDataSync) window.budgetAPI.saveDataSync(data);
     else window.budgetAPI.saveData(data);
   }
+});
+
+// U2: a file dropped anywhere on the window must never navigate the app away
+// (main blocks will-navigate as the backstop; this stops the default and says
+// where the importer lives).
+window.addEventListener('dragover', (e) => e.preventDefault());
+window.addEventListener('drop', (e) => {
+  e.preventDefault();
+  toast('To bring in a bank file, use Import → Choose CSV file.');
+});
+
+// U4: an uncaught renderer error must leave a trace — console for the stack,
+// one calm toast for the user. Rate-limited, never throws, never render()s.
+let lastErrToastAt = 0;
+function surfaceUncaught(message) {
+  try {
+    const now = Date.now();
+    if (now - lastErrToastAt < 10000) return;
+    lastErrToastAt = now;
+    toast(`Something went wrong: ${message}. Your data is safe — if this keeps happening, use Send feedback.`);
+  } catch { /* the error surface itself must never throw */ }
+}
+window.addEventListener('error', (e) => {
+  console.error(e.error || e.message);
+  surfaceUncaught(e.message || 'unknown error');
+});
+window.addEventListener('unhandledrejection', (e) => {
+  console.error(e.reason);
+  surfaceUncaught((e.reason && e.reason.message) || String(e.reason));
 });
 
 /* ---------------- helpers ---------------- */
@@ -285,7 +315,12 @@ function showTransferModal(presetFrom = '', onDone = null, presetTo = '') {
   document.body.appendChild(overlay);
   const close = () => overlay.remove();
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
-  overlay.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+  overlay.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') close();
+    // Enter submits (U17) — parity with the Add-fund dialog. Not when a button
+    // has focus: Enter there should press that button.
+    if (e.key === 'Enter' && e.target.tagName !== 'BUTTON') $('#tGo', overlay).click();
+  });
   $('#tCancel', overlay).onclick = close;
   (!$('#tFrom', overlay).value ? $('#tFrom', overlay) : !$('#tTo', overlay).value ? $('#tTo', overlay) : $('#tAmt', overlay)).focus();
   $('#tGo', overlay).onclick = () => {
@@ -1293,8 +1328,7 @@ function renderBudget(main) {
       key: accKey,
       activity: 'Received',
       kind: 'income',
-      hint: esc(g.hint),
-      title: `<span title="${esc(g.hint)}">${g.title}</span>`,
+      title: `<span title="${esc(g.hint)}">${g.title}</span><span class="help-bubble" title="${esc(g.hint)}">?</span>`,
       note: `${all.length} fund${all.length === 1 ? '' : 's'}`,
       open,
       totals: gt,
@@ -1596,6 +1630,10 @@ function renderTransactions(main) {
     month.transactions.push({ id: newTxId(), date: defaultDateFor(month), vendor: '', amount: 0, fund: '', description: '', account: '' });
     txSearch = ''; txFundFilter = '';
     markDirty(); render();
+    // U18: the new row sorts to the top for today's date — put the cursor in it
+    // so there's no hunting for where to type.
+    const nv = $('#main').querySelector(`[data-tx="${month.transactions.length - 1}"][data-k="vendor"]`);
+    if (nv) nv.focus();
   };
   $('#txTransferBtn').onclick = () => showTransferModal();
   const acctSel = $('#txAccount');
@@ -1995,13 +2033,17 @@ function renderImport(main) {
 /* ---------------- Reports view ---------------- */
 function renderReports(main) {
   const comps = data.months.map((m) => ({ m, c: computeMonth(m) }));
+  // U16: once the timeline spans two calendar years, "Dec" alone is ambiguous —
+  // qualify every column/chart label with the year ("Dec '25").
+  const multiYear = new Set(data.months.map((m) => m.id.slice(0, 4))).size > 1;
+  const shortLabel = (m) => m.label.slice(0, 3) + (multiYear ? ` '${m.id.slice(2, 4)}` : '');
   let html = `<h1 class="view-title">Year Overview</h1><p class="sub">What actually came in and went out, month by month. Pick a month from the Month menu in the sidebar to see its details.</p>`;
 
   html += `<div class="section"><div class="section-head"><h2>Income vs spending</h2></div><div id="chartIncome"></div></div>`;
   html += `<div class="section"><div class="section-head"><h2>Where the money went (year to date)</h2></div><div id="chartCats"></div></div>`;
 
   html += `<div class="section report-wrap"><table class="grid compact"><thead><tr><th style="text-align:left">Category</th>`;
-  for (const { m } of comps) html += `<th>${m.label.slice(0, 3)}</th>`;
+  for (const { m } of comps) html += `<th>${shortLabel(m)}</th>`;
   html += `<th>Total</th></tr></thead><tbody>`;
 
   // Income row
@@ -2069,7 +2111,7 @@ function renderReports(main) {
   main.innerHTML = html;
 
   // ---- mount charts ----
-  const labels = comps.map(({ m }) => m.label.slice(0, 3));
+  const labels = comps.map(({ m }) => shortLabel(m));
   $('#chartIncome').appendChild(groupedBars({
     labels,
     series: [
@@ -2097,7 +2139,7 @@ function renderReports(main) {
     for (const { m, c } of comps) {
       for (const cat of c.categories) {
         const f = cat.funds.find((x) => normFund(x.fund) === normFund(sel));
-        if (f) { months.push(m.label.slice(0, 3)); planned.push(Math.max(0, f.planned)); spent.push(Math.abs(f.expensed)); }
+        if (f) { months.push(shortLabel(m)); planned.push(Math.max(0, f.planned)); spent.push(Math.abs(f.expensed)); }
       }
     }
     $('#chartFund').appendChild(groupedBars({
@@ -2883,6 +2925,7 @@ function renderSettings(main) {
             <button class="btn btn-sm" id="exportBtn">Export JSON…</button></div>
           <div class="field-row"><label>Restore from a backup</label>
             <button class="btn btn-sm" id="restoreBtn">Restore…</button></div>
+          ${appVersion ? `<p class="muted" style="font-size:.8rem;margin:8px 0 0">Sowing Season v${esc(appVersion)}</p>` : ''}
         </div></div>
     </div>`;
 
@@ -2930,7 +2973,14 @@ function renderSettings(main) {
   if (dr) dr.onclick = () => { delete data.settings.lastRetype; markDirty(); renderSettings(main); };
   $('#revealBtn').onclick = () => window.budgetAPI.revealData();
   $('#restoreBtn').onclick = () => showRestoreModal();
-  $('#exportBtn').onclick = async () => { if (await window.budgetAPI.exportData(data)) toast('Exported.'); };
+  $('#exportBtn').onclick = async () => {
+    try {
+      const res = await window.budgetAPI.exportData(data);
+      if (res === true) toast('Exported.');
+      else if (typeof res === 'string') toast(`Couldn't export: ${res}`);
+      // false = the user cancelled the dialog — nothing to say
+    } catch (err) { toast(`Couldn't export: ${err.message}`); }
+  };
 }
 
 /* ---------------- New month ---------------- */
@@ -3318,11 +3368,21 @@ function wzFundsHtml() {
 function wzImportableRecords() {
   const nowMonth = todayISO().slice(0, 7);
   const out = [];
+  // Dedupe ACROSS files (U11): "empty by construction" only covers stored data —
+  // the same export picked twice, or two overlapping exports of one account,
+  // would double every transaction on day one. First occurrence wins; the
+  // Finish-step count and wzFinish both call this, so they always agree.
+  const seen = new Set();
   for (const f of wizard.files) {
+    const idTrusted = !!f.report?.externalIdTrusted;
     for (const rec of f.records) {
-      if (rec.date.slice(0, 7) === nowMonth && !rec.isCardPayment) {
-        out.push({ rec, idTrusted: !!f.report?.externalIdTrusted });
-      }
+      if (rec.date.slice(0, 7) !== nowMonth || rec.isCardPayment) continue;
+      const key = idTrusted && rec.externalId
+        ? 'id|' + rec.account + '|' + rec.externalId
+        : rec.date + '|' + rec.amountCents + '|' + normVendor(rec.vendor) + '|' + rec.account;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ rec, idTrusted });
     }
   }
   return out;
@@ -3636,11 +3696,18 @@ function enterApp() {
   $('#newMonthBtn').onclick = startNextMonth;
   $$('.nav-btn').forEach((b) => b.onclick = () => { view = b.dataset.view; txSearch = ''; txFundFilter = ''; txAccountFilter = ''; render(); });
   $('#supportLink').onclick = () => window.budgetAPI.openExternal(KOFI_URL);
-  $('#feedbackLink').onclick = () => window.budgetAPI.openExternal(FEEDBACK_MAILTO);
+  // The draft carries the build version (U3) — composed at click time so a
+  // mid-session update (future) can't stamp a stale number.
+  $('#feedbackLink').onclick = () => window.budgetAPI.openExternal(
+    FEEDBACK_MAILTO + '&body=' + encodeURIComponent('\n\n—\nApp version: ' + (appVersion || 'dev')));
   render();
 }
 
 async function boot() {
+  // U3: fetched once — Settings shows it, and Send feedback stamps it into the
+  // draft so tester reports name the build they came from.
+  try { if (window.budgetAPI.getVersion) appVersion = await window.budgetAPI.getVersion(); }
+  catch { /* dev harness has no main process */ }
   data = await window.budgetAPI.loadData();
   let migrated = migrateV2(data) | migrateV3(data) | migrateV4(data);
   const v5 = migrateV5(data);

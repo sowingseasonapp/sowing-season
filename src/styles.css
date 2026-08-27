@@ -519,6 +519,14 @@ span.neg { color: var(--red); }
   vertical-align: 4px; margin-left: 2px;
 }
 .help-btn:hover { background: var(--accent); border-color: var(--accent); color: #fff; }
+/* Inert "?" beside a section title (U8) — same family as .help-btn, but a span:
+   clicking it just toggles the accordion like the rest of the header. */
+.help-bubble {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 14px; height: 14px; margin-left: 6px; border-radius: 50%;
+  border: 1px solid var(--line); color: var(--ink-soft);
+  font-size: .6rem; font-weight: 600; line-height: 1; cursor: help;
+}
 .walkthrough { width: 560px; max-height: 88vh; overflow-y: auto; position: relative; }
 .walkthrough .wt-close { position: absolute; top: 10px; right: 12px; font-size: .85rem; }
 .walkthrough .wt-media { margin: 2px 0 12px; min-height: 24px; }

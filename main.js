@@ -7,6 +7,17 @@ const { migrateLegacyData, LEGACY_APP_NAME } = require('./legacy-data');
 // capture) so the real %APPDATA%\Sowing Season file is never touched.
 if (process.env.BUDGET_DATA_DIR) app.setPath('userData', process.env.BUDGET_DATA_DIR);
 
+// One instance only (U1): two windows share the data file with independent
+// in-memory copies, and whichever saves last silently wins. A second launch
+// fronts the existing window instead.
+let mainWin = null;
+if (!app.requestSingleInstanceLock()) { app.quit(); }
+else {
+  app.on('second-instance', () => {
+    if (mainWin) { if (mainWin.isMinimized()) mainWin.restore(); mainWin.focus(); }
+  });
+}
+
 const DATA_DIR = () => app.getPath('userData');
 const DATA_FILE = () => path.join(DATA_DIR(), 'budget-data.json');
 const BACKUP_DIR = () => path.join(DATA_DIR(), 'backups');
@@ -55,7 +66,12 @@ function loadData() {
   const file = DATA_FILE();
   if (!fs.existsSync(file)) return BLANK(); // first run → onboarding wizard
   try {
-    return parseJson(fs.readFileSync(file, 'utf8'));
+    // Parse AND validate the shape (U6): a valid-JSON-but-not-a-budget file
+    // (hand-edited, or another app's JSON saved over it) must take the same
+    // backup ladder as corrupt JSON, not TypeError its way to a white screen.
+    const parsed = parseJson(fs.readFileSync(file, 'utf8'));
+    if (!looksLikeBudget(parsed)) throw new Error('not a budget data file');
+    return parsed;
   } catch (err) {
     // Unreadable data file: fall back to the newest good backup rather than
     // starting empty, and keep the bad file for inspection.
@@ -65,6 +81,7 @@ function loadData() {
     for (const b of backups) {
       try {
         const data = parseJson(fs.readFileSync(path.join(BACKUP_DIR(), b), 'utf8'));
+        if (!looksLikeBudget(data)) throw new Error('not a budget data file');
         fs.copyFileSync(file, file + '.corrupt');
         fs.writeFileSync(file, JSON.stringify(data));
         dialog.showErrorBox('Budget data recovered',
@@ -90,15 +107,21 @@ function saveData(data) {
   const tmp = file + '.tmp';
   fs.writeFileSync(tmp, json);
   fs.renameSync(tmp, file);
-  // Rolling backup at most once every 10 minutes.
+  // Rolling backup at most once every 10 minutes. The main file is already
+  // safely renamed by here — a failing backup write (folder locked by AV or
+  // OneDrive) must not make the whole save look failed (U9).
   const now = Date.now();
   if (now - lastBackupAt > 10 * 60 * 1000) {
     lastBackupAt = now;
-    fs.mkdirSync(BACKUP_DIR(), { recursive: true });
-    const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 16);
-    fs.writeFileSync(path.join(BACKUP_DIR(), `budget-${stamp}.json`), json);
-    const old = fs.readdirSync(BACKUP_DIR()).filter((f) => f.endsWith('.json')).sort();
-    while (old.length > MAX_BACKUPS) fs.unlinkSync(path.join(BACKUP_DIR(), old.shift()));
+    try {
+      fs.mkdirSync(BACKUP_DIR(), { recursive: true });
+      const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 16);
+      fs.writeFileSync(path.join(BACKUP_DIR(), `budget-${stamp}.json`), json);
+      const old = fs.readdirSync(BACKUP_DIR()).filter((f) => f.endsWith('.json')).sort();
+      while (old.length > MAX_BACKUPS) fs.unlinkSync(path.join(BACKUP_DIR(), old.shift()));
+    } catch (err) {
+      console.warn('Backup write failed (data itself saved):', err.message);
+    }
   }
   return true;
 }
@@ -120,6 +143,12 @@ function createWindow() {
     },
   });
   win.loadFile(path.join(__dirname, 'src', 'index.html'));
+  // Electron's default for a dropped file is to NAVIGATE to it, replacing the
+  // app with a file view and losing any unsaved debounce window (U2). The app
+  // never legitimately navigates or opens child windows — block both.
+  win.webContents.on('will-navigate', (e) => e.preventDefault());
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  mainWin = win;
 }
 
 // The app was "Family Budget" until 2026-08-23. Its data folder followed the
@@ -169,6 +198,9 @@ app.whenReady().then(() => {
     return true;
   });
   ipcMain.handle('data:reveal', () => { shell.showItemInFolder(DATA_FILE()); return true; });
+  // Which build is this? Reads package.json version — bump it per build so
+  // tester feedback can name the version it came from (U3).
+  ipcMain.handle('app:version', () => app.getVersion());
   // System-browser / mail-client links. https:// or mailto: only —
   // never pass arbitrary strings or other schemes to openExternal.
   const EXTERNAL_URL_OK = /^(?:https:\/\/|mailto:)[^\s]+$/i;
@@ -221,8 +253,12 @@ app.whenReady().then(() => {
       filters: [{ name: 'JSON', extensions: ['json'] }],
     });
     if (res.canceled || !res.filePath) return false;
-    fs.writeFileSync(res.filePath, JSON.stringify(data, null, 1));
-    return true;
+    // A blocked write (OneDrive-protected Documents, Controlled Folder Access,
+    // read-only USB) must come back as a message, not an unhandled rejection (U5).
+    try {
+      fs.writeFileSync(res.filePath, JSON.stringify(data, null, 1));
+      return true;
+    } catch (err) { return err.message; }
   });
   createWindow();
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });

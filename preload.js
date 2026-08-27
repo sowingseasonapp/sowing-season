@@ -13,4 +13,5 @@ contextBridge.exposeInMainWorld('budgetAPI', {
   importDataFile: () => ipcRenderer.invoke('data:import-file'),
   exportData: (data) => ipcRenderer.invoke('data:export', data),
   openExternal: (url) => ipcRenderer.invoke('shell:open-external', url),
+  getVersion: () => ipcRenderer.invoke('app:version'),
 });
