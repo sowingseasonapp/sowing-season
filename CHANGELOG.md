@@ -9,6 +9,84 @@ so entries before that are dated by when the work happened, not by commit.
 
 ---
 
+## 2026-08-26 — Simplicity round (W1–W15) + pre-UAT hardening (U1–U24) · v1.0.1
+
+Implements `_cowork\proposal-simplicity.md` (approved 2026-08-26) and
+`_cowork\proposal-pre-uat.md` (the owner's decisions 2026-08-27) in the proposal's
+landing order. compute.js, garden*.js and src/csv/ untouched; all four suites
+green with zero fixture changes (1060 / 516 / 139 / 17). Data version stays 6.
+
+**Trust & recovery (Phase 1):**
+- **W3 Restore + Import**: `backups:list` / `data:restore` / `data:import-file`
+  IPC — names regex-validated AND resolved inside `backups/`, content validated
+  by `looksLikeBudget` (months array), the current file saved as
+  `budget-prerestore-*` first, atomic write. Settings → Data → Restore… modal
+  (UTC stamps shown as local time). **U12 trap**: the pending debounced save is
+  cleared before `location.reload()`, or `beforeunload` would write the
+  abandoned in-memory state over the just-restored file.
+- **W4 month guard + undo**: closing a month that hasn't started warns and the
+  button reads "Create X anyway"; the newest month is removable from Budget
+  while it's future+empty (pop() is safe only because of that three-condition
+  guard). U15: removal also closes the fund panel (stale indices).
+- **W1 sign warning (warn, never change)**: `isExpenseFund` helper; a positive
+  amount on an expense fund toasts at entry (amount OR fund branch) and carries
+  a persistent quiet `money in` chip. The typed sign is never altered.
+  Transfers and income funds are never marked; imported refunds chip-only.
+- **W2 paycheck disconnect**: the fund panel tells the truth when a Standard
+  fund's checks rule was cleared ("set by hand" + Reconnect button), the Budget
+  row carries a `set by hand` chip, switching income type no longer deletes the
+  checks config (orphaned entries are harmless), and both rule-clear sites
+  toast the disconnect.
+
+**Friction (Phase 2):** W5 transfer-pair delete (partner = same date/opposite
+amount/same note, complementary vendor preferred never required — renames don't
+rewrite vendor strings; higher index spliced first), plus a once-per-render edit
+warning on transfer legs. W6 cross-month date edits move the transaction after
+a confirm (or revert; nonexistent month → revert + toast). W7
+`renameFundEverywhere()` shared by Settings and a new panel Rename action.
+W8 "envelope"→"fund" outside the wizard (U20 stragglers included). W9 invalid
+date entry keeps the typed text with `missing` styling (U10: `parseUserDate`
+rejects impossible month/day and is now the single validator for both entry
+points). W10 month picker dims on AUM.
+
+**Polish (Phase 3):** W11 income ⊘ → `no tithe` chip (the glyph now has exactly
+one meaning), W12 nav "Import CSV" → "Import" (dev.html mirrored), W13
+Expand/Collapse label driven by allOpen, W15 empty Settings sub removed.
+W14 (styled confirms) deferred by decision.
+
+**Pre-UAT hardening:** U1 single-instance lock (verified: second exe launch
+fronts the first window). U2 will-navigate + window-open blocked in main,
+drag/drop guard + toast in the renderer. U3 `app:version` IPC — Settings shows
+the version and Send feedback appends it to the draft body. U4 global
+error/unhandledrejection surface (console + one rate-limited calm toast; never
+renders). U5 export failures toast plainly. U6 `loadData` validates shape via
+`looksLikeBudget` — a valid-JSON-but-wrong-shape file takes the backup ladder
+(verified on the packaged build: `.corrupt` copy + fresh start). U8 income
+hints behind a "?" `help-bubble` (copy relocated verbatim). U9 the rolling
+backup block can no longer fail the whole save. U11 wizard dedupes across
+files. U14 charts.js escapes category names. U16 year-qualified report labels
+("Dec '25"). U17 Enter submits the transfer dialog. U18 new tx row gets focus.
+
+**Distribution (U7, `_cowork\update-distribution-proposal.md` rev 2):**
+electron-builder NSIS one-click installer (`npm run dist` → `dist-installer/`),
+electron-updater in strictly-manual mode isolated in `updater.js` behind a
+capability flag (full on win32, check-only elsewhere; renderer never reads
+process.platform). appId `com.sowingseason.app` is permanent; productName must
+stay exactly "Sowing Season" (keys `%APPDATA%\Sowing Season`). budgetAPI is now
+**18 methods**. `npm run pack` still works — KEEP gained `updater.js` +
+`node_modules` (prune strips devDeps; asar grew 0.4 → 3.2 MB). RELEASING.md +
+TESTERS.md written. **Open blockers before any release/push**: GitHub
+owner/repo (OWNER_TBD in package.json + updater.js), and a history scrub —
+data/seed.json IS in the initial commit and redacted paths in three tools files'
+history (working tree scrubbed in U22/U23; history rewrite awaits the repo
+decision).
+
+**Traps hit this round:** the dist asar lock (Claude.exe handle) struck again —
+recovered via dist-tmp package → robocopy `/XF app.asar` → shared-write
+overwrite, SHA-256 + tree-count verified. PowerShell 5.1 `Get-Content`/
+`Set-Content` round-trips mojibake UTF-8 (dev.html was restored from git and
+re-edited with the proper tool) — never string-edit UTF-8 files via PS5.1.
+
 ## 2026-08-25 — App-wide watercolor pass: "moments + materials"
 
 Implements `_cowork\proposal-watercolor-app-wide.md` in full (Cowork proposal,
