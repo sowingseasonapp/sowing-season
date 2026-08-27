@@ -180,6 +180,11 @@ function renderShell() {
   selEl.innerHTML = data.months.map((m) =>
     `<option value="${m.id}" ${m.id === currentMonthId ? 'selected' : ''}>${monthLabel(m.id)}</option>`).join('');
   $$('.nav-btn').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
+  // AUM is one timeline — the picker doesn't drive it, so it dims there (W10).
+  // Still functional: switching month and then leaving AUM behaves as before.
+  const picker = $('.month-picker');
+  picker.classList.toggle('aum-independent', view === 'aum');
+  picker.title = view === 'aum' ? "AUM is one timeline — it doesn't follow the month picker." : '';
   $('.brand-label').textContent = data.settings.appName || 'Sowing Season';
 }
 function render() {
@@ -573,6 +578,7 @@ function renderFundPanel() {
           <h3>Actions</h3>
           <div class="panel-actions">
             <button class="btn btn-sm" id="pnlXfer">⇄ Transfer money</button>
+            <button class="btn btn-sm" id="pnlRename" title="Rename this fund in every month and all its transactions">Rename</button>
             <button class="btn btn-sm" id="pnlUp" ${pos <= 0 ? 'disabled' : ''}>↑ Move up</button>
             <button class="btn btn-sm" id="pnlDown" ${pos >= sibCount - 1 ? 'disabled' : ''}>↓ Move down</button>
             <button class="btn btn-sm btn-danger" id="pnlDel">✕ Remove fund</button>
@@ -712,6 +718,17 @@ function renderFundPanel() {
   }
 
   $('#pnlXfer', wrap).onclick = () => { closeFundPanel(); showTransferModal(f.fund); };
+  $('#pnlRename', wrap).onclick = () => {
+    promptName('Rename fund', 'New name', (nm) => {
+      if (nm === f.fund) return null; // nothing to do
+      const err = renameFundEverywhere(f.fund, nm);
+      if (err) return err;
+      // panelRef indexes are stable (the name changed in place); the checks and
+      // tithe keys moved, so recompute the rules before repainting.
+      recalcRules(month); markDirty(); render();
+      return null;
+    }, { okLabel: 'Rename', initial: f.fund });
+  };
   $('#pnlUp', wrap).onclick = () => movePanelFund(-1);
   $('#pnlDown', wrap).onclick = () => movePanelFund(1);
   $('#pnlDel', wrap).onclick = () => {
@@ -781,7 +798,7 @@ function showAddFund(preset = {}) {
         <label class="type-opt" id="afInc" title="Money coming in — paychecks, gifts, reimbursements.">
           <input type="radio" name="afSide" value="income" ${side0 === 'income' ? 'checked' : ''}> Income
         </label>
-        <label class="type-opt" id="afExp" title="Money going out — a budget envelope in one of your categories.">
+        <label class="type-opt" id="afExp" title="Money going out — a fund in one of your categories.">
           <input type="radio" name="afSide" value="expense" ${side0 === 'expense' ? 'checked' : ''}> Expense
         </label>
       </div>
@@ -1037,11 +1054,11 @@ function checklistHtml(month) {
   const list = data.settings.setupChecklist;
   if (!Array.isArray(list) || !list.length) return '';
   const labels = {
-    amounts: `Put a number in each envelope — how much does each one get in ${month.label}?`,
+    amounts: `Put a number in each fund — how much does each one get in ${month.label}?`,
     checks: 'Double-check your paycheck numbers',
     tithe: 'Set the before-tax check amount your giving is based on',
     import: 'Bring in your bank transactions',
-    unassigned: 'A few imported transactions need an envelope',
+    unassigned: 'A few imported transactions need a fund',
   };
   if (list.every((i) => i.done)) {
     return `<div class="section checklist">
@@ -1127,6 +1144,10 @@ function renderBudget(main) {
     }
   }
   const isOpen = (key) => (q ? true : openSet.has(key));
+  // W13: "Collapse all" only when every section really is open — a partial mix
+  // expands first, so the button always does what its label says.
+  const allKeys = ['inc:standard', 'inc:bonus', ...comp.categories.map((_, ci) => `cat:${ci}`)];
+  const allOpen = allKeys.every((k) => openSet.has(k));
 
   checklistAutoDetect(month, comp);
 
@@ -1159,7 +1180,7 @@ function renderBudget(main) {
       ${fundSearch ? `<button class="btn btn-sm" id="clearFundSearch">✕</button>` : ''}
       <button class="btn btn-sm" id="addFundBtn">+ Add fund</button>
       <button class="btn btn-sm" id="transferBtn" title="Move money from one fund to another">⇄ Transfer</button>
-      <button class="btn btn-sm" id="expandAllBtn" title="Expand or collapse every section">${openSet.size ? 'Collapse all' : 'Expand all'}</button>
+      <button class="btn btn-sm" id="expandAllBtn" title="Expand or collapse every section">${allOpen ? 'Collapse all' : 'Expand all'}</button>
       <div class="spacer"></div>
       ${reviewCount ? `<button class="btn btn-sm review-badge ${attList.length ? 'has-att' : 'all-good'} ${flagPanel ? 'active' : ''}" id="reviewBtn">
         ${attList.length ? icon('warn', 'needs attention', 'sm') : icon('move', '', 'sm')} Review · ${reviewCount}</button>` : '<span class="muted" style="font-size:.85rem">Nothing to review ✓</span>'}
@@ -1342,11 +1363,7 @@ function renderBudget(main) {
   $('#transferBtn').onclick = () => showTransferModal();
   $('#addFundBtn').onclick = () => showAddFund({ side: 'expense', ci: 0 });
   $('#expandAllBtn').onclick = () => {
-    if (openSet.size) openSet = new Set();
-    else {
-      openSet = new Set(['inc:standard', 'inc:bonus']);
-      comp.categories.forEach((_, ci) => openSet.add(`cat:${ci}`));
-    }
+    openSet = allOpen ? new Set() : new Set(allKeys);
     saveOpenState(month.id, openSet);
     render();
   };
@@ -1650,9 +1667,32 @@ function renderTransactions(main) {
   main.onclick = (e) => {
     const del = e.target.closest('[data-del-tx]');
     if (del) {
-      const t = month.transactions[Number(del.dataset.delTx)];
+      const idx = Number(del.dataset.delTx);
+      const t = month.transactions[idx];
+      if (t.isTransfer) {
+        // W5: a transfer is a matched pair — deleting one leg silently shifts
+        // the month's net. Find the partner (same date, opposite amount, same
+        // note; the complementary vendor is a preference, not a requirement —
+        // renames don't rewrite "Transfer to X" strings) and take both.
+        const cands = month.transactions
+          .map((x, j) => ({ x, j }))
+          .filter(({ x, j }) => j !== idx && x.isTransfer && x.date === t.date
+            && Math.abs(x.amount + t.amount) < 0.005 && (x.description || '') === (t.description || ''));
+        const compVendor = `Transfer ${t.amount < 0 ? 'from' : 'to'} ${t.fund}`;
+        const partner = cands.find(({ x }) => (x.vendor || '') === compVendor) || cands[0] || null;
+        if (partner) {
+          if (!confirm(`This is one half of a transfer — delete both halves?\n${fmtDate(t.date)} ${money(Math.abs(t.amount))}: ${t.amount < 0 ? t.fund : partner.x.fund} → ${t.amount < 0 ? partner.x.fund : t.fund}`)) return;
+          // Higher index first, or the second splice hits the wrong row.
+          const [hi, lo] = idx > partner.j ? [idx, partner.j] : [partner.j, idx];
+          month.transactions.splice(hi, 1);
+          month.transactions.splice(lo, 1);
+          markDirty(); render();
+          return;
+        }
+        // No partner found (already orphaned) — fall through to the plain confirm.
+      }
       if (confirm(`Delete: ${fmtDate(t.date)} ${t.vendor} ${money(t.amount)}?`)) {
-        month.transactions.splice(Number(del.dataset.delTx), 1);
+        month.transactions.splice(idx, 1);
         markDirty(); render();
       }
     }
@@ -2694,6 +2734,27 @@ function renderGarden(main) {
   if (!data.settings.gardenIntroSeen) showGardenIntro();
 }
 
+/* ---------------- Rename a fund (shared by Settings and the fund panel) ----------------
+ * Renames in every month — structure, transactions, and the checks key move
+ * together. Returns an error string (nothing changed) or null (renamed,
+ * markDirty done, toast shown). Callers re-render themselves.
+ */
+function renameFundEverywhere(from, to) {
+  if (!from || !to) return 'Pick a fund and type a new name.';
+  for (const m of data.months) {
+    if (canonicalFund(m, to) && normFund(to) !== normFund(from)) return `"${to}" already exists in ${monthLabel(m.id)}.`;
+  }
+  let nStruct = 0, nTx = 0;
+  for (const m of data.months) {
+    for (const f of m.income) if (normFund(f.fund) === normFund(from)) { f.fund = to; nStruct++; }
+    for (const c of m.categories) for (const f of c.funds) if (normFund(f.fund) === normFund(from)) { f.fund = to; nStruct++; }
+    for (const t of m.transactions) if (normFund(t.fund) === normFund(from)) { t.fund = to; nTx++; }
+    if (m.checks && m.checks[from]) { m.checks[to] = m.checks[from]; delete m.checks[from]; }
+  }
+  markDirty(); toast(`Renamed in ${nStruct} month table(s) and ${nTx} transaction(s).`);
+  return null;
+}
+
 /* ---------------- Restore / import (W3) ----------------
  * The recovery net: pick a rolling backup (or an exported file) and swap it in.
  * Main validates and keeps the current file as a budget-prerestore-* backup
@@ -2775,7 +2836,7 @@ async function showRestoreModal() {
 function renderSettings(main) {
   const month = curMonth();
   main.innerHTML = `
-    <h1 class="view-title">Settings</h1><p class="sub"></p>
+    <h1 class="view-title">Settings</h1>
     <div class="settings-grid">
       <div class="section"><div class="section-head"><h2>Budget rules</h2></div>
         <div style="padding:12px 16px">
@@ -2853,19 +2914,8 @@ function renderSettings(main) {
     renderSettings(main);
   };
   $('#renBtn').onclick = () => {
-    const from = $('#renFund').value, to = $('#renTo').value.trim();
-    if (!from || !to) return toast('Pick a fund and type a new name.');
-    for (const m of data.months) {
-      if (canonicalFund(m, to) && normFund(to) !== normFund(from)) return toast(`"${to}" already exists in ${monthLabel(m.id)}.`);
-    }
-    let nStruct = 0, nTx = 0;
-    for (const m of data.months) {
-      for (const f of m.income) if (normFund(f.fund) === normFund(from)) { f.fund = to; nStruct++; }
-      for (const c of m.categories) for (const f of c.funds) if (normFund(f.fund) === normFund(from)) { f.fund = to; nStruct++; }
-      for (const t of m.transactions) if (normFund(t.fund) === normFund(from)) { t.fund = to; nTx++; }
-      if (m.checks && m.checks[from]) { m.checks[to] = m.checks[from]; delete m.checks[from]; }
-    }
-    markDirty(); toast(`Renamed in ${nStruct} month table(s) and ${nTx} transaction(s).`);
+    const err = renameFundEverywhere($('#renFund').value, $('#renTo').value.trim());
+    if (err) return toast(err);
     renderSettings(main);
   };
   $('#addCatBtn').onclick = () => {

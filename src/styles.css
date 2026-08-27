@@ -63,6 +63,7 @@ body {
 .si { width: 20px; height: 20px; display: inline-block; vertical-align: -5px; }
 .si.sm { width: 18px; height: 18px; vertical-align: -4px; }
 .month-picker { display: flex; flex-direction: column; gap: 6px; }
+.month-picker.aum-independent { opacity: .45; }
 .month-picker label { font-size: .72rem; text-transform: uppercase; letter-spacing: .8px; opacity: .7; }
 .month-picker select {
   background: var(--sidebar-ctl); color: #fff; border: 1px solid var(--sidebar-ctl-line); border-radius: 8px;
