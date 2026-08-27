@@ -136,7 +136,7 @@ export function parseBankFile(input, opts = {}) {
         kind: 'columnAlignment', blocking: true, answerable: false,
         message: `The header row of this file splits into ${arity} columns but most rows below it split `
           + `into ${bodyMode} — usually an unquoted comma inside a description. The columns can’t be `
-          + 'trusted to line up, so this file can’t be imported safely as-is.',
+          + 'trusted to line up, so this file can’t be imported safely as-is. Try downloading a fresh export from your bank.',
       });
       return blocked();
     }
@@ -152,7 +152,7 @@ export function parseBankFile(input, opts = {}) {
   }
   if (!body.length) return refuse('No transaction rows were found in this file.');
   if (report.counts.junk / (report.counts.junk + body.length) >= 0.2) {
-    return refuse('Too much of this file doesn’t look like transaction rows to import it safely.');
+    return refuse('Most of this file doesn’t look like transactions, so it can’t be imported safely.');
   }
 
   // ── roles — sampled from rows that look like data, so a block of footer

@@ -56,7 +56,7 @@ function loadData() {
     // write a new data file over the unreadable one.
     try { fs.copyFileSync(file, file + '.corrupt'); } catch { /* read-only dir — leave it */ }
     dialog.showErrorBox('Budget data could not be read',
-      `${err.message}\n\nNo usable backup was found in:\n${BACKUP_DIR()}\n\nThe app will start fresh; your unreadable file was left untouched (a copy was kept as budget-data.json.corrupt).`);
+      `${err.message}\n\nNo usable backup was found in:\n${BACKUP_DIR()}\n\nThe app will start fresh. A copy of the unreadable file was saved as budget-data.json.corrupt in case it can be recovered.`);
     return BLANK();
   }
 }
@@ -114,7 +114,7 @@ function migrateLegacyDataDir() {
     const res = migrateLegacyData(oldDir, app.getPath('userData'));
     if (res.migrated) console.log(`Copied ${res.files.length} file(s) from "${oldDir}"`);
   } catch (err) {
-    dialog.showErrorBox('Could not move your budget data in',
+    dialog.showErrorBox("Couldn't copy your existing budget data",
       `Sowing Season tried to copy your existing data from\n${oldDir}\nto\n${app.getPath('userData')}\nbut hit an error:\n\n${err.message}\n\nNothing was removed. The app will open without your history — close it, fix the problem (disk space, permissions), and launch again; the copy is retried on every start until it succeeds.`);
   }
 }
@@ -148,9 +148,11 @@ app.whenReady().then(() => {
     return true;
   });
   ipcMain.handle('data:reveal', () => { shell.showItemInFolder(DATA_FILE()); return true; });
-  // System-browser links. https:// only — never pass arbitrary strings to openExternal.
+  // System-browser / mail-client links. https:// or mailto: only —
+  // never pass arbitrary strings or other schemes to openExternal.
+  const EXTERNAL_URL_OK = /^(?:https:\/\/|mailto:)[^\s]+$/i;
   ipcMain.handle('shell:open-external', (_e, url) => {
-    if (typeof url === 'string' && /^https:\/\//i.test(url)) shell.openExternal(url);
+    if (typeof url === 'string' && EXTERNAL_URL_OK.test(url)) shell.openExternal(url);
     return true;
   });
   ipcMain.handle('data:export', async (_e, data) => {

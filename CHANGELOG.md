@@ -9,6 +9,131 @@ so entries before that are dated by when the work happened, not by commit.
 
 ---
 
+## 2026-08-25 — App-wide watercolor pass: "moments + materials"
+
+Implements `_cowork\proposal-watercolor-app-wide.md` in full (Cowork proposal,
+POC approved by the owner at `_cowork\watercolor-app-wide-poc.html` — all art lifted
+from it). Intensity level the owner chose: watercolor at empty states and ceremony
+moments plus quiet materials; tables, buttons and inputs stay crisp. The restraint
+contract is §1 of the proposal — test any future watercolor idea against it.
+
+- **§2 Materials** (`styles.css`, `charts.js`): paper-grain tile on `body` — a
+  pre-baked data-URI `feTurbulence` SVG at 4% alpha, cached background image,
+  never a live filter or fixed overlay. Warm-shadow fixes: `.viz-tip` shadow and
+  the chart hover wash go warm-ink `rgba(38,48,31,…)`, `.viz-bl-track` warm
+  `#f0efe7`. One brushstroke swash under each view `h1` via `h1.view-title::after`
+  (baked data-URI with inline displacement filters; `width: min(120px, 100%)` so
+  the short AUM title isn't overshot). Applied to the six view h1s only — the
+  wizard's h1s deliberately don't get the class.
+- **§3 Charts** (`app.js` VIZ + `--viz-s1/s2`): `#2a78d6/#eb6834` →
+  **`#3f7d96` pond blue / `#b8543a` terracotta**. Same CVD-safe blue↔orange
+  axis; both ≥4.2:1 on white and parchment (old orange was 2.93:1 on parchment,
+  below the 3:1 graphical minimum). Terracotta doubles as the wilt red on
+  purpose (spending = money leaving); if it ever reads as scolding, the one-line
+  swap is `--amber #8f6a1c`.
+- **§4 In-view icon set** (`index.html` + `dev.html` defs, mirrored as always;
+  `icon()` helper in app.js; `.si` CSS): eleven `si-*` glyphs replace the inline
+  emoji (⚠💡📥💵📄🎉🏆🎯🧱📒🧺) at a **fixed 20px** (18px `.sm` floor in the
+  review badge and basket streak). Same 120-unit frame and `nw*` washes as the
+  nav icons — no new filters. Meaning-bearing uses carry `role="img"` +
+  `aria-label`; decorative ones `aria-hidden`. **Two glyphs beyond the
+  proposal's inventory** (it missed them): recap ✅ → `si-bloom`, 📈 →
+  `ni-chart` (helper accepts `ni-` ids), so the wins list isn't mixed media.
+  `✓ ✕ ▸ ▾ ·` and the 🗑 button stay text.
+- **§5 Empty-state spots** (`src/spots.js`, new): basket+sprout (Transactions,
+  true-empty only — filtered-empty keeps text), seed packets + bed sign (Budget,
+  only when the whole month has zero expense funds, and only in the first empty
+  category — one painting per screen), watering can + CSV (Import landing only,
+  gone once a file is open), sapling (AUM <2 snapshots; the 1-snapshot caption
+  is now "Two check-ins make a trend line…"). All reuse `#nav-wc*` via `nw*`
+  classes — never unprefixed `#wc*`. Fund panel and AUM change log stay
+  text-only on purpose.
+- **§6 Ceremony**: one butterfly drifts in the month-close vignette's sky band —
+  deterministic placement (hash of month id, `>>>` not `>>`: the signed shift
+  went negative on hashes ≥2³¹ and pinned it at top:1%), existing `.flutter`
+  keyframes (reduced-motion already zeroes them), animation class on the sprite
+  `<svg>` element itself per the garden's compositor pattern. The wizard welcome
+  step gets a **static** three-sprout `stripSvg` header. That's the entire
+  motion budget outside the Garden.
+- **§8b bug fix (pre-existing, found by the POC)**: a filtered element with a
+  zero-height/width bbox isn't rendered at all (`objectBoundingBox` region
+  collapses). `ni-clipboard`'s three ruled lines, `ni-receipt`'s four and
+  `ni-import`'s vertical shaft were silently invisible in the shipped sidebar.
+  Fixed with 2–3-unit curves (`M45,51 Q60,48 75,51`), which also reads more
+  hand-painted. **Rule for all future filtered art: no axis-aligned stroked
+  paths inside a wash class.**
+- dev.html defs were synced from index.html programmatically (regex swap of the
+  hidden-SVG block) — keep doing that rather than hand-mirroring.
+- Verified in the dev harness: all six swashes, review strip + badge icons,
+  import/AUM/transactions spots, recap with butterfly + icon wins + basket
+  streak, wizard strip via `?blank=1`. Suites green: garden 139, csv 516,
+  migrate 17.
+
+## 2026-08-25 — Copy fixes: walkthrough & explanation language
+
+Implements `_cowork\proposal-copy-fixes.md` (Cowork audit 2026-08-24, approved by
+the owner) — all 30 edits: PASS 1 accuracy (H1–H6), PASS 2 beginner clarity (M1–M10),
+PASS 3 polish (L1–L9), PASS 4 approved additions (O1–O3). Copy only, except the
+approved `hint` parameter on `accordionHtml` that renders the income-group teaching
+text as a visible paragraph when the section is open (O3). Files: `src/app.js`,
+`src/csv/import.js`, `main.js`, `src/index.html`. No schema/data changes;
+`garden.js` untouched (test-garden still 139/139; compute/csv/migrate suites green).
+
+- The proposal's line number for H4 (`showTransferModal`) was ~2244; the code
+  actually sits at ~244. The OLD string matched verbatim and uniquely, so per the
+  proposal's own ground rule the edit went ahead.
+- **O2 scope note:** the proposal touched `src/index.html` only; the AUM nav
+  tooltip was mirrored into `src/dev.html` as a follow-up the same day (the owner:
+  "fix whatever needs to be fixed"), keeping the index/dev mirror convention.
+  dev.html is excluded from packaging, so no rebuild was needed for it.
+- Verified in the dev harness (demo data): income hints render only when open,
+  expense sections unchanged, transfer dialog / Year Overview / Settings tithe /
+  garden maturity tooltip all show the new copy.
+- **Repackaging trap:** `npm run pack` failed — the Claude desktop app held an
+  open handle on `dist\…\resources\app.asar` (no delete/rename sharing), and the
+  script's `rmSync` died *after* deleting the rest of the build, leaving a broken
+  dist. Recovery: packaged to a temp dir, robocopied the build back, then — since
+  the handle *did* allow read/write sharing — overwrote the stale asar's bytes in
+  place (`File.Open(…, 'ReadWrite', share ReadWrite)` + `SetLength(0)` + write;
+  SHA-256 verified). Tested along the way: this Electron (43) loads `app.asar`
+  in **preference** to an unpacked `resources\app` dir, so the app-dir-override
+  trick does not work — in-place byte replacement is the workaround when the
+  asar is lock-pinned. Packaged exe smoke-tested against a scratch
+  `BUDGET_DATA_DIR`.
+
+## 2026-08-23 — Sidebar footer links: Ko-fi tip jar + feedback email
+
+Implements `kofi-support-link-proposal.md` (Cowork rev 2, approved by the owner; real
+Ko-fi handle supplied at implementation time, so the proposal's `<HANDLE>` placeholder
+never entered the code). Two quiet always-available links under the save status:
+**"Help keep the lights on"** → https://ko-fi.com/sowingseason and **"Send feedback"**
+→ mailto:sowingseasonapp@gmail.com (subject pre-filled "Sowing Season feedback").
+Pure chrome — no data, schema, or engine changes.
+
+- **`src/index.html` / `src/dev.html`** (mirrored, as always): `.foot-links` row in
+  `.sidebar-foot` with two `<button class="foot-link">`s — buttons, not `<a href>`,
+  same pattern as the SeedTime link, so nothing for Electron to intercept.
+- **`src/app.js`**: `KOFI_URL` / `FEEDBACK_MAILTO` constants next to
+  `AUM_EPISODE_URL`; bound once in `enterApp()` with the other static-shell handlers.
+- **`main.js`** — the one change outside the renderer: `shell:open-external` guard
+  widened from https-only to `/^(?:https:\/\/|mailto:)[^\s]+$/i`. Still strictly
+  scheme-allowlisted; `http:`/`file:`/`javascript:` and whitespace-bearing strings
+  stay rejected (regex unit-checked incl. the SeedTime URL regression). `preload.js`
+  untouched. Note: on a Windows box with no default mail app, the mailto click can
+  appear to do nothing — accepted, the tooltip explains the action.
+- **`src/styles.css`**: `.foot-link` styled as quiet text on the pine sidebar —
+  the proposal's `--muted`/`--ink` vars don't exist here; used `--sidebar-ink`
+  (hover → underline + `#fff`). Row wraps to two lines at the 230 px sidebar width
+  rather than truncating (by design). No outline suppression — the default
+  `:focus-visible` ring shows (verified visible on the pine).
+- Verified in the dev harness: both links render/wrap, clicks reach `openExternal`
+  with the exact URLs, Tab focus lands with a visible ring. (Enter-activation
+  couldn't be exercised by the browser-pane tooling — its synthetic key events
+  don't trigger native button activation on ANY button incl. nav — but these are
+  plain `<button>`s, so it's Chromium default behavior.)
+
+---
+
 ## 2026-08-23 — Watercolor sidebar icons (Option A)
 
 Implements `_cowork/proposal-watercolor-nav-icons.md`: the 8 sidebar emoji (🌱 brand +

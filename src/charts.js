@@ -120,7 +120,7 @@ export function groupedBars({ labels, series, height = 230 }) {
     svg.appendChild(hit);
   });
   // hover wash behind the group (appended before hit rects would be ideal; use low opacity on top)
-  const hover = el('rect', { y: M.t, width: groupW, height: innerH, fill: 'rgba(28,35,48,0.05)', 'pointer-events': 'none' });
+  const hover = el('rect', { y: M.t, width: groupW, height: innerH, fill: 'rgba(38,48,31,0.05)', 'pointer-events': 'none' });
   hover.style.display = 'none';
   svg.insertBefore(hover, svg.firstChild.nextSibling);
 

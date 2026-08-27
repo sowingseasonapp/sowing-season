@@ -5,17 +5,26 @@ import {
   migrateV6, aumTotals, upsertSnapshot, aumLastUpdated, MONTH_NAMES, nextMonthId,
 } from './compute.js';
 import { gardenState, incomeCheckIns, stonesLaidIn, sownStreak } from './garden.js';
-import { sceneSvg, stripSvg, plantSprite, PALETTE_TOKENS, GARDEN_MILESTONE_LABELS } from './garden-scene.js';
+import { sceneSvg, stripSvg, plantSprite, butterflySymbol, PALETTE_TOKENS, GARDEN_MILESTONE_LABELS } from './garden-scene.js';
 import {
   parseBankFile, buildVendorMap, suggestFund, findDuplicateScored,
   suggestStarterFunds, starterFundFor,
 } from './csv.js';
 import { groupedBars, barList, lineArea } from './charts.js';
+import { spotTx, spotBudget, spotImport, spotAum } from './spots.js';
 
-const VIZ = { s1: '#2a78d6', s2: '#eb6834' };
+// Chart series: garden pigments, same CVD-safe blue↔orange axis (see --viz-s1/s2
+// in styles.css for the contrast numbers). Data itself stays crisp vector.
+const VIZ = { s1: '#3f7d96', s2: '#b8543a' };
 
 const $ = (sel, el = document) => el.querySelector(sel);
 const $$ = (sel, el = document) => [...el.querySelectorAll(sel)];
+
+// In-view watercolor icons (si-* defs in index.html, ni-* also usable): fixed
+// 20px — em-scaling turned the glyphs to mud — with an 18px floor via cls 'sm'
+// in tight spots. Meaning-bearing uses pass alt; the rest stay aria-hidden.
+const icon = (name, alt = '', cls = '') =>
+  `<svg class="si${cls ? ' ' + cls : ''}" viewBox="0 0 120 120" ${alt ? `role="img" aria-label="${alt}"` : 'aria-hidden="true"'}><use href="#${name.startsWith('ni-') ? name : 'si-' + name}"/></svg>`;
 
 let data = null;
 let currentMonthId = null;
@@ -242,7 +251,7 @@ function showTransferModal(presetFrom = '', onDone = null, presetTo = '') {
     <div class="modal">
       <h2>⇄ Transfer between funds</h2>
       <p class="muted">Moves money in ${monthLabel(month.id)} by adding a matched pair of transactions —
-        the "from" fund goes down, the "to" fund goes up. Income/expense totals are unaffected.</p>
+        the "from" fund goes down, the "to" fund goes up. It isn't new income or spending — your month's net stays the same.</p>
       <div class="modal-row"><label>From</label><select id="tFrom" class="inline">${fundOptions(month, presetFrom, lmap)}</select></div>
       <div class="modal-row"><label>To</label><select id="tTo" class="inline">${fundOptions(month, presetTo, lmap)}</select></div>
       <div class="modal-row"><label>Amount</label><input id="tAmt" class="search" placeholder="$0.00" inputmode="decimal"></div>
@@ -291,7 +300,7 @@ const INCOME_TYPES = [
 
 const FUND_BEHAVIORS = [
   { key: 'basic', name: 'Basic', desc: 'Everyday spending you plan each month. Great for utilities.' },
-  { key: 'pacing', name: 'Pacing', desc: 'Many purchases a month, watched for pace. Great for groceries.' },
+  { key: 'pacing', name: 'Pacing', desc: "Many purchases a month — the app warns you if you're going through it too fast. Great for groceries." },
   { key: 'fixed', name: 'Fixed recurring', desc: 'The same charge on a schedule. Great for subscriptions.' },
   { key: 'goal', name: 'Savings goal', desc: 'Save a total by a target month. Great for Christmas or a vacation.' },
   { key: 'build', name: 'Build up', desc: 'Set aside monthly and spend as needed. Great for an emergency fund.' },
@@ -361,8 +370,9 @@ function setupFormHtml(setup, monthId) {
     <div class="setup-fields" id="fsFields">
       <div data-for="fixed" class="modal-row"><label style="width:auto">Happens every</label>
         <input id="fsN" class="search" style="width:58px;flex:none" value="${s.everyMonths || 1}" inputmode="numeric">
-        <span class="muted">month(s), totalling</span>
-        <input id="fsT" class="search" style="width:110px;flex:none" value="${s.totalAmount ? money(s.totalAmount) : ''}" placeholder="$0.00" inputmode="decimal"></div>
+        <span class="muted">month(s), costing</span>
+        <input id="fsT" class="search" style="width:110px;flex:none" value="${s.totalAmount ? money(s.totalAmount) : ''}" placeholder="$0.00" inputmode="decimal">
+        <span class="muted">each time</span></div>
       <div data-for="goal" class="modal-row"><label style="width:auto">Save up</label>
         <input id="fsGoal" class="search" style="width:110px;flex:none" value="${s.targetAmount ? money(s.targetAmount) : ''}" placeholder="$0.00" inputmode="decimal">
         <span class="muted">by</span>
@@ -376,7 +386,7 @@ function setupFormHtml(setup, monthId) {
     <p class="setup-result" id="fsCalc"></p>
     <div class="setup-options">
       <label title="This fund never triggers Needs Attention or Available to Move, and shows no pace status. Numbers still compute normally — it just stays quiet.">
-        <input type="checkbox" id="fsQuiet" ${s.excludeInsights ? 'checked' : ''}> Exclude fund from insights
+        <input type="checkbox" id="fsQuiet" ${s.excludeInsights ? 'checked' : ''}> Exclude from Review alerts
       </label>
     </div>`;
 }
@@ -851,11 +861,11 @@ function fundTypeMark(f, monthId) {
     tip = `Savings goal — ${money(s.targetAmount)} by ${ymLabel(s.targetMonth)}, so ${money(autoPlanned(f, monthId))} this month.`;
   } else if (type === 'pacing') {
     glyph = '▦';
-    tip = 'Pacing — many purchases a month, watched for pace.';
+    tip = "Pacing — many purchases a month; the app watches whether it's going too fast.";
   }
   let html = glyph ? `<span class="type-mark" title="${esc(tip)}">${glyph}</span>` : '';
   if (s.excludeInsights) {
-    html += `<span class="type-mark quiet" title="Excluded from insights — never flagged for attention or as available to move.">⊘</span>`;
+    html += `<span class="type-mark quiet" title="Excluded from Review — never flagged for attention or as available to move.">⊘</span>`;
   }
   return html;
 }
@@ -917,7 +927,7 @@ const FUND_COLS = `<colgroup>
 // One collapsible section. Its header is a row on the same grid as the funds
 // beneath it, so the category totals line up with the fund columns — and the
 // body needs no totals row of its own.
-function accordionHtml({ key, title, note, open, totals, actions, body, activity, kind = 'expense' }) {
+function accordionHtml({ key, title, note, open, totals, actions, body, activity, kind = 'expense', hint = '' }) {
   const cell = (v) => `<td class="${moneyCls(v)}">${money(v)}</td>`;
   // Spending is normal activity, not an alarm — show it as a plain positive
   // amount (like the Spent card up top) and keep red for actual problems.
@@ -956,7 +966,7 @@ function accordionHtml({ key, title, note, open, totals, actions, body, activity
       ${open ? '' : totalCells}
       <td class="acc-actions">${open ? actions : ''}</td>
     </tr></tbody></table>
-    <div class="acc-body">${open ? colHead + body + totalRow : ''}</div>
+    <div class="acc-body">${open ? (hint ? `<p class="muted" style="font-size:.82rem;margin:0;padding:8px 14px 0">${hint}</p>` : '') + colHead + body + totalRow : ''}</div>
   </div>`;
 }
 
@@ -990,7 +1000,7 @@ function checklistHtml(month) {
   const list = data.settings.setupChecklist;
   if (!Array.isArray(list) || !list.length) return '';
   const labels = {
-    amounts: `Put a number in each envelope — how much is ${month.label} getting?`,
+    amounts: `Put a number in each envelope — how much does each one get in ${month.label}?`,
     checks: 'Double-check your paycheck numbers',
     tithe: 'Set the before-tax check amount your giving is based on',
     import: 'Bring in your bank transactions',
@@ -998,7 +1008,7 @@ function checklistHtml(month) {
   };
   if (list.every((i) => i.done)) {
     return `<div class="section checklist">
-      <div class="checklist-head"><b>🎉 You're set up.</b>
+      <div class="checklist-head"><b>${icon('bloom')} You're set up.</b>
         <button class="btn btn-sm" data-cl-done>Done</button></div>
     </div>`;
   }
@@ -1111,14 +1121,14 @@ function renderBudget(main) {
       <button class="btn btn-sm" id="expandAllBtn" title="Expand or collapse every section">${openSet.size ? 'Collapse all' : 'Expand all'}</button>
       <div class="spacer"></div>
       ${reviewCount ? `<button class="btn btn-sm review-badge ${attList.length ? 'has-att' : 'all-good'} ${flagPanel ? 'active' : ''}" id="reviewBtn">
-        ${attList.length ? '⚠' : '💡'} Review · ${reviewCount}</button>` : '<span class="muted" style="font-size:.85rem">Nothing to review ✓</span>'}
+        ${attList.length ? icon('warn', 'needs attention', 'sm') : icon('move', '', 'sm')} Review · ${reviewCount}</button>` : '<span class="muted" style="font-size:.85rem">Nothing to review ✓</span>'}
     </div>`;
 
   // One review strip: what needs attention, what's free to move, what isn't filed.
   if (flagPanel && reviewCount) {
     const group = (title, hint, rows) => rows.length ? `
       <div class="review-group">
-        <div class="review-group-head">${title} <span class="muted">· ${rows.length}</span>
+        <div class="review-group-head"><span>${title} <span class="muted">· ${rows.length}</span></span>
           <span class="review-hint muted">${hint}</span></div>
         <table class="grid compact"><tbody>${rows.join('')}</tbody></table>
       </div>` : '';
@@ -1154,17 +1164,17 @@ function renderBudget(main) {
         title="Update the per-check estimate so planned matches what actually arrived — next month starts from the real number too">Use actual</button></td></tr>`);
 
     html += `<div class="review-strip">
-      ${group('⚠ Needs attention', 'over budget or spending too fast', attRows)}
-      ${group('💡 Available to move', 'safe to transfer elsewhere', offRows)}
-      ${group('📥 Unassigned transactions', 'not counted in any fund', unRows)}
-      ${group('💵 Paycheck check-in', 'update the estimate to what actually arrived', chkInRows)}
+      ${group(`${icon('warn', 'needs attention')} Needs attention`, 'over budget or spending too fast', attRows)}
+      ${group(`${icon('move')} Available to move`, 'safe to transfer elsewhere', offRows)}
+      ${group(`${icon('unassigned')} Unassigned transactions`, 'not counted in any fund', unRows)}
+      ${group(`${icon('paycheck')} Paycheck check-in`, 'update the estimate to what actually arrived', chkInRows)}
     </div>`;
   }
 
   // Income sections: Standard (paychecks) and Bonus (everything else)
   const incomeGroups = [
-    { key: 'standard', title: 'Standard Income', hint: 'Paychecks, bonuses, or a main source of income. Planned = checks × per-check amount. The tithe uses the titheable amount (before insurance/retirement deductions), not the deposited amount. If your pay varies, open the fund and turn on "amount varies" — plan low and let the month review true it up.' },
-    { key: 'bonus', title: 'Extra Income', hint: 'Inconsistent income you want to track — gifts, reimbursements, transfers. Tithed at the full planned amount unless exempt.' },
+    { key: 'standard', title: 'Standard Income', hint: 'Paychecks or a main source of income. Planned = checks × per-check amount. The tithe uses the titheable amount (pay before insurance/retirement deductions), not the deposited amount. If your pay varies, open the fund and turn on "amount varies" — plan low, and the Review button will offer to match the real amount once checks arrive.' },
+    { key: 'bonus', title: 'Extra Income', hint: 'Inconsistent income you want to track — gifts, reimbursements, transfers. Its planned amount counts toward the tithe unless the fund is marked exempt.' },
   ];
   // Transactions per fund this month (for the count column).
   const txCounts = {};
@@ -1219,6 +1229,7 @@ function renderBudget(main) {
       key: accKey,
       activity: 'Received',
       kind: 'income',
+      hint: esc(g.hint),
       title: `<span title="${esc(g.hint)}">${g.title}</span>`,
       note: `${all.length} fund${all.length === 1 ? '' : 's'}`,
       open,
@@ -1229,6 +1240,11 @@ function renderBudget(main) {
   }
 
   let hiddenCats = 0;
+  // The seed-packet painting stands in only for the true "no funds anywhere yet"
+  // state, and only once — an empty category added to a populated budget keeps
+  // the plain text row (one painting per screen).
+  const totalExpFunds = comp.categories.reduce((a, c) => a + c.funds.length, 0);
+  let budgetSpotUsed = false;
   comp.categories.forEach((c, ci) => {
     const shown = c.funds.map((f, fi) => ({ f, fi })).filter(({ f }) => matches(f.fund));
     if (q && !shown.length && !matches(c.name)) { hiddenCats++; return; }
@@ -1247,7 +1263,14 @@ function renderBudget(main) {
         <td class="${moneyCls(f.leftover)}">${money(f.leftover)}</td>
         <td class="row-actions"><button class="btn-ghost row-more" data-fund-setup="${ci}:${fi}" title="Open this fund — setup, transfer, reorder, transactions">⋯</button></td></tr>`;
     });
-    if (!rows.length) body += `<tr><td colspan="6" class="muted" style="padding:10px 12px">No funds yet — use “+ Add fund”.</td></tr>`;
+    if (!rows.length) {
+      if (totalExpFunds === 0 && !q && !budgetSpotUsed) {
+        budgetSpotUsed = true;
+        body += `<tr><td colspan="6"><div class="spot-empty">${spotBudget()}<p class="muted">No funds yet — use “+ Add fund”.</p></div></td></tr>`;
+      } else {
+        body += `<tr><td colspan="6" class="muted" style="padding:10px 12px">No funds yet — use “+ Add fund”.</td></tr>`;
+      }
+    }
     body += `</tbody></table>`;
     const t = c.totals;
     html += accordionHtml({
@@ -1446,7 +1469,7 @@ function renderTransactions(main) {
   const sum = r2(list.reduce((a, { t }) => a + t.amount, 0));
   const lmap = leftoverMap(month);
 
-  let html = `<h1>Transactions — ${monthLabel(month.id)}</h1>
+  let html = `<h1 class="view-title">Transactions — ${monthLabel(month.id)}</h1>
     <p class="sub">Expenses are negative, income positive. Type <span class="mono">-12.34</span> or <span class="mono">(12.34)</span> for an expense.</p>
     <div class="toolbar">
       <button class="btn btn-accent" id="addTx">+ Add transaction</button>
@@ -1476,7 +1499,13 @@ function renderTransactions(main) {
       <td><input class="inline-text" data-tx="${i}" data-k="account" value="${esc(t.account || '')}"></td>
       <td><button class="btn-ghost" data-del-tx="${i}" title="Delete">🗑</button></td></tr>`;
   }
-  if (!list.length) html += `<tr><td colspan="7" class="muted" style="text-align:center;padding:24px">No transactions${txSearch || txFundFilter ? ' match the filter' : ' yet'}.</td></tr>`;
+  if (!list.length) {
+    // A filtered-empty list keeps the plain text; the true "nothing yet" state
+    // is the one place in this view a painting can stand (nothing competes).
+    html += txSearch || txFundFilter || txAccountFilter
+      ? `<tr><td colspan="7" class="muted" style="text-align:center;padding:24px">No transactions match the filter.</td></tr>`
+      : `<tr><td colspan="7"><div class="spot-empty">${spotTx()}<p class="muted">No transactions yet.</p></div></td></tr>`;
+  }
   html += `</tbody></table></div>`;
   main.innerHTML = html;
 
@@ -1625,9 +1654,13 @@ function persistResolvedProfile(report, answers) {
 }
 
 function renderImport(main) {
-  let html = `<h1>Import bank CSV</h1>
+  let html = `<h1 class="view-title">Import bank CSV</h1>
     <p class="sub">Pick the CSV you export from your bank. The app works out the file's format, matches each row to a fund based on your history, flags duplicates and card payments, and nothing is saved until you click Import. If something about the file is unclear, it asks instead of guessing.</p>
-    <div class="toolbar"><button class="btn btn-accent" id="pickCsv">📄 Choose CSV file…</button></div>`;
+    <div class="toolbar"><button class="btn btn-accent" id="pickCsv">${icon('file')} Choose CSV file…</button></div>`;
+
+  // Landing state only: once a file is open the view fills with live data,
+  // and paintings never stand beside live data.
+  if (!importState) html += `<div class="spot-empty spot-import">${spotImport()}</div>`;
 
   if (importState && importState.refusal) {
     html += `<div class="section import-refusal">
@@ -1667,9 +1700,9 @@ function renderImport(main) {
       ${balanceLine}
       ${pending ? `<span class="muted">${pending} pending row${pending === 1 ? '' : 's'} skipped (they'll re-appear as posted in a later export)</span>` : ''}
       ${(() => { const n = importState.rows.filter((r) => r.possibleDup).length;
-        return n ? `<span class="muted">⚠ ${n} row${n === 1 ? ' looks' : 's look'} similar to entries you already have — marked “possible duplicate” below; untick any that are the same purchase</span>` : ''; })()}
+        return n ? `<span class="muted">${icon('warn', 'warning', 'sm')} ${n} row${n === 1 ? ' looks' : 's look'} similar to entries you already have — marked “possible duplicate” below; untick any that are the same purchase</span>` : ''; })()}
       ${report?.signConvention?.verdict === 'flip' ? '<span class="muted">This bank writes spending as positive — amounts were converted so money out shows negative</span>' : ''}
-      ${anomalies.length ? `<span class="import-anomaly">⚠ ${anomalies.length} row${anomalies.length === 1 ? '' : 's'} couldn't be read and ${anomalies.length === 1 ? 'was' : 'were'} left out — ${esc(anomalies.slice(0, 3).map((a) => `row ${a.row}: bad ${a.code === 'BadDate' ? 'date' : 'amount'} “${a.msg}”`).join(', '))}${anomalies.length > 3 ? ', …' : ''}</span>` : ''}
+      ${anomalies.length ? `<span class="import-anomaly">${icon('warn', 'warning', 'sm')} ${anomalies.length} row${anomalies.length === 1 ? '' : 's'} couldn't be read and ${anomalies.length === 1 ? 'was' : 'were'} left out — ${esc(anomalies.slice(0, 3).map((a) => `row ${a.row}: bad ${a.code === 'BadDate' ? 'date' : 'amount'} “${a.msg}”`).join(', '))}${anomalies.length > 3 ? ', …' : ''}</span>` : ''}
     </div>`;
 
     // Blocking questions: the importer refuses to guess — each answer re-reads
@@ -1686,8 +1719,8 @@ function renderImport(main) {
       const badges = [];
       if (row.duplicate) badges.push('<span class="badge dup">duplicate</span>');
       else if (row.possibleDup) badges.push('<span class="badge dup-maybe" title="Same place and a similar amount within a few days of an entry you already have — often a tip or a gas-pump hold posting. It will import unless you untick it.">possible duplicate</span>');
-      if (rec.isCardPayment) badges.push('<span class="badge pay">card payment</span>');
-      if (!row.monthExists) badges.push(`<span class="badge warn">month not started</span>`);
+      if (rec.isCardPayment) badges.push('<span class="badge pay" title="Paying a credit-card bill isn\'t spending — the purchases it covers are already transactions on the card. Left unticked so nothing counts twice; tick it if you track this account differently.">card payment</span>');
+      if (!row.monthExists) badges.push(`<span class="badge warn" title="Dated in a month that doesn't exist in the app yet, so it can't be imported right now.">month not started</span>`);
       if (row.include && !row.fund) badges.push('<span class="badge warn">pick a fund</span>');
       if (row.include && row.fund && !row.duplicate && !row.possibleDup && !rec.isCardPayment) badges.push('<span class="badge new">ready</span>');
       const month = row.monthExists ? data.months.find((m) => m.id === row.monthId) : null;
@@ -1813,7 +1846,7 @@ function renderImport(main) {
 /* ---------------- Reports view ---------------- */
 function renderReports(main) {
   const comps = data.months.map((m) => ({ m, c: computeMonth(m) }));
-  let html = `<h1>Year Overview</h1><p class="sub">Actuals per month. Click a month in the sidebar to drill in.</p>`;
+  let html = `<h1 class="view-title">Year Overview</h1><p class="sub">What actually came in and went out, month by month. Pick a month from the Month menu in the sidebar to see its details.</p>`;
 
   html += `<div class="section"><div class="section-head"><h2>Income vs spending</h2></div><div id="chartIncome"></div></div>`;
   html += `<div class="section"><div class="section-head"><h2>Where the money went (year to date)</h2></div><div id="chartCats"></div></div>`;
@@ -1938,6 +1971,13 @@ function renderReports(main) {
  * browser via the https-only openExternal IPC.
  */
 const AUM_EPISODE_URL = 'https://seedtime.libsyn.com/aum-the-2nd-most-important-financial-metric-to-track';
+
+// External links in the sidebar footer. Schemes enforced in main's
+// shell:open-external handler (https: and mailto: only).
+const KOFI_URL = 'https://ko-fi.com/sowingseason';
+const FEEDBACK_MAILTO =
+  'mailto:sowingseasonapp@gmail.com?subject=' +
+  encodeURIComponent('Sowing Season feedback');
 const AUM_STALE_DAYS = 90; // drives the amber "stale" chip in the AUM view below
 
 const AUM_SLIDES = [
@@ -1967,7 +2007,7 @@ const AUM_SLIDES = [
     img: 'assets/help/aum-trend.png',
     title: 'Watch the trend, not the number',
     body: `Every edit automatically saves a snapshot for today, and you can press <i>Record
-      snapshot</i> any time. The chart and the Δ column show whether you're moving forward.
+      snapshot</i> any time. The chart and the Δ (change) column show whether you're moving forward.
       That direction — not the number itself — is what faithful management looks like month
       over month. A <b>stale</b> chip means a value hasn't been touched in ${AUM_STALE_DAYS}+ days
       and probably needs a refresh.`,
@@ -2148,7 +2188,7 @@ function renderAum(main) {
         <td class="${d == null ? 'muted' : moneyCls(d)}">${d == null ? '—' : (d > 0.004 ? '+' : '') + money(d)}</td></tr>`;
     }
     historyHtml = `<table class="grid compact"><thead><tr>
-      <th style="text-align:left">Date</th><th>Assets</th><th>Debts</th><th>AUM</th><th>Δ</th>
+      <th style="text-align:left">Date</th><th>Assets</th><th>Debts</th><th>AUM</th><th title="Change since the previous snapshot">Δ</th>
     </tr></thead><tbody>${hrows}</tbody></table>`;
   }
 
@@ -2174,7 +2214,7 @@ function renderAum(main) {
   };
 
   main.innerHTML = `
-    <h1>AUM <button class="help-btn" id="aumHelpBtn" title="How AUM works">?</button></h1>
+    <h1 class="view-title">AUM <button class="help-btn" id="aumHelpBtn" title="How AUM works">?</button></h1>
     <p class="sub">Assets under management — everything you manage, minus everything you owe. Good managers know what they're managing: re-check the values now and then, and watch the line move.</p>
     <div class="month-head">
       <div class="hero ${t.aum >= -0.004 ? 'good' : 'bad'}">
@@ -2195,9 +2235,9 @@ function renderAum(main) {
           title="Snapshots are recorded automatically whenever a value changes — this just marks today down deliberately.">Record snapshot</button></div></div>
       ${snaps.length >= 2
         ? `<div id="aumChart"></div>${historyHtml}`
-        : `<p class="muted" style="padding:14px 16px;margin:0">${snaps.length === 0
+        : `<div class="spot-empty spot-tiny">${spotAum()}<p class="muted">${snaps.length === 0
             ? 'Add your assets and debts below — every edit records a snapshot, and the timeline appears once there are two days of history.'
-            : 'One snapshot so far — the chart appears once a second day is recorded.'}</p>${historyHtml}`}
+            : 'Two check-ins make a trend line — log your balances again next month.'}</p></div>${historyHtml}`}
     </div>
     <div class="aum-grid">
       ${sectionHtml('asset', 'Assets', aum.assets)}
@@ -2371,7 +2411,7 @@ function showGardenIntro() {
     <div class="modal walkthrough garden-intro">
       <div class="wt-media garden-intro-art">${stripSvg(demo, { width: 520, height: 110 })}</div>
       <h2>This is your garden.</h2>
-      <p class="wt-body">A living picture of your budget. Every fund is a plant; keep each one inside its envelope and watch what grows over the seasons.</p>
+      <p class="wt-body">A living picture of your budget. Every fund is a plant: it grows while spending stays on plan, droops when a fund is over or moving too fast, and shows its harvest when money is left over to move.</p>
       <p class="wt-body" style="margin-top:8px">When something needs you, a card below the garden will point you to the right tool — the garden itself never changes your numbers.</p>
       <div class="modal-actions"><button class="btn btn-accent" id="giGo">Got it</button></div>
     </div>`;
@@ -2417,7 +2457,7 @@ function renderGarden(main) {
 
   main.innerHTML = `
     <div class="garden-head">
-      <h1>Your garden <button class="help-btn" id="gardenHelpBtn" title="How the garden works">?</button></h1>
+      <h1 class="view-title">Your garden <button class="help-btn" id="gardenHelpBtn" title="How the garden works">?</button></h1>
       <label class="garden-toggle"><input type="checkbox" id="gardenLabels" ${gardenLabels ? 'checked' : ''}> Show labels</label>
     </div>
     <p class="sub">A living picture of this month's budget. Hover a plant for its numbers; click it to open that fund in Budget.</p>
@@ -2428,7 +2468,7 @@ function renderGarden(main) {
       <div class="garden-msg msg-${m.kind}"><span>${esc(m.text)}</span>
         ${m.action ? `<button class="btn btn-sm" data-garden-act="${i}">${esc(m.action.label)}</button>` : ''}</div>`).join('')}
     </div>
-    <p class="garden-maturity muted">${matBits.map(esc).join(' · ')}</p>`;
+    <p class="garden-maturity muted" title="The garden's permanent parts: fixtures appear as months of history build up, and each wall stone marks a new all-time high in what you manage (AUM). They never go away.">${matBits.map(esc).join(' · ')}</p>`;
 
   const wrap = $('.garden-wrap', main);
   const tip = $('#gardenTip', main);
@@ -2549,14 +2589,14 @@ function renderGarden(main) {
 function renderSettings(main) {
   const month = curMonth();
   main.innerHTML = `
-    <h1>Settings</h1><p class="sub"></p>
+    <h1 class="view-title">Settings</h1><p class="sub"></p>
     <div class="settings-grid">
       <div class="section"><div class="section-head"><h2>Budget rules</h2></div>
         <div style="padding:12px 16px">
           <div class="field-row"><label>Tithe percentage</label>
             <input class="money small-num" id="tithePct" value="${Math.round((data.settings.tithePercent ?? 0.15) * 100)}"> %</div>
           <p class="muted" style="font-size:.85rem">Applied to funds with the "auto: % of income" rule.
-            Base = checks × titheable-per-check for Standard Income (set on the Budget page), plus Extra Income planned. Tithe-exempt funds (like Transfer In) are excluded — set that per fund by clicking its name.</p>
+            Base = checks × titheable-per-check for Standard Income (set on the Budget page), plus Extra Income planned. Tithe-exempt funds are excluded — to make a fund exempt, click its name on the Budget page and tick “Exempt from tithe”.</p>
           <div class="field-row"><label title="Fund-to-fund transfers stay visible inside each fund, but stop counting toward actual income and spending in the summary cards, Year Overview, and month recap.">Exclude transfers from income &amp; spending reporting</label>
             <input type="checkbox" id="exTransfers" ${data.settings.excludeTransfers ? 'checked' : ''}></div>
           <p class="muted" style="font-size:.85rem">Moving money between funds isn't real income or spending — this keeps the totals honest.</p>
@@ -2708,24 +2748,24 @@ function showMonthCloseWorkflow(last, nid) {
   const wins = [];
   if (pacingWins.length && pacingAll.length) {
     const saved = r2(pacingWins.reduce((a, f) => a + Math.max(0, f.leftover), 0));
-    wins.push(`🏆 ${pacingWins.length} of ${pacingAll.length} pacing fund${pacingAll.length > 1 ? 's' : ''} finished on pace${saved > 0.004 ? ` — ${money(saved)} unspent` : ''}: ${pacingWins.map((f) => esc(f.fund)).join(', ')}`);
+    wins.push(`${icon('rosette', 'win')} ${pacingWins.length} of ${pacingAll.length} pacing fund${pacingAll.length > 1 ? 's' : ''} finished on pace${saved > 0.004 ? ` — ${money(saved)} unspent` : ''}: ${pacingWins.map((f) => esc(f.fund)).join(', ')}`);
   }
-  if (catsUnder && catRows.length) wins.push(`✅ ${catsUnder} of ${catRows.length} categories came in at or under plan`);
-  if (actDiff(comp) > 0.004) wins.push(`📈 You ended ${money(actDiff(comp))} ahead — income beat spending`);
+  if (catsUnder && catRows.length) wins.push(`${icon('bloom')} ${catsUnder} of ${catRows.length} categories came in at or under plan`);
+  if (actDiff(comp) > 0.004) wins.push(`${icon('ni-chart')} You ended ${money(actDiff(comp))} ahead — income beat spending`);
   for (const f of matured) {
     const set = r2(f.carryOver + f.planned);
     wins.push(set >= f.setup.targetAmount - 0.004
-      ? `🎯 "${esc(f.fund)}" hit its ${money(f.setup.targetAmount)} goal — enjoy it!`
-      : `🎯 "${esc(f.fund)}" matured with ${money(set)} of ${money(f.setup.targetAmount)} saved`);
+      ? `${icon('target', 'goal reached')} "${esc(f.fund)}" hit its ${money(f.setup.targetAmount)} goal — enjoy it!`
+      : `${icon('target')} "${esc(f.fund)}" matured with ${money(set)} of ${money(f.setup.targetAmount)} saved`);
   }
   // The garden's slow layer: a new all-time high in AUM lays a wall stone. A
   // decline says nothing here — what you built stays built.
   const laid = stonesLaidIn((data.aum || {}).snapshots, last.id);
-  if (laid) wins.push(`🧱 Your garden matured: +${laid} wall stone${laid === 1 ? '' : 's'} — what you manage reached a new high`);
-  if (!wins.length) wins.push('📒 The month is logged and every dollar is accounted for — that\'s the win.');
+  if (laid) wins.push(`${icon('stone')} Your garden matured: +${laid} wall stone${laid === 1 ? '' : 's'} — what you manage reached a new high`);
+  if (!wins.length) wins.push(`${icon('ledger')} The month is logged and every dollar is accounted for — that's the win.`);
   // A quiet streak of sown months — shown here in the recap only, never as a nag.
   const streak = sownStreak(data, last.id);
-  const baskets = streak ? `<p class="recap-baskets muted" title="Months in a row where every dollar had a bed">${'🧺'.repeat(Math.min(streak, 12))} ${streak} month${streak === 1 ? '' : 's'} sown in a row</p>` : '';
+  const baskets = streak ? `<p class="recap-baskets muted" title="Months in a row where every dollar had a job">${Array(Math.min(streak, 12)).fill(icon('basket', '', 'sm')).join('')} ${streak} month${streak === 1 ? '' : 's'} sown in a row</p>` : '';
 
   // The keepsake: a small static snapshot of the month's final garden — its
   // blooms and harvest — above the wins. Ceremony, so garden voice is allowed
@@ -2733,7 +2773,14 @@ function showMonthCloseWorkflow(last, nid) {
   const gv = gardenState(data, { monthId: last.id, todayISO: todayISO() });
   const order = { harvest: 0, blooming: 1, growing: 2, planted: 3, thirsty: 4, wilting: 5, resting: 6 };
   const keep = gv ? gv.plants.slice().sort((p, q) => order[p.state] - order[q.state]).slice(0, 6) : [];
-  const vignette = keep.length ? `<div class="recap-vignette">${stripSvg(keep, { width: 560, height: 118 })}</div>
+  // The one moving thing outside the Garden (motion budget, §6): a single
+  // butterfly drifting in the vignette's sky band. Deterministic placement —
+  // hash of the month id, no Math.random — and the existing .flutter class,
+  // which prefers-reduced-motion already zeroes. Its wc* wash classes resolve
+  // against the strip's own filter defs beside it.
+  const vh = [...last.id].reduce((a, ch) => (a * 31 + ch.charCodeAt(0)) >>> 0, 7);
+  const vignette = keep.length ? `<div class="recap-vignette">${stripSvg(keep, { width: 560, height: 118 })}
+      <svg class="recap-butterfly flutter" viewBox="-12 -10 24 20" style="left:${8 + (vh % 52)}%;top:${14 + ((vh >>> 3) % 14)}%" aria-hidden="true"><defs>${butterflySymbol().replace('id="butterfly"', 'id="recap-bfly"')}</defs><use href="#recap-bfly"/></svg></div>
       <p class="recap-line muted">The beds are in for ${MONTH_NAMES[Number(last.id.split('-')[1]) - 1]} — here's what the month grew.</p>` : '';
 
   const overlay = document.createElement('div');
@@ -2756,9 +2803,9 @@ function showMonthCloseWorkflow(last, nid) {
         ${catRows.map((c) => `<tr><td>${esc(c.name)}</td><td>${money(c.planned)}</td><td>${money(c.spent)}</td>
           <td class="${moneyCls(r2(c.planned - c.spent))}">${money(r2(c.planned - c.spent))}</td></tr>`).join('')}
         </tbody></table></details>
-      ${attList.length ? `<p style="margin:10px 0 4px"><b>⚠ Needs attention (${attList.length})</b></p><ul class="modal-list">
+      ${attList.length ? `<p style="margin:10px 0 4px"><b>${icon('warn', 'needs attention')} Needs attention (${attList.length})</b></p><ul class="modal-list">
         ${attList.map((x) => li(x, x.attention === 'exceeded' ? `over by <span class="neg">${money(-x.leftover)}</span>` : 'off pace')).join('')}</ul>` : ''}
-      ${offList.length ? `<p style="margin:10px 0 4px"><b>💡 Available to move (${offList.length})</b></p><ul class="modal-list">
+      ${offList.length ? `<p style="margin:10px 0 4px"><b>${icon('move')} Available to move (${offList.length})</b></p><ul class="modal-list">
         ${offList.map((x, i) => li(x, `<span class="pos">${money(x.leftover)}</span> free — <a href="#" data-wf-xfer="${esc(x.fund)}">transfer it</a>`)).join('')}</ul>` : ''}
       <div class="modal-actions">
         <button class="btn" id="wfCancel">Cancel</button>
@@ -2854,7 +2901,15 @@ function renderOnboarding() {
 /* ---- step bodies ---- */
 
 function wzWelcomeHtml() {
+  // A static keepsake strip — three sprouts on soil — warms the first screen a
+  // new user ever sees. Nothing on it moves (the wizard has no motion budget).
+  const sprouts = [
+    { fund: 'a', family: 'rowcrop', species: 'tomato', state: 'growing', stage: 1 },
+    { fund: 'b', family: 'shrub', species: 'lavender', state: 'growing', stage: 1 },
+    { fund: 'c', family: 'rowcrop', species: 'carrot', state: 'growing', stage: 1 },
+  ];
   return `
+    <div class="wz-strip">${stripSvg(sprouts, { width: 640, height: 96 })}</div>
     <h1>Let's set up your budget.</h1>
     <p class="wz-body">This takes about five minutes, and you can change everything later.</p>
     <p class="wz-body">The idea is simple: split your money into envelopes — one for groceries,
@@ -2869,7 +2924,8 @@ function wzCsvHtml() {
     <p class="wz-body">If you can download a file of your recent transactions from your bank's website
       (usually called "Export" or "Download CSV" — grab the last 90 days, or whatever you have),
       the app can use it to suggest envelopes and typical amounts for you.</p>
-    <p class="wz-body">No internet involved — the file never leaves your computer.</p>`;
+    <p class="wz-body">No internet involved — the file never leaves your computer.</p>
+    <p class="wz-body">Older transactions are used to suggest amounts — only this month's are brought into your budget.</p>`;
 
   // Files already read: one summary line each, straight from the report.
   for (const f of wizard.files) {
@@ -2883,7 +2939,7 @@ function wzCsvHtml() {
     html += `<div class="section import-refusal">
       <b>${esc(p.name)}</b> couldn't be read.
       <p>${esc(p.refusal)}</p>
-      <p>No problem — skip this step and set up by hand; you can try a different file later from the Import tab.</p>
+      <p>No problem — skip this step and set up by hand; you can try a different file later from the Import CSV page.</p>
     </div>`;
   } else if (p && p.report?.questions?.length) {
     html += csvQuestionsHtml(p.report.questions);
@@ -2892,7 +2948,7 @@ function wzCsvHtml() {
   const haveFiles = wizard.files.length > 0;
   html += `<div class="wz-actions">
     <button class="btn ${haveFiles ? '' : 'btn-accent'}" data-wz-pick>${haveFiles ? 'Add another file…' : 'Choose file…'}</button>
-    ${haveFiles ? `<span class="muted" style="font-size:.82rem">checking + credit card files work well together — deposits live in one, categories in the other</span>` : ''}
+    ${haveFiles ? `<span class="muted" style="font-size:.82rem">checking + credit card files work well together — one has your paycheck deposits, the other has most of your spending</span>` : ''}
     <div class="spacer"></div>
     ${haveFiles
       ? `<button class="btn btn-accent" data-wz-next>Continue</button>`
@@ -2974,7 +3030,7 @@ function wzFundsHtml() {
           ${st.fromCsv ? '<span class="rule-chip">from your bank file</span>' : ''}
         </label>
         ${st.checked ? `<input class="search wz-amt" data-wz-amt="${sf.key}" value="${st.amount != null ? money(st.amount) : ''}"
-          placeholder="$ / month" inputmode="decimal" title="${sf.type === 'target' ? 'The total to save up' : 'How much to set aside each month'}">` : ''}
+          placeholder="${sf.type === 'target' ? '$ total' : '$ / month'}" inputmode="decimal" title="${sf.type === 'target' ? 'The total to save up' : 'How much to set aside each month'}">` : ''}
       </div>`;
       if (sf.note || (st.checked && (sf.cadence || sf.type === 'target'))) {
         html += `<div class="wz-fund-sub">`;
@@ -3003,7 +3059,7 @@ function wzFundsHtml() {
     }
     html += `</div>`;
   }
-  html += `<p class="muted" style="font-size:.85rem">Envelopes aren't set in stone — add, rename, or remove any of them later on the Budget page.</p>
+  html += `<p class="muted" style="font-size:.85rem">Envelopes aren't set in stone — add or remove any of them later on the Budget page, or rename one in Settings.</p>
     <div class="wz-actions">
       <button class="btn" data-wz-back>Back</button>
       <div class="spacer"></div>
@@ -3037,6 +3093,7 @@ function wzFinishHtml() {
   return `<h1>That's your foundation.</h1>
     <p class="wz-body">Your budget: <b>${nPay} paycheck${nPay === 1 ? '' : 's'}</b>, <b>${nFunds} envelope${nFunds === 1 ? '' : 's'}</b>${
       nTx ? `, <b>${nTx} transaction${nTx === 1 ? '' : 's'}</b> to bring in` : ''}.</p>
+    ${nTx ? `<p class="muted" style="font-size:.85rem">(Those are this month's transactions — older rows in your file were used to size your envelopes, not imported.)</p>` : ''}
     <p class="wz-body">The numbers don't need to be perfect — you'll sharpen them as real life happens.
       Next you'll see your garden — every envelope you picked is a plant in it — and the Budget page
       keeps a short list of the blanks worth filling in.</p>
@@ -3091,7 +3148,7 @@ function wireWizard(main) {
         if (names.some((n) => !n)) { wizard.error = 'Give each paycheck a name.'; paintWizard(); return; }
         if (new Set(names).size !== names.length) { wizard.error = 'Two paychecks have the same name — make them different.'; paintWizard(); return; }
         if (names.some((n) => n === 'other income')) { wizard.error = '"Other Income" is reserved — pick another name.'; paintWizard(); return; }
-        if (wizard.sources.some((s) => !(s.count >= 1))) { wizard.error = 'Checks a month needs to be at least 1.'; paintWizard(); return; }
+        if (wizard.sources.some((s) => !(s.count >= 1))) { wizard.error = 'Checks a month must be at least 1.'; paintWizard(); return; }
       }
       if (wizard.step === 3) {
         if (!wizard.givingChoice) { wizard.error = 'Pick one — you can change it any time in Settings.'; paintWizard(); return; }
@@ -3333,6 +3390,8 @@ function enterApp() {
   $('#monthSelect').onchange = (e) => { currentMonthId = e.target.value; txSearch = ''; txFundFilter = ''; txAccountFilter = ''; fundSearch = ''; flagPanel = null; render(); };
   $('#newMonthBtn').onclick = startNextMonth;
   $$('.nav-btn').forEach((b) => b.onclick = () => { view = b.dataset.view; txSearch = ''; txFundFilter = ''; txAccountFilter = ''; render(); });
+  $('#supportLink').onclick = () => window.budgetAPI.openExternal(KOFI_URL);
+  $('#feedbackLink').onclick = () => window.budgetAPI.openExternal(FEEDBACK_MAILTO);
   render();
 }
 
@@ -3360,7 +3419,7 @@ async function boot() {
 
   if (migrated) await window.budgetAPI.saveData(data);
   if (v5.retyped.length) {
-    setTimeout(() => toast(`${v5.retyped.length} single-charge fund(s) re-typed from Pacing to Basic — see Settings for the list.`), 800);
+    setTimeout(() => toast(`${v5.retyped.length} single-charge fund(s) switched from Pacing to Basic — see Settings for the list.`), 800);
   }
   enterApp();
 }

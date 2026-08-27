@@ -73,9 +73,12 @@
         <rect class="nw2" x="33" y="25" width="54" height="76" rx="9" fill="var(--cu,#f7f0da)" opacity=".5"/>
         <rect class="nw1" x="35" y="27" width="50" height="72" rx="8" fill="var(--cm,#efe6cc)" opacity=".9"/>
         <rect class="nw3" x="49" y="16" width="22" height="14" rx="5" fill="var(--bk,#b99a6b)" opacity=".95"/>
-        <path class="nw1" d="M45,50 H75" stroke="#5a6a4c" stroke-width="7" stroke-linecap="round" opacity=".9"/>
-        <path class="nw3" d="M45,64 H75" stroke="#5a6a4c" stroke-width="7" stroke-linecap="round" opacity=".9"/>
-        <path class="nw2" d="M45,78 H63" stroke="#5a6a4c" stroke-width="7" stroke-linecap="round" opacity=".9"/>
+        <!-- Ruled lines carry a slight sag on purpose: a perfectly horizontal or
+             vertical stroked path has a zero-area bbox and the objectBoundingBox
+             filter region collapses — the element silently doesn't render. -->
+        <path class="nw1" d="M45,51 Q60,48 75,51" stroke="#5a6a4c" stroke-width="7" stroke-linecap="round" fill="none" opacity=".9"/>
+        <path class="nw3" d="M45,65 Q60,62 75,65" stroke="#5a6a4c" stroke-width="7" stroke-linecap="round" fill="none" opacity=".9"/>
+        <path class="nw2" d="M45,79 Q54,76.5 63,79" stroke="#5a6a4c" stroke-width="7" stroke-linecap="round" fill="none" opacity=".9"/>
         <circle class="nw1" cx="73" cy="78" r="6" fill="#4a7c46" opacity=".9"/>
       </g>
 
@@ -85,16 +88,18 @@
               fill="var(--cu,#f7f0da)" opacity=".5"/>
         <path class="nw1" d="M40,22 H80 V91 L73.3,85 L66.7,91 L60,85 L53.3,91 L46.7,85 L40,91 Z"
               fill="var(--cm,#efe6cc)" opacity=".9"/>
-        <path class="nw3" d="M48,38 H72" stroke="#5a6a4c" stroke-width="7" stroke-linecap="round" opacity=".9"/>
-        <path class="nw1" d="M48,51 H72" stroke="#5a6a4c" stroke-width="7" stroke-linecap="round" opacity=".9"/>
-        <path class="nw2" d="M48,64 H60" stroke="#5a6a4c" stroke-width="7" stroke-linecap="round" opacity=".9"/>
-        <path class="nw3" d="M64,64 H72" stroke="#b8543a" stroke-width="7" stroke-linecap="round" opacity=".9"/>
+        <!-- Slight curves for the same zero-area-bbox reason as ni-clipboard. -->
+        <path class="nw3" d="M48,39 Q60,36 72,39" stroke="#5a6a4c" stroke-width="7" stroke-linecap="round" fill="none" opacity=".9"/>
+        <path class="nw1" d="M48,52 Q60,49 72,52" stroke="#5a6a4c" stroke-width="7" stroke-linecap="round" fill="none" opacity=".9"/>
+        <path class="nw2" d="M48,65 Q54,63 60,65" stroke="#5a6a4c" stroke-width="7" stroke-linecap="round" fill="none" opacity=".9"/>
+        <path class="nw3" d="M64,65 Q68,63 72,65" stroke="#b8543a" stroke-width="7" stroke-linecap="round" fill="none" opacity=".9"/>
       </g>
 
       <!-- Import CSV — arrow into tray -->
       <g id="ni-import">
-        <path class="nw2" d="M60,20 V56" stroke="var(--gu,#f2d9a0)" stroke-width="15" stroke-linecap="round" opacity=".5"/>
-        <path class="nw1" d="M60,22 V54" stroke="var(--gm,#e9c46a)" stroke-width="9" stroke-linecap="round" opacity=".9"/>
+        <!-- Slight curve on the shaft for the same zero-area-bbox reason as ni-clipboard. -->
+        <path class="nw2" d="M60,20 C58,32 62,44 60,56" stroke="var(--gu,#f2d9a0)" stroke-width="15" stroke-linecap="round" fill="none" opacity=".5"/>
+        <path class="nw1" d="M60,22 C58,33 62,43 60,54" stroke="var(--gm,#e9c46a)" stroke-width="9" stroke-linecap="round" fill="none" opacity=".9"/>
         <path class="nw2" d="M42,48 L60,72 L78,48 Z" fill="var(--gu,#f2d9a0)" opacity=".5"/>
         <path class="nw3" d="M44,49 L60,70 L76,49 Z" fill="var(--gm,#e9c46a)" opacity=".9"/>
         <path class="nw1" d="M32,74 V92 H88 V74" stroke="var(--tu,#dfe6d2)" stroke-width="10"
@@ -152,6 +157,136 @@
         <circle class="nw1" cx="60" cy="60" r="27" stroke="var(--cm,#e8e2cd)" stroke-width="12" fill="none" opacity=".9"/>
         <circle class="nw3" cx="60" cy="60" r="17.4" stroke="var(--sd,#8aa070)" stroke-width="5" fill="none" opacity=".6"/>
       </g>
+
+      <!-- In-view semantic icons (si-*): replace the inline emoji at a fixed
+           20px (18px floor in tight spots). Same 120-unit frame and nw* wash
+           classes as the ni-* set — no new filters. Rule: no axis-aligned
+           stroked paths inside a wash class, ever (zero-area bbox = invisible). -->
+
+      <!-- si-warn — wilting leaf (was ⚠) -->
+      <g id="si-warn">
+        <ellipse class="nw2" cx="46" cy="110" rx="28" ry="8" fill="#c9ad7e" opacity=".6"/>
+        <path class="nw2" d="M46,108 C40,66 50,38 76,28 C96,20 110,32 107,48" stroke="#b6bf8c" stroke-width="18" fill="none" stroke-linecap="round" opacity=".5"/>
+        <path class="nw1" d="M46,108 C40,66 50,38 76,28 C96,20 110,32 107,48" stroke="#6e8a50" stroke-width="11" fill="none" stroke-linecap="round" opacity=".9"/>
+        <ellipse class="nw3" cx="102" cy="76" rx="16" ry="26" fill="#d98a63" opacity=".6" transform="rotate(10 102 76)"/>
+        <ellipse class="nw1" cx="102" cy="75" rx="13.4" ry="22.4" fill="#b8543a" opacity=".95" transform="rotate(10 102 75)"/>
+      </g>
+
+      <!-- si-move — hand shovel at a soil mound (was 💡) -->
+      <g id="si-move">
+        <ellipse class="nw2" cx="42" cy="106" rx="32" ry="10" fill="#c9ad7e" opacity=".6"/>
+        <ellipse class="nw1" cx="42" cy="104" rx="23" ry="7" fill="#a58a5e" opacity=".75"/>
+        <path class="nw2" d="M92,8 C84,18 76,30 68,44" stroke="#d8bd8f" stroke-width="21" fill="none" stroke-linecap="round" opacity=".55"/>
+        <path class="nw1" d="M91,9 C83,19 75,31 68,43" stroke="#8a6f4d" stroke-width="14" fill="none" stroke-linecap="round" opacity=".95"/>
+        <path class="nw2" d="M64,44 C82,54 78,80 46,106 C28,90 24,64 40,52 C48,45 56,42 64,44 Z" fill="#d9d2c0" opacity=".65"/>
+        <path class="nw1" d="M62,48 C76,57 72,79 46,101 C31,87 28,66 42,55 C48,50 55,46 62,48 Z" fill="#b8ae98" opacity=".95"/>
+        <path class="nw3" d="M56,58 Q48,78 44,94" stroke="#8f8672" stroke-width="4.4" fill="none" stroke-linecap="round" opacity=".7"/>
+      </g>
+
+      <!-- si-unassigned — open seed packet, loose seeds (was 📥) -->
+      <g id="si-unassigned">
+        <g transform="rotate(-7 58 58)">
+          <rect class="nw2" x="24" y="10" width="70" height="92" rx="10" fill="#d8bd8f" opacity=".6"/>
+          <rect class="nw1" x="28" y="14" width="62" height="84" rx="8" fill="#efe6cc" opacity="1"/>
+          <rect class="nw3" x="28" y="14" width="62" height="20" rx="8" fill="#c9922f" opacity=".9"/>
+          <path class="nw1" d="M59,86 C59,74 58,66 59,54" stroke="#4a7c46" stroke-width="9" fill="none" stroke-linecap="round" opacity=".95"/>
+          <ellipse class="nw2" cx="45" cy="54" rx="13" ry="7" fill="#4a7c46" opacity=".95" transform="rotate(-28 45 54)"/>
+          <ellipse class="nw3" cx="73" cy="52" rx="13" ry="7" fill="#4a7c46" opacity=".95" transform="rotate(26 73 52)"/>
+        </g>
+        <ellipse class="nw1" cx="102" cy="102" rx="8" ry="5.8" fill="#8a6f4d" opacity=".95" transform="rotate(20 102 102)"/>
+        <ellipse class="nw3" cx="109" cy="113" rx="7" ry="5" fill="#c9922f" opacity=".95" transform="rotate(-14 109 113)"/>
+      </g>
+
+      <!-- si-paycheck — dollar bill in leaf greens (was 💵) -->
+      <g id="si-paycheck">
+        <g transform="rotate(-7 60 62)">
+          <rect class="nw2" x="6" y="32" width="108" height="62" rx="9" fill="#9dc08a" opacity=".6"/>
+          <rect class="nw1" x="10" y="36" width="100" height="54" rx="7" fill="#cfe0b8" opacity="1"/>
+          <rect class="nw3" x="18" y="43" width="84" height="40" rx="5" stroke="#4a7c46" stroke-width="4" fill="none" opacity=".7"/>
+          <circle class="nw2" cx="60" cy="63" r="17" fill="#9dc08a" opacity=".85"/>
+          <circle class="nw1" cx="60" cy="63" r="12" fill="#4a7c46" opacity=".95"/>
+          <circle class="nw3" cx="30" cy="63" r="4.6" fill="#4a7c46" opacity=".7"/>
+          <circle class="nw2" cx="90" cy="63" r="4.6" fill="#4a7c46" opacity=".7"/>
+        </g>
+      </g>
+
+      <!-- si-file — paper sheet, folded corner (was 📄) -->
+      <g id="si-file">
+        <path class="nw2" d="M24,8 H74 L100,34 V112 H24 Z" fill="#d8bd8f" opacity=".6"/>
+        <path class="nw1" d="M28,12 H72 L96,36 V108 H28 Z" fill="#efe6cc" opacity="1"/>
+        <path class="nw3" d="M72,12 L72,36 L96,36 Z" fill="#c9ad7e" opacity=".95"/>
+        <path class="nw3" d="M40,58 Q61,54 84,58" stroke="#5a6a4c" stroke-width="9" fill="none" stroke-linecap="round" opacity=".9"/>
+        <path class="nw1" d="M40,76 Q61,72 84,76" stroke="#5a6a4c" stroke-width="9" fill="none" stroke-linecap="round" opacity=".9"/>
+        <path class="nw2" d="M40,94 Q51,91 62,94" stroke="#4a7c46" stroke-width="9" fill="none" stroke-linecap="round" opacity=".9"/>
+      </g>
+
+      <!-- si-bloom — open sunflower head (was 🎉) -->
+      <g id="si-bloom">
+        <g class="nw2" opacity=".5">
+          <ellipse cx="60" cy="28" rx="13" ry="25" fill="#f2d9a0"/>
+          <ellipse cx="60" cy="28" rx="13" ry="25" fill="#f2d9a0" transform="rotate(60 60 60)"/>
+          <ellipse cx="60" cy="28" rx="13" ry="25" fill="#f2d9a0" transform="rotate(120 60 60)"/>
+          <ellipse cx="60" cy="28" rx="13" ry="25" fill="#f2d9a0" transform="rotate(180 60 60)"/>
+          <ellipse cx="60" cy="28" rx="13" ry="25" fill="#f2d9a0" transform="rotate(240 60 60)"/>
+          <ellipse cx="60" cy="28" rx="13" ry="25" fill="#f2d9a0" transform="rotate(300 60 60)"/>
+        </g>
+        <g class="nw1" opacity=".9">
+          <ellipse cx="60" cy="31" rx="11" ry="21" fill="#e9c46a"/>
+          <ellipse cx="60" cy="31" rx="11" ry="21" fill="#e9c46a" transform="rotate(60 60 60)"/>
+          <ellipse cx="60" cy="31" rx="11" ry="21" fill="#e9c46a" transform="rotate(120 60 60)"/>
+          <ellipse cx="60" cy="31" rx="11" ry="21" fill="#e9c46a" transform="rotate(180 60 60)"/>
+          <ellipse cx="60" cy="31" rx="11" ry="21" fill="#e9c46a" transform="rotate(240 60 60)"/>
+          <ellipse cx="60" cy="31" rx="11" ry="21" fill="#e9c46a" transform="rotate(300 60 60)"/>
+        </g>
+        <circle class="nw3" cx="60" cy="60" r="21" fill="#d98a63" opacity=".8"/>
+        <circle class="nw2" cx="60" cy="60" r="14" fill="#b8543a" opacity=".9"/>
+      </g>
+
+      <!-- si-rosette — prize ribbon (was 🏆) -->
+      <g id="si-rosette">
+        <path class="nw2" d="M44,72 L28,114 L48,102 L56,118 Z" fill="#9e4630" opacity=".9"/>
+        <path class="nw3" d="M76,72 L92,114 L72,102 L64,118 Z" fill="#b8543a" opacity=".9"/>
+        <circle class="nw2" cx="60" cy="48" r="40" fill="#f2d9a0" opacity=".6"/>
+        <circle class="nw1" cx="60" cy="48" r="34" fill="#d9a53f" opacity=".95"/>
+        <circle class="nw3" cx="60" cy="48" r="20" fill="#e9c46a" opacity="1"/>
+        <circle class="nw1" cx="60" cy="48" r="8.4" fill="#c9922f" opacity=".9"/>
+      </g>
+
+      <!-- si-target — painted target ring (was 🎯) -->
+      <g id="si-target">
+        <circle class="nw2" cx="60" cy="60" r="52" fill="#f7f0da" opacity=".7"/>
+        <circle class="nw1" cx="60" cy="60" r="47" stroke="#b8543a" stroke-width="12" fill="none" opacity=".9"/>
+        <circle class="nw3" cx="60" cy="60" r="28" stroke="#d98a63" stroke-width="10" fill="none" opacity=".8"/>
+        <circle class="nw2" cx="60" cy="60" r="11.4" fill="#9e4630" opacity=".95"/>
+      </g>
+
+      <!-- si-stone — wall stone + grass tuft (was 🧱) -->
+      <g id="si-stone">
+        <ellipse class="nw2" cx="56" cy="104" rx="42" ry="10" fill="#8f8672" opacity=".35"/>
+        <path class="nw2" d="M14,86 C8,50 38,24 66,26 C98,29 112,54 104,82 C96,104 24,106 14,86 Z" fill="#d9d2c0" opacity=".6"/>
+        <path class="nw1" d="M19,84 C14,54 40,30 66,32 C93,35 106,55 99,79 C92,98 28,100 19,84 Z" fill="#b8ae98" opacity=".95"/>
+        <ellipse class="nw3" cx="46" cy="56" rx="19" ry="12" fill="#d9d2c0" opacity=".7" transform="rotate(-16 46 56)"/>
+        <ellipse class="nw1" cx="110" cy="92" rx="3.2" ry="12" fill="#8aa84f" opacity=".85" transform="rotate(14 110 92)"/>
+        <ellipse class="nw3" cx="116" cy="94" rx="3" ry="9" fill="#6e8a50" opacity=".85" transform="rotate(28 116 94)"/>
+      </g>
+
+      <!-- si-ledger — closed ledger book (was 📒) -->
+      <g id="si-ledger">
+        <rect class="nw2" x="18" y="8" width="78" height="102" rx="9" fill="#9dc08a" opacity=".55"/>
+        <rect class="nw1" x="22" y="12" width="70" height="94" rx="8" fill="#4a7c46" opacity=".95"/>
+        <rect class="nw3" x="22" y="12" width="17" height="94" rx="7" fill="#3d6a3a" opacity=".9"/>
+        <rect class="nw2" x="92" y="18" width="9" height="82" rx="3.4" fill="#f7f0da" opacity=".95"/>
+        <path class="nw1" d="M64,106 L64,119 L74,110 L84,119 L84,106" fill="#d9a53f" opacity=".9"/>
+      </g>
+
+      <!-- si-basket — harvest basket (was 🧺; repeats up to 12× → simplest of the set) -->
+      <g id="si-basket">
+        <path class="nw2" d="M14,50 L28,104 Q60,114 92,104 L106,50 Z" fill="#d8bd8f" opacity=".55"/>
+        <path class="nw1" d="M18,53 L30,100 Q60,109 90,100 L102,53 Z" fill="#b99a6b" opacity=".95"/>
+        <path class="nw3" d="M24,78 Q60,87 96,78" stroke="#8a6f4d" stroke-width="6" fill="none" opacity=".5"/>
+        <path class="nw2" d="M10,48 Q60,41 110,48" stroke="#8a6f4d" stroke-width="11" fill="none" stroke-linecap="round" opacity=".9"/>
+        <path class="nw1" d="M34,44 C42,10 78,10 86,44" stroke="#8a6f4d" stroke-width="8" fill="none" stroke-linecap="round" opacity=".9"/>
+      </g>
     </defs>
   </svg>
   <div id="app">
@@ -168,11 +303,18 @@
         <button data-view="transactions" class="nav-btn"><svg class="ni" viewBox="0 0 120 120" aria-hidden="true"><use href="#ni-receipt"/></svg><span>Transactions</span></button>
         <button data-view="import" class="nav-btn"><svg class="ni" viewBox="0 0 120 120" aria-hidden="true"><use href="#ni-import"/></svg><span>Import CSV</span></button>
         <button data-view="reports" class="nav-btn"><svg class="ni" viewBox="0 0 120 120" aria-hidden="true"><use href="#ni-chart"/></svg><span>Year Overview</span></button>
-        <button data-view="aum" class="nav-btn"><svg class="ni" viewBox="0 0 120 120" aria-hidden="true"><use href="#ni-tree"/></svg><span>AUM</span></button>
+        <button data-view="aum" class="nav-btn" title="Assets Under Management — everything you manage minus what you owe"><svg class="ni" viewBox="0 0 120 120" aria-hidden="true"><use href="#ni-tree"/></svg><span>AUM</span></button>
         <button data-view="settings" class="nav-btn"><svg class="ni" viewBox="0 0 120 120" aria-hidden="true"><use href="#ni-gear"/></svg><span>Settings</span></button>
       </nav>
       <div class="sidebar-foot">
         <div id="saveStatus" class="save-status">All changes saved</div>
+        <div class="foot-links">
+          <button id="supportLink" class="foot-link"
+                  title="Opens ko-fi.com in your web browser">Help keep the lights on</button>
+          <span class="foot-sep" aria-hidden="true">·</span>
+          <button id="feedbackLink" class="foot-link"
+                  title="Opens your email app — feedback goes to the developer">Send feedback</button>
+        </div>
       </div>
     </aside>
     <main id="main"></main>
