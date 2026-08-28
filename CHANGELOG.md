@@ -264,7 +264,7 @@ Pure chrome — no data, schema, or engine changes.
 
 Implements `_cowork/proposal-watercolor-nav-icons.md`: the 8 sidebar emoji (🌱 brand +
 7 nav) replaced with procedural watercolor SVG icons lifted from the POC
-(`_cowork/watercolor-nav-icons-poc.html`). the owner locked in **Option A** — washes
+(`_cowork/watercolor-nav-icons-poc.html`). The owner locked in **Option A** — washes
 painted straight on the pine, no paper chips, no retint blocks. Pure chrome: no data,
 schema, or engine changes; version stays 6.
 
@@ -547,7 +547,7 @@ Phase 4 (this commit) — the long-tail items, minus one:
 
 Tests: `npm run test:csv` — 505 checks. Fixture #0 (both Capital One formats) is still
 byte-identical to the pre-change baseline, and `parseBankFile` must agree with the legacy
-parser on those files. **the owner's follow-up**: on the next 2–3 real imports, review the
+parser on those files. **The owner's follow-up**: on the next 2–3 real imports, review the
 "possible duplicate" rows specifically to confirm the 0.6–0.9 scoring feels right before
 trusting it.
 

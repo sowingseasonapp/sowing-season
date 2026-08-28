@@ -53,7 +53,7 @@ function extractFabSheet(ws, monthId) {
   const rows = range.e.r + 1;
   const A = (r) => cellV(ws, 'A' + r);
 
-  // Paychecks: F2/G2/H2 (the owner), F3/G3/H3 (spouse)
+  // Paychecks: F2/G2/H2 (first earner), F3/G3/H3 (second earner)
   const checks = {};
   for (const r of [2, 3]) {
     const label = cellV(ws, 'F' + r);

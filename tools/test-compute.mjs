@@ -131,7 +131,7 @@ console.log(`\nCompute engine vs spreadsheet: ${ok} checks passed, ${bad} failed
   const aug = fresh.months.find((x) => x.id === '2026-08');
   console.log('August groups:', aug.income.map((f) => `${f.fund}=${f.group}${f.titheExempt ? '(exempt)' : ''}`).join(', '));
   // New-math sanity: titheable/check 4500 × 2 checks + bonus planned, ×15%
-  const chk = aug.checks['the owner Checks'];
+  const chk = aug.checks[Object.keys(aug.checks)[0]]; // first paycheck row (sheet F2), whatever its label
   chk.titheAmount = 4500;
   applyTitheRules(aug, 0.15);
   const bonusPlanned = aug.income.filter((f) => f.group === 'bonus' && !f.titheExempt).reduce((a, f) => a + f.planned, 0);
