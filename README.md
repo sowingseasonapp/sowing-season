@@ -1,6 +1,6 @@
 # Sowing Season
 
-A desktop envelope-budgeting app built from the "2026 Budget.xlsx" spreadsheet — tend your
+A desktop envelope-budgeting app built from a spreadsheet — tend your
 money like a garden. All of the spreadsheet's logic is preserved: monthly funds with
 carry-over → planned → spent → leftover, sinking funds for yearly charges (÷12, ÷6), tithe
 as a % of planned income, a zero-based "left to allocate" check, and a Work category
