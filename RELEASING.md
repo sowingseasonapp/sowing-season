@@ -38,7 +38,10 @@ user presses **Settings → Check for updates**.
    by hand. The release **must** include the `.exe`, the `.blockmap`, and
    `latest.yml` — a release without `latest.yml` is invisible to the in-app check.
 5. Tag `v{version}`; paste user-facing notes into the release body (they surface
-   in-app as release notes).
+   in-app as release notes). Release asset names must use dashes
+   (`Sowing-Season-Setup-{version}.exe`) — GitHub turns spaces into dots, which
+   breaks the URL in `latest.yml` and blinds the in-app update check.
+6. Update the README's **Download** link to the new installer filename.
 
 ## macOS (planned, not shipped)
 

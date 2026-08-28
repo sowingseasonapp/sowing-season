@@ -7,6 +7,15 @@ as a % of planned income, a zero-based "left to allocate" check, and a Work cate
 excluded from totals. (The app was called **Family Budget** until 2026-08-23; see the
 CHANGELOG for the rename and the data-folder move-in.)
 
+## Download
+
+**[⬇ Download for Windows](https://github.com/sowingseasonapp/sowing-season/releases/latest/download/Sowing-Season-Setup-1.0.2.exe)** — one-click installer, no setup questions.
+
+Windows shows a SmartScreen warning on first run (the build is unsigned) — click
+**More info → Run anyway**. Every version lives on the
+[releases page](https://github.com/sowingseasonapp/sowing-season/releases), and the app
+can check for updates itself from **Settings → Check for updates**.
+
 ## Running it
 
 - **Packaged app**: `dist/Sowing Season-win32-x64/Sowing Season.exe` — double-click to run.
