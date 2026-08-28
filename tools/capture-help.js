@@ -29,12 +29,12 @@ const day = (d) => iso(new Date(today.getFullYear(), today.getMonth(), d));
 const month = {
   id: monthId, label: monthId,
   checks: {
-    "Sam's paychecks": { count: 2, amount: 1600, titheAmount: 1600 },
-    "Alex's paychecks": { count: 2, amount: 1050, titheAmount: 1050 },
+    "Alex's paychecks": { count: 2, amount: 1600, titheAmount: 1600 },
+    "Samantha's paychecks": { count: 2, amount: 1050, titheAmount: 1050 },
   },
   income: [
-    { fund: "Sam's paychecks", carryOver: 0, planned: 3200, rule: { type: 'checks' }, group: 'standard', titheExempt: false },
-    { fund: "Alex's paychecks", carryOver: 0, planned: 2100, rule: { type: 'checks' }, group: 'standard', titheExempt: false },
+    { fund: "Alex's paychecks", carryOver: 0, planned: 3200, rule: { type: 'checks' }, group: 'standard', titheExempt: false },
+    { fund: "Samantha's paychecks", carryOver: 0, planned: 2100, rule: { type: 'checks' }, group: 'standard', titheExempt: false },
     { fund: 'Gifts', carryOver: 0, planned: 100, rule: null, group: 'bonus', titheExempt: false },
     { fund: 'Reimbursements', carryOver: 0, planned: 0, rule: null, group: 'bonus', titheExempt: true },
   ],
@@ -46,10 +46,10 @@ const month = {
     { name: 'Savings', excludeFromTotals: false, funds: [fund('Emergency fund', 550, 'savings', { savingsMode: 'build', monthlyAmount: 550 }), fund('Vacation', 400, 'savings', { targetAmount: 1800, targetMonth: '2027-06' }), fund('Christmas', 150, 'savings', { targetAmount: 600, targetMonth: `${today.getFullYear()}-12` }), fund('Car repairs', 280, 'savings', { savingsMode: 'build', monthlyAmount: 280 })] },
   ],
   transactions: [
-    { id: 'd1', date: day(1), vendor: 'Direct deposit', amount: 1600, fund: "Sam's paychecks", description: '', account: 'Checking' },
-    { id: 'd2', date: day(15), vendor: 'Direct deposit', amount: 1600, fund: "Sam's paychecks", description: '', account: 'Checking' },
-    { id: 'd3', date: day(5), vendor: 'Direct deposit', amount: 1050, fund: "Alex's paychecks", description: '', account: 'Checking' },
-    { id: 'd4', date: day(19), vendor: 'Direct deposit', amount: 1050, fund: "Alex's paychecks", description: '', account: 'Checking' },
+    { id: 'd1', date: day(1), vendor: 'Direct deposit', amount: 1600, fund: "Alex's paychecks", description: '', account: 'Checking' },
+    { id: 'd2', date: day(15), vendor: 'Direct deposit', amount: 1600, fund: "Alex's paychecks", description: '', account: 'Checking' },
+    { id: 'd3', date: day(5), vendor: 'Direct deposit', amount: 1050, fund: "Samantha's paychecks", description: '', account: 'Checking' },
+    { id: 'd4', date: day(19), vendor: 'Direct deposit', amount: 1050, fund: "Samantha's paychecks", description: '', account: 'Checking' },
     { id: 'd5', date: day(6), vendor: 'Birthday gift', amount: 50, fund: 'Gifts', description: '', account: 'Checking' },
     { id: 'd6', date: day(1), vendor: 'Landlord', amount: -1450, fund: 'Rent', description: '', account: 'Checking' },
     { id: 'd7', date: day(2), vendor: 'Corner Grocery', amount: -86.4, fund: 'Groceries', description: '', account: 'Card' },

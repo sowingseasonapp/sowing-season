@@ -45,6 +45,15 @@ preload.js, index.html and styles.css untouched; all four suites green
 - **Dev-server fix**: `/assets/*` now maps to `/src/assets/*` — dev.html is
   served at `/` but index.html lives in `src/`, so walkthrough images 404'd in
   the harness (packaged app was never affected).
+- **Vocabulary follow-up (the owner's review, same day)**: the wizard now speaks
+  **fund** throughout, not envelope — W8's "wizard speaks envelope language"
+  half is retired. The welcome step's one establishing sentence ("split your
+  money into envelopes… here we call them **funds**") is the only place the
+  metaphor survives; picker title, subscriptions note, CSV step, footnote and
+  both Finish-step lines all switched to "fund", and the walkthrough's slide-3
+  envelope bridge was removed as obsolete. Screenshot paychecks renamed
+  Sam/Alex → **Alex's / Samantha's** (capture-help.js), and the wizard's
+  name placeholder now reads "e.g. Samantha's paychecks".
 
 ---
 

@@ -2291,10 +2291,11 @@ function showWalkthrough(slides, flagKey) {
 
 /* ---------------- Budget walkthrough ----------------
  * First-visit guide to the Budget page (settings.budgetHelpSeen gates it),
- * reopenable any time from the ? button next to the page title. Post-wizard
- * vocabulary is "fund" (W8) — slide 3 carries the one deliberate envelope
- * bridge so wizard graduates recognize what they picked. Slide 3's type
- * blurbs paraphrase FUND_BEHAVIORS; keep them in step if those change.
+ * reopenable any time from the ? button next to the page title. Vocabulary is
+ * "fund" throughout — the wizard's welcome step establishes the term once
+ * ("envelopes… here we call them funds") and every other surface stays on
+ * fund language. Slide 3's type blurbs paraphrase FUND_BEHAVIORS; keep them
+ * in step if those change.
  */
 const BUDGET_SLIDES = [
   {
@@ -2315,11 +2316,11 @@ const BUDGET_SLIDES = [
   {
     img: 'assets/help/budget-funds.png',
     title: 'Money going out',
-    body: `Below that, your expense funds, grouped into categories. (In setup we called them
-      envelopes — same thing.) Each fund has a personality: <b>Basic</b> plans a number each
-      month, <b>Pacing</b> watches how fast you're spending, <b>Fixed recurring</b> spreads a
-      regular bill, <b>Savings goal</b> saves a total by a date, and <b>Build up</b> sets aside
-      a bit every month. Click any fund's name to see or change how it behaves.`,
+    body: `Below that, your expense funds, grouped into categories. Each fund has a
+      personality: <b>Basic</b> plans a number each month, <b>Pacing</b> watches how fast
+      you're spending, <b>Fixed recurring</b> spreads a regular bill, <b>Savings goal</b>
+      saves a total by a date, and <b>Build up</b> sets aside a bit every month. Click any
+      fund's name to see or change how it behaves.`,
   },
   {
     img: 'assets/help/budget-funds.png',
@@ -3255,7 +3256,7 @@ const STARTER_FUNDS = [
   { key: 'internet', name: 'Internet', cat: 'bills', type: 'basic', checked: true },
   { key: 'cellPhone', name: 'Cell Phone', cat: 'bills', type: 'basic', checked: true },
   { key: 'subscriptions', name: 'Subscriptions', cat: 'bills', type: 'basic', checked: true,
-    note: 'Netflix, Spotify, all of it — one envelope is plenty to start' },
+    note: 'Netflix, Spotify, all of it — one fund is plenty to start' },
   { key: 'carInsurance', name: 'Car Insurance', cat: 'bills', type: 'basic', checked: false, cadence: true },
   { key: 'groceries', name: 'Groceries', cat: 'everyday', type: 'pacing', checked: true },
   { key: 'gas', name: 'Gas', cat: 'everyday', type: 'pacing', checked: true },
@@ -3330,7 +3331,7 @@ function wzCsvHtml() {
     <h1>Want a head start?</h1>
     <p class="wz-body">If you can download a file of your recent transactions from your bank's website
       (usually called "Export" or "Download CSV" — grab the last 90 days, or whatever you have),
-      the app can use it to suggest envelopes and typical amounts for you.</p>
+      the app can use it to suggest funds and typical amounts for you.</p>
     <p class="wz-body">No internet involved — the file never leaves your computer.</p>
     <p class="wz-body">Older transactions are used to suggest amounts — only this month's are brought into your budget.</p>`;
 
@@ -3379,7 +3380,7 @@ function wzIncomeHtml() {
     html += `<div class="wz-card">
       ${wizard.sources.length > 1 ? `<button class="btn-ghost wz-remove" data-wz-del-src="${i}" title="Remove this paycheck">✕</button>` : ''}
       <div class="modal-row"><label class="wz-label">Whose paycheck is this?</label>
-        <input class="search" style="flex:1" data-wz-src="${i}" data-k="name" value="${esc(src.name)}" placeholder="e.g. Sam's paychecks" maxlength="60"></div>
+        <input class="search" style="flex:1" data-wz-src="${i}" data-k="name" value="${esc(src.name)}" placeholder="e.g. Samantha's paychecks" maxlength="60"></div>
       <div class="modal-row" style="align-items:flex-start"><label class="wz-label">Is it the same amount every time?</label>
         <div class="wz-radio-col">
           <label><input type="radio" name="wzVar-${i}" value="no" data-wz-src="${i}" data-k="variable" ${src.variable ? '' : 'checked'}> Yes — same every check</label>
@@ -3427,7 +3428,7 @@ function wzGivingHtml() {
 }
 
 function wzFundsHtml() {
-  let html = `<h1>Pick your envelopes</h1>
+  let html = `<h1>Pick your funds</h1>
     <p class="wz-body">Check the ones that fit your life. Amounts are optional — you can fill them in
       later; it's on the checklist.</p>`;
   for (const g of WZ_GROUPS) {
@@ -3469,7 +3470,7 @@ function wzFundsHtml() {
     }
     html += `</div>`;
   }
-  html += `<p class="muted" style="font-size:.85rem">Envelopes aren't set in stone — add or remove any of them later on the Budget page, or rename one in Settings.</p>
+  html += `<p class="muted" style="font-size:.85rem">Funds aren't set in stone — add or remove any of them later on the Budget page, or rename one in Settings.</p>
     <div class="wz-actions">
       <button class="btn" data-wz-back>Back</button>
       <div class="spacer"></div>
@@ -3511,12 +3512,12 @@ function wzFinishHtml() {
   const nTx = wzImportableRecords().length;
   const nPay = wizard.sources.length;
   return `<h1>That's your foundation.</h1>
-    <p class="wz-body">Your budget: <b>${nPay} paycheck${nPay === 1 ? '' : 's'}</b>, <b>${nFunds} envelope${nFunds === 1 ? '' : 's'}</b>${
+    <p class="wz-body">Your budget: <b>${nPay} paycheck${nPay === 1 ? '' : 's'}</b>, <b>${nFunds} fund${nFunds === 1 ? '' : 's'}</b>${
       nTx ? `, <b>${nTx} transaction${nTx === 1 ? '' : 's'}</b> to bring in` : ''}.</p>
-    ${nTx ? `<p class="muted" style="font-size:.85rem">(Those are this month's transactions — older rows in your file were used to size your envelopes, not imported.)</p>` : ''}
+    ${nTx ? `<p class="muted" style="font-size:.85rem">(Those are this month's transactions — older rows in your file were used to size your funds, not imported.)</p>` : ''}
     <p class="wz-body">The numbers don't need to be perfect — you'll sharpen them as real life happens.
-      Next you'll see your garden — every envelope you picked is a plant in it. When you open the
-      Budget page, your income sits at the top, your envelopes below it in their groups, and a short
+      Next you'll see your garden — every fund you picked is a plant in it. When you open the
+      Budget page, your income sits at the top, your funds below it in their groups, and a short
       guide will walk you through the page the first time. It keeps a list of the blanks worth
       filling in, too.</p>
     <div class="wz-actions">
