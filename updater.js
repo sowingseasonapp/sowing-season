@@ -16,9 +16,8 @@
 const { app } = require('electron');
 
 // GitHub coordinates for the updater and the releases page.
-// >>> OWNER_TBD: fill in when the owner picks the account/repo (U7 open blocker) —
-// >>> must match the `publish` block in package.json.
-const REPO_OWNER = 'OWNER_TBD';
+// Must match the `publish` block in package.json.
+const REPO_OWNER = 'sowingseasonapp';
 const REPO_NAME = 'sowing-season';
 const RELEASES_URL = `https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/latest`;
 

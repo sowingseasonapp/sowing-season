@@ -124,10 +124,10 @@ stay exactly "Sowing Season" (keys `%APPDATA%\Sowing Season`). budgetAPI is now
 **18 methods**. `npm run pack` still works — KEEP gained `updater.js` +
 `node_modules` (prune strips devDeps; asar grew 0.4 → 3.2 MB). RELEASING.md +
 TESTERS.md written. **Open blockers before any release/push**: GitHub
-owner/repo (OWNER_TBD in package.json + updater.js), and a history scrub —
-data/seed.json IS in the initial commit and redacted paths in three tools files'
-history (working tree scrubbed in U22/U23; history rewrite awaits the repo
-decision).
+owner/repo (OWNER_TBD in package.json + updater.js), and a history scrub of
+personal data from early commits (working tree scrubbed in U22/U23; history
+rewrite awaits the repo decision). Both resolved 2026-08-27: repo is
+sowingseasonapp/sowing-season and the full history scrub ran before first push.
 
 **Traps hit this round:** the dist asar lock (Claude.exe handle) struck again —
 recovered via dist-tmp package → robocopy `/XF app.asar` → shared-write

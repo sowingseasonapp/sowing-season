@@ -15,7 +15,7 @@
     "test:migrate": "node tools/test-migrate.mjs"
   },
   "keywords": [],
-  "author": "the owner",
+  "author": "sowingseasonapp",
   "license": "ISC",
   "type": "commonjs",
   "devDependencies": {
@@ -55,7 +55,7 @@
     },
     "publish": {
       "provider": "github",
-      "owner": "OWNER_TBD",
+      "owner": "sowingseasonapp",
       "repo": "sowing-season"
     }
   }
