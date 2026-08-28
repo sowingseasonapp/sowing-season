@@ -1,6 +1,6 @@
 {
   "name": "sowing-season",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Envelope-style budgeting app — tend your money like a garden",
   "main": "main.js",
   "scripts": {

@@ -388,10 +388,10 @@ function makeMonth(id, { categories, income, transactions = [] }) {
   check('prefers-reduced-motion disables every garden animation class', ['.flutter', '.leaf-fall', '.bee-loop', '.firefly', '.plant.sway .body', '.plant.st-harvest .glow', '.garden-live', '.plant .lift'].every((k) => rmBlock.includes(k)), rmBlock.slice(0, 200));
   check('continuous plant motion is stepped (cheap to re-raster)', /\.plant\.sway \.body \{ animation: sway [^;]*steps\(/.test(css) && /\.plant\.st-harvest \.glow \{ animation: glow [^;]*steps\(/.test(css));
   check('ambient loops are slow (6–12 s)', [...css.matchAll(/\.(flutter|leaf-fall|bee-loop|firefly) \{ animation: \w+ (\d+)s/g)].every((m) => Number(m[2]) >= 6 && Number(m[2]) <= 12));
-  check('no raster assets beyond the AUM help screenshots and the derived icon', (() => {
+  check('no raster assets beyond the AUM/Budget help screenshots and the derived icon', (() => {
     const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => e.isDirectory() ? walk(`${d}/${e.name}`) : [`${d}/${e.name}`]);
     const rasters = walk(fileURLToPath(new URL('../src', import.meta.url))).filter((f) => /\.(png|jpe?g|gif|webp|bmp)$/i.test(f));
-    return rasters.length === 3 && rasters.every((f) => /assets\/help\/aum-/.test(f));
+    return rasters.length === 6 && rasters.every((f) => /assets\/help\/(aum|budget)-/.test(f));
   })());
 }
 

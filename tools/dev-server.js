@@ -10,6 +10,9 @@ const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css
 http.createServer((req, res) => {
   let url = req.url.split('?')[0];
   if (url === '/') url = '/src/dev.html';
+  // dev.html is served at / but the real index.html lives in src/, so the
+  // renderer's relative asset paths (walkthrough screenshots) need the prefix.
+  if (url.startsWith('/assets/')) url = '/src' + url;
   if (req.method === 'POST' && url === '/save-icon') {
     // dev-only helper: tools/icon-export.html renders build/icon.svg to canvas PNGs and posts them here
     let body = '';

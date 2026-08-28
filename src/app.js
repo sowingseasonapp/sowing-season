@@ -1187,6 +1187,7 @@ function renderBudget(main) {
   checklistAutoDetect(month, comp);
 
   let html = `
+    <h1 class="view-title">Budget <button class="help-btn" id="budgetHelpBtn" title="How the Budget page works">?</button></h1>
     ${checklistHtml(month)}
     <div class="month-head">
       <div class="hero ${s.leftToAllocate >= -0.004 || roundingOnly ? 'good' : 'bad'}">
@@ -1394,6 +1395,7 @@ function renderBudget(main) {
   }
 
   // --- wire events ---
+  $('#budgetHelpBtn').onclick = () => showBudgetWalkthrough();
   $('#transferBtn').onclick = () => showTransferModal();
   $('#addFundBtn').onclick = () => showAddFund({ side: 'expense', ci: 0 });
   $('#expandAllBtn').onclick = () => {
@@ -1556,6 +1558,10 @@ function renderBudget(main) {
     }
   };
 
+  // First visit only — every dismissal sets the flag (see showBudgetWalkthrough).
+  // renderBudget re-runs on every keystroke in the fund search; the overlay
+  // guard in showWalkthrough plus flag-on-dismiss keeps this to one instance.
+  if (!data.settings.budgetHelpSeen) showBudgetWalkthrough();
 }
 
 /* ---------------- Transactions view ---------------- */
@@ -2210,11 +2216,18 @@ const AUM_SLIDES = [
       bottom remembers every edit. More questions about AUM? It comes from <b>SeedTime</b> —
       Bob &amp; Linda Lotich explain it in their podcast episode <i>"(AUM) The 2nd most important
       financial metric to track."</i>`,
-    cta: true,
+    cta: `<button class="btn" id="wtSeedtime">Listen to the SeedTime episode ↗</button>
+         <div class="muted" style="font-size:.8rem;margin-top:8px">Reopen this guide any time with the ? button above.</div>`,
+    wireCta: (overlay) => { $('#wtSeedtime', overlay).onclick = () => window.budgetAPI.openExternal(AUM_EPISODE_URL); },
   },
 ];
 
-function showAumWalkthrough() {
+function showAumWalkthrough() { showWalkthrough(AUM_SLIDES, 'aumHelpSeen'); }
+
+/* Shared machinery for the first-run page guides (AUM, Budget — the Garden's
+ * one-slide ceremony stays bespoke). Slides are data: { img, title, body,
+ * cta?, wireCta? }; flagKey names the settings boolean set on dismissal. */
+function showWalkthrough(slides, flagKey) {
   // The help button and the first-run path can race a re-render — never two.
   if ($('.walkthrough-overlay')) return;
   let slide = 0;
@@ -2241,27 +2254,23 @@ function showAumWalkthrough() {
   const close = () => {
     overlay.remove();
     // Every dismissal counts as "seen" — Done, ✕, Escape, or overlay click.
-    if (!data.settings.aumHelpSeen) { data.settings.aumHelpSeen = true; markDirty(); }
+    if (!data.settings[flagKey]) { data.settings[flagKey] = true; markDirty(); }
   };
   const paint = () => {
-    const s = AUM_SLIDES[slide];
-    const last = slide === AUM_SLIDES.length - 1;
+    const s = slides[slide];
+    const last = slide === slides.length - 1;
     $('#wtMedia', overlay).innerHTML = s.img
       ? `<img src="${s.img}" alt="${esc(s.title)} — screenshot">` : '';
     $('#wtTitle', overlay).textContent = s.title;
     $('#wtBody', overlay).innerHTML = s.body;
-    $('#wtCta', overlay).innerHTML = s.cta
-      ? `<button class="btn" id="wtSeedtime">Listen to the SeedTime episode ↗</button>
-         <div class="muted" style="font-size:.8rem;margin-top:8px">Reopen this guide any time with the ? button above.</div>`
-      : '';
-    $('#wtDots', overlay).innerHTML = AUM_SLIDES.map((_, i) =>
+    $('#wtCta', overlay).innerHTML = s.cta || '';
+    if (s.wireCta) s.wireCta(overlay);
+    $('#wtDots', overlay).innerHTML = slides.map((_, i) =>
       `<button class="wt-dot ${i === slide ? 'on' : ''}" data-slide="${i}" title="Slide ${i + 1}"></button>`).join('');
     $('#wtBack', overlay).style.visibility = slide === 0 ? 'hidden' : 'visible';
     $('#wtNext', overlay).textContent = last ? 'Done' : 'Next';
-    const st = $('#wtSeedtime', overlay);
-    if (st) st.onclick = () => window.budgetAPI.openExternal(AUM_EPISODE_URL);
   };
-  const go = (i) => { slide = Math.max(0, Math.min(AUM_SLIDES.length - 1, i)); paint(); };
+  const go = (i) => { slide = Math.max(0, Math.min(slides.length - 1, i)); paint(); };
 
   overlay.addEventListener('click', (e) => {
     if (e.target === overlay) { close(); return; }
@@ -2275,10 +2284,64 @@ function showAumWalkthrough() {
   });
   $('#wtClose', overlay).onclick = close;
   $('#wtBack', overlay).onclick = () => go(slide - 1);
-  $('#wtNext', overlay).onclick = () => { if (slide === AUM_SLIDES.length - 1) close(); else go(slide + 1); };
+  $('#wtNext', overlay).onclick = () => { if (slide === slides.length - 1) close(); else go(slide + 1); };
   paint();
   overlay.focus();
 }
+
+/* ---------------- Budget walkthrough ----------------
+ * First-visit guide to the Budget page (settings.budgetHelpSeen gates it),
+ * reopenable any time from the ? button next to the page title. Post-wizard
+ * vocabulary is "fund" (W8) — slide 3 carries the one deliberate envelope
+ * bridge so wizard graduates recognize what they picked. Slide 3's type
+ * blurbs paraphrase FUND_BEHAVIORS; keep them in step if those change.
+ */
+const BUDGET_SLIDES = [
+  {
+    img: 'assets/help/budget-hero.png',
+    title: 'Meet your Budget page',
+    body: `This is your plan for the month. The big number — <b>Left to allocate</b> — is your
+      income minus everything you've planned. The goal is <b>$0</b>: every dollar has a job to
+      do. Nothing is locked in; you're sketching the month, and the app does the arithmetic.`,
+  },
+  {
+    img: 'assets/help/budget-income.png',
+    title: 'Money coming in',
+    body: `The top two sections are your income funds. <b>Standard Income</b> is your paychecks —
+      planned as checks × per-check amount, which setup already filled in. <b>Extra Income</b> is
+      for money that just shows up: gifts, reimbursements, a side job. If it lands in your
+      account, it has a home here.`,
+  },
+  {
+    img: 'assets/help/budget-funds.png',
+    title: 'Money going out',
+    body: `Below that, your expense funds, grouped into categories. (In setup we called them
+      envelopes — same thing.) Each fund has a personality: <b>Basic</b> plans a number each
+      month, <b>Pacing</b> watches how fast you're spending, <b>Fixed recurring</b> spreads a
+      regular bill, <b>Savings goal</b> saves a total by a date, and <b>Build up</b> sets aside
+      a bit every month. Click any fund's name to see or change how it behaves.`,
+  },
+  {
+    img: 'assets/help/budget-funds.png',
+    title: 'Reading a row',
+    body: `Every fund reads the same way: <b>Carry over</b> is what rolled in from last month,
+      <b>Planned</b> is this month's number, <b>Spent</b> is what actually happened (income rows
+      say <b>Received</b>), and <b>Leftover</b> is what remains. The Carry over and Planned
+      boxes are yours to type in — everything else is calculated for you.`,
+  },
+  {
+    img: null,
+    title: 'The app keeps watch',
+    body: `You don't have to catch problems yourself. The <b>Review</b> button collects anything
+      that needs a look — a fund over budget, money free to move, a paycheck that came in
+      different. Overspent somewhere? The <b>⇄ Transfer</b> button moves money between funds;
+      that's normal budgeting, not failure. And the <i>Finish setting up</i> list up top
+      remembers the blanks worth filling in.`,
+    cta: `<div class="muted" style="font-size:.8rem;margin-top:8px">Reopen this guide any time with the ? button above.</div>`,
+  },
+];
+
+function showBudgetWalkthrough() { showWalkthrough(BUDGET_SLIDES, 'budgetHelpSeen'); }
 
 /* ---------------- AUM view ----------------
  * Assets Under Management (SeedTime's framing of net worth): everything you
@@ -3305,7 +3368,10 @@ function wzCsvHtml() {
 function wzIncomeHtml() {
   const det = wizard.suggest?.paycheck;
   let html = `<h1>How do you get paid?</h1>
-    <p class="wz-body">One paycheck at a time — you can add a second earner below.</p>`;
+    <p class="wz-body">One paycheck at a time — you can add a second earner below.</p>
+    <p class="wz-body muted" style="font-size:.88rem">Each paycheck gets its own row on your
+      Budget page, under <b>Standard Income</b>. There's an <b>Extra Income</b> spot too, for
+      money that just shows up — gifts, reimbursements, a side job.</p>`;
   wizard.sources.forEach((src, i) => {
     const cadence = det && src.detected
       ? (det.perMonth === 2 ? 'every two weeks' : `${det.perMonth} time${det.perMonth === 1 ? '' : 's'} a month`)
@@ -3449,8 +3515,10 @@ function wzFinishHtml() {
       nTx ? `, <b>${nTx} transaction${nTx === 1 ? '' : 's'}</b> to bring in` : ''}.</p>
     ${nTx ? `<p class="muted" style="font-size:.85rem">(Those are this month's transactions — older rows in your file were used to size your envelopes, not imported.)</p>` : ''}
     <p class="wz-body">The numbers don't need to be perfect — you'll sharpen them as real life happens.
-      Next you'll see your garden — every envelope you picked is a plant in it — and the Budget page
-      keeps a short list of the blanks worth filling in.</p>
+      Next you'll see your garden — every envelope you picked is a plant in it. When you open the
+      Budget page, your income sits at the top, your envelopes below it in their groups, and a short
+      guide will walk you through the page the first time. It keeps a list of the blanks worth
+      filling in, too.</p>
     <div class="wz-actions">
       <button class="btn" data-wz-back>Back</button>
       <div class="spacer"></div>

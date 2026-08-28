@@ -9,6 +9,45 @@ so entries before that are dated by when the work happened, not by commit.
 
 ---
 
+## 2026-08-27 — Fund intro in the wizard + first-run Budget walkthrough · v1.0.2
+
+Implements `_cowork\proposal-budget-walkthrough.md` in full (approved 2026-08-27;
+the owner picked the §B1 title placement). Came out of his from-scratch test run:
+the wizard never names the income-fund headings and the Budget page had no tour,
+so a new user landed on it cold. compute.js, garden*.js, src/csv/, main.js,
+preload.js, index.html and styles.css untouched; all four suites green
+(1060 / 516 / 139 / 17). Data version stays 6.
+
+- **Wizard copy (Part A)**: the paycheck step now says each paycheck becomes a
+  row under **Standard Income** and names **Extra Income** (the first two
+  headings the user meets on Budget); the Finish step promises the Budget
+  page's layout and "a short guide will walk you through the page the first
+  time" — the auto pop-up is expected, not surprising. Envelope vocabulary
+  stays wizard-only per W8.
+- **Budget walkthrough (Part B)**: 5 slides (hero/$0 goal → income funds →
+  fund personalities → reading a row → Review/Transfer/checklist), fund
+  vocabulary with one deliberate envelope-bridge sentence on slide 3. Fires
+  once on first visit to the view (`settings.budgetHelpSeen`, set on any of
+  the four dismissals, no migration); reopenable from a `?` in the page's new
+  `view-title` — Budget was the only untitled view, so this fixes that
+  inconsistency too.
+- **Shared factory**: `showWalkthrough(slides, flagKey)` extracted from
+  `showAumWalkthrough`; the AUM guide now calls it with its slides (SeedTime
+  CTA moved into the slide as `cta` html + `wireCta`), behaviour unchanged.
+  The Garden's one-slide intro stays bespoke. Slide 3's type blurbs paraphrase
+  `FUND_BEHAVIORS` — keep them in step.
+- **Screenshots**: `tools/capture-help.js` extended — richer fabricated month
+  (two standard paychecks + Gifts/Reimbursements, balanced to the dollar so
+  the hero shows $0.00, invented vendors like "Corner Grocery"/"City Water",
+  a mid-flight setup checklist) and three Budget crops (hero / income
+  accordions / Everyday category). Three new PNGs, 144 KB total. test-garden's
+  raster-asset guard now allows exactly the 6 help PNGs.
+- **Dev-server fix**: `/assets/*` now maps to `/src/assets/*` — dev.html is
+  served at `/` but index.html lives in `src/`, so walkthrough images 404'd in
+  the harness (packaged app was never affected).
+
+---
+
 ## 2026-08-26 — Simplicity round (W1–W15) + pre-UAT hardening (U1–U24) · v1.0.1
 
 Implements `_cowork\proposal-simplicity.md` (approved 2026-08-26) and
