@@ -39,14 +39,99 @@ let aumLogOpen = false; // AUM change-log section, collapsed by default
 let budgetFocus = null; // { fund } — arriving from the Garden: open its category, highlight the row
 let appVersion = ''; // package.json version via IPC (U3); '' in the dev harness
 
-/* ---------------- persistence ---------------- */
+/* ---------------- persistence + undo ---------------- */
 let saveTimer = null;
-function markDirty() {
+function scheduleSave() {
   $('#saveStatus').textContent = 'Saving…';
   $('#saveStatus').classList.add('dirty');
   clearTimeout(saveTimer);
   saveTimer = setTimeout(flushSave, 600);
 }
+
+/* Snapshot-based undo/redo: every user-made data change funnels through
+ * markDirty(label), which files the pre-change state (the whole budget is small
+ * JSON — cloning it beats threading inverse operations through 40 call sites).
+ * Session-only by design: the stacks die with the window, and the baseline is
+ * re-seeded whenever `data` is replaced wholesale (boot, wizard finish). */
+const UNDO_MAX = 50;
+let undoStack = [];
+let redoStack = [];
+let undoBase = null; // deep clone of `data` as of the last markDirty
+function seedUndoBaseline() {
+  undoBase = structuredClone(data);
+  undoStack = []; redoStack = [];
+  updateUndoButtons();
+}
+function updateUndoButtons() {
+  const u = $('#undoBtn'), r = $('#redoBtn');
+  if (!u || !r) return;
+  u.disabled = !undoStack.length;
+  r.disabled = !redoStack.length;
+  u.title = undoStack.length ? `Undo ${undoStack[undoStack.length - 1].label} (Ctrl+Z)` : 'Nothing to undo (Ctrl+Z)';
+  r.title = redoStack.length ? `Redo ${redoStack[redoStack.length - 1].label} (Ctrl+Y)` : 'Nothing to redo (Ctrl+Y)';
+}
+function markDirty(label = 'the last change') {
+  if (undoBase) {
+    undoStack.push({ snap: undoBase, label });
+    if (undoStack.length > UNDO_MAX) undoStack.shift();
+    redoStack = [];
+    undoBase = structuredClone(data);
+    updateUndoButtons();
+  }
+  scheduleSave();
+}
+// For automatic bookkeeping (checklist auto-latch, walkthrough-seen flags):
+// saves without filing an undo step — Ctrl+Z should never appear to do nothing
+// because it reverted a flag the user can't see. The change folds into the
+// baseline so neighbouring undo steps stay accurate.
+function silentDirty() {
+  if (undoBase) undoBase = structuredClone(data);
+  scheduleSave();
+}
+function restoreSnapshot(snap) {
+  data = snap;
+  undoBase = structuredClone(data);
+  // The restored data may not contain the month being viewed (undoing "Start
+  // next month") — fall back to the newest month that exists.
+  if (!data.months.some((m) => m.id === currentMonthId)) {
+    currentMonthId = data.months[data.months.length - 1].id;
+  }
+  closeFundPanel(); // its indices resolve against the pre-restore structure
+  scheduleSave();
+  updateUndoButtons();
+  render();
+}
+function undo() {
+  if (!undoStack.length) { toast('Nothing to undo.'); return; }
+  const step = undoStack.pop();
+  redoStack.push({ snap: structuredClone(data), label: step.label });
+  restoreSnapshot(step.snap);
+  toast(`Undid ${step.label}.`);
+}
+function redo() {
+  if (!redoStack.length) { toast('Nothing to redo.'); return; }
+  const step = redoStack.pop();
+  undoStack.push({ snap: structuredClone(data), label: step.label });
+  restoreSnapshot(step.snap);
+  toast(`Redid ${step.label}.`);
+}
+// Ctrl+Z / Ctrl+Y (Ctrl+Shift+Z works too). Typing in a field keeps the
+// browser's native text undo; an open modal holds references that would go
+// stale over restored data, so the shortcuts wait until it closes; during the
+// onboarding wizard nothing is saved yet, so there is nothing to undo.
+document.addEventListener('keydown', (e) => {
+  if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+  const k = e.key.toLowerCase();
+  const isUndo = k === 'z' && !e.shiftKey;
+  const isRedo = k === 'y' || (k === 'z' && e.shiftKey);
+  if (!isUndo && !isRedo) return;
+  const t = e.target;
+  if (t && ((t.matches && t.matches('input, textarea, select')) || t.isContentEditable)) return;
+  if (!data || !data.months || !data.months.length) return;
+  if ($('.modal-overlay')) return;
+  e.preventDefault();
+  if (isUndo) undo(); else redo();
+});
 async function flushSave() {
   clearTimeout(saveTimer); saveTimer = null;
   try {
@@ -337,7 +422,7 @@ function showTransferModal(presetFrom = '', onDone = null, presetTo = '') {
       { id: newTxId(), date, vendor: `Transfer to ${to}`, amount: -amt, fund: from, description: note, account: '', isTransfer: true },
       { id: newTxId(), date, vendor: `Transfer from ${from}`, amount: amt, fund: to, description: note, account: '', isTransfer: true },
     );
-    markDirty(); close();
+    markDirty(`the ${money(amt)} transfer`); close();
     toast(`Moved ${money(amt)}: ${from} → ${to}.`);
     if (onDone) onDone(); else render();
   };
@@ -507,7 +592,7 @@ function showFundPanel(ref) {
   // double-checked the paycheck numbers (latched, never un-latched).
   if (ref.kind === 'income' && Array.isArray(data.settings.setupChecklist)) {
     const item = data.settings.setupChecklist.find((i) => i.key === 'checks');
-    if (item && !item.done) { item.done = true; markDirty(); render(); } // render includes the panel
+    if (item && !item.done) { item.done = true; silentDirty(); render(); } // render includes the panel
   }
   document.addEventListener('keydown', panelEscHandler);
   renderFundPanel();
@@ -652,7 +737,7 @@ function renderFundPanel() {
         if (wasChecks) toast(`"${f.fund}" planned is now set by hand — Reconnect below puts it back on checks × amount.`);
       }
       f[key] = v;
-      recalcRules(month); markDirty(); render();
+      recalcRules(month); markDirty(`the ${key === 'carryOver' ? 'carry-over' : 'planned'} change on "${f.fund}"`); render();
     };
   };
   applyNum($('#pnlCarry', wrap), 'carryOver');
@@ -673,7 +758,7 @@ function renderFundPanel() {
         $('#pnlReconnect', wrap).onclick = () => {
           f.rule = { type: 'checks' };
           if (!month.checks[f.fund]) month.checks[f.fund] = { count: 0, amount: 0, titheAmount: 0 };
-          recalcRules(month); markDirty(); render();
+          recalcRules(month); markDirty(`reconnecting "${f.fund}" to paychecks`); render();
           toast(`"${f.fund}" planned follows checks × amount again.`);
         };
       } else {
@@ -696,7 +781,7 @@ function renderFundPanel() {
           // entries are harmless — the rules only read entries for standard funds.
           f.rule = null;
         }
-        recalcRules(month); markDirty(); render();
+        recalcRules(month); markDirty(`the income type change on "${f.fund}"`); render();
       }
     });
     const chkApply = (el, key, isCount) => {
@@ -706,7 +791,7 @@ function renderFundPanel() {
         if (isNaN(v)) return;
         if (!month.checks[f.fund]) month.checks[f.fund] = { count: 0, amount: 0, titheAmount: 0 };
         month.checks[f.fund][key] = v;
-        recalcRules(month); markDirty(); render();
+        recalcRules(month); markDirty(`the paycheck ${key === 'count' ? 'count' : key === 'amount' ? 'amount' : 'titheable amount'} change on "${f.fund}"`); render();
       };
     };
     chkApply($('#pnlChkCount', wrap), 'count', true);
@@ -717,16 +802,16 @@ function renderFundPanel() {
       if (!month.checks[f.fund]) month.checks[f.fund] = { count: 0, amount: 0, titheAmount: 0 };
       if (e.target.checked) month.checks[f.fund].variable = true;
       else delete month.checks[f.fund].variable;
-      markDirty(); render();
+      markDirty(`the "amount varies" change on "${f.fund}"`); render();
     };
     const useAvg = $('#pnlChkUse', wrap);
     if (useAvg) useAvg.onclick = () => {
       month.checks[f.fund].amount = chkAvg;
-      recalcRules(month); markDirty(); render();
+      recalcRules(month); markDirty(`the estimate update on "${f.fund}"`); render();
       toast(`Estimated per check set to ${money(chkAvg)}.`);
     };
-    $('#pnlExempt', wrap).onchange = (e) => { f.titheExempt = e.target.checked; recalcRules(month); markDirty(); render(); };
-    $('#pnlCarryFwd', wrap).onchange = (e) => { f.carryForward = e.target.checked; markDirty(); render(); };
+    $('#pnlExempt', wrap).onchange = (e) => { f.titheExempt = e.target.checked; recalcRules(month); markDirty(`the tithe exemption change on "${f.fund}"`); render(); };
+    $('#pnlCarryFwd', wrap).onchange = (e) => { f.carryForward = e.target.checked; markDirty(`the carry-forward change on "${f.fund}"`); render(); };
     incRefresh();
   } else {
     wireSetupForm(wrap, {
@@ -737,7 +822,7 @@ function renderFundPanel() {
         f.setup = res.setup;
         const auto = autoPlanned(f, month.id);
         if (auto != null) { f.rule = null; f.planned = auto; }
-        recalcRules(month); markDirty();
+        recalcRules(month); markDirty(`the setup change on "${f.fund}"`);
         render(); // the panel lives outside #main, so it survives the re-render
       },
     });
@@ -747,7 +832,7 @@ function renderFundPanel() {
       month.categories[panelRef.ci].funds.splice(panelRef.fi, 1);
       month.categories[toCi].funds.push(f);
       panelRef = { kind: 'expense', ci: toCi, fi: month.categories[toCi].funds.length - 1 };
-      recalcRules(month); markDirty(); render();
+      recalcRules(month); markDirty(`moving "${f.fund}" to ${month.categories[toCi].name}`); render();
       toast(`"${f.fund}" moved to ${month.categories[toCi].name}.`);
     };
   }
@@ -760,7 +845,8 @@ function renderFundPanel() {
       if (err) return err;
       // panelRef indexes are stable (the name changed in place); the checks and
       // tithe keys moved, so recompute the rules before repainting.
-      recalcRules(month); markDirty(); render();
+      // renameFundEverywhere filed the undo step; fold the recalc into it.
+      recalcRules(month); silentDirty(); render();
       return null;
     }, { okLabel: 'Rename', initial: f.fund });
   };
@@ -798,7 +884,7 @@ function movePanelFund(dir) {
     [funds[panelRef.fi], funds[to]] = [funds[to], funds[panelRef.fi]];
     panelRef = { kind: 'expense', ci: panelRef.ci, fi: to };
   }
-  markDirty(); render();
+  markDirty(`moving "${f.fund}" ${dir < 0 ? 'up' : 'down'}`); render();
 }
 
 // Shared by the panel and (previously) the grid: a fund may only be removed when
@@ -816,7 +902,7 @@ function removeFundGuarded(month, arr, idx) {
   if (!confirm(`Remove fund "${f.fund}" from ${monthLabel(month.id)}? Past months keep it.`)) return false;
   arr.splice(idx, 1);
   if (isIncome && month.checks[f.fund]) delete month.checks[f.fund];
-  recalcRules(month); markDirty(); render();
+  recalcRules(month); markDirty(`removing "${f.fund}"`); render();
   return true;
 }
 
@@ -906,7 +992,7 @@ function showAddFund(preset = {}) {
       if (auto != null) fund.planned = auto;
       month.categories[ci].funds.push(fund);
     }
-    markDirty(); close(); render();
+    markDirty(`adding "${nm}"`); close(); render();
     toast(`"${nm}" added.`);
   };
 }
@@ -1082,7 +1168,7 @@ function checklistAutoDetect(month, comp) {
   for (const item of list) {
     if (!item.done && detect[item.key] && detect[item.key]()) { item.done = true; changed = true; }
   }
-  if (changed) markDirty();
+  if (changed) silentDirty();
 }
 
 function checklistHtml(month) {
@@ -1135,7 +1221,7 @@ function applyActualChecks(month, fundName) {
   const chk = fInc && (month.checks || {})[fInc.fund];
   if (!(chk && chk.count > 0)) return false;
   chk.amount = r2(fInc.received / chk.count);
-  recalcRules(month); markDirty(); render();
+  recalcRules(month); markDirty(`the estimate update on "${fInc.fund}"`); render();
   toast(`"${fInc.fund}" estimate updated to ${money(chk.amount)} per check.`);
   return true;
 }
@@ -1186,19 +1272,27 @@ function renderBudget(main) {
 
   checklistAutoDetect(month, comp);
 
+  // The hero sits OUTSIDE .month-head: position:sticky pins an element only
+  // within its parent, so staying visible for the whole page requires being a
+  // direct child of #main. Pinned is the default; the pin button opts out.
+  const heroPinned = data.settings.stickyAllocate !== false;
   let html = `
     <h1 class="view-title">Budget <button class="help-btn" id="budgetHelpBtn" title="How the Budget page works">?</button></h1>
     ${checklistHtml(month)}
+    <div class="hero hero-solo ${heroPinned ? 'pinned' : ''} ${s.leftToAllocate >= -0.004 || roundingOnly ? 'good' : 'bad'}">
+      <button class="pin-btn ${heroPinned ? 'on' : ''}" id="stickyPinBtn"
+        title="${heroPinned ? 'Pinned — this card stays in view while you scroll. Click to unpin.' : 'Unpinned — click to keep this card in view while you scroll.'}">
+        <svg viewBox="0 0 120 120" role="img" aria-label="${heroPinned ? 'Unpin this card' : 'Pin this card'}"><use href="#si-pin"/></svg>
+      </button>
+      <div class="k">Left to allocate</div>
+      <div class="v">${money(s.leftToAllocate)}</div>
+      <div class="note">${balanced ? 'Zero-based ✓ — every dollar has a job'
+        : roundingOnly ? `Zero-based ✓ — the ${Math.round(Math.abs(s.leftToAllocate) * 100)}¢ is rounding from auto-calculated amounts`
+        : s.leftToAllocate > 0 ? 'Income not yet assigned to a fund'
+        : 'Planned more than your income'}
+        · planned income ${money(s.plannedIncome)} · allocated ${money(s.allocated)}</div>
+    </div>
     <div class="month-head">
-      <div class="hero ${s.leftToAllocate >= -0.004 || roundingOnly ? 'good' : 'bad'}">
-        <div class="k">Left to allocate</div>
-        <div class="v">${money(s.leftToAllocate)}</div>
-        <div class="note">${balanced ? 'Zero-based ✓ — every dollar has a job'
-          : roundingOnly ? `Zero-based ✓ — the ${Math.round(Math.abs(s.leftToAllocate) * 100)}¢ is rounding from auto-calculated amounts`
-          : s.leftToAllocate > 0 ? 'Income not yet assigned to a fund'
-          : 'Planned more than your income'}
-          · planned income ${money(s.plannedIncome)} · allocated ${money(s.allocated)}</div>
-      </div>
       <div class="recap-stats month-stats">
         <div><span class="k">Income</span><span class="v pos">${money(actIncome(comp))}</span></div>
         <div><span class="k">Spent</span><span class="v">${money(Math.abs(actExpense(comp)))}</span></div>
@@ -1395,6 +1489,16 @@ function renderBudget(main) {
   }
 
   // --- wire events ---
+  // Sticky column headings pin at the top of #main (top:-26px); while the hero
+  // is pinned they must pin just below it instead, so its measured height feeds
+  // their offset. Re-measured every render — the note line can wrap.
+  const heroEl = $('.hero-solo', main);
+  main.style.setProperty('--pin-offset', heroPinned && heroEl ? `${heroEl.offsetHeight}px` : '0px');
+  $('#stickyPinBtn').onclick = () => {
+    data.settings.stickyAllocate = !heroPinned;
+    markDirty(`${heroPinned ? 'unpinning' : 'pinning'} "Left to allocate"`); render();
+    toast(heroPinned ? '"Left to allocate" now scrolls with the page.' : '"Left to allocate" stays in view while you scroll.');
+  };
   $('#budgetHelpBtn').onclick = () => showBudgetWalkthrough();
   $('#transferBtn').onclick = () => showTransferModal();
   $('#addFundBtn').onclick = () => showAddFund({ side: 'expense', ci: 0 });
@@ -1423,7 +1527,7 @@ function renderBudget(main) {
     currentMonthId = data.months[data.months.length - 1].id;
     flagPanel = null;
     closeFundPanel(); // an open panel's indices would resolve against the wrong month
-    markDirty(); render();
+    markDirty(`removing ${monthLabel(month.id)}`); render();
     toast(`${monthLabel(month.id)} removed.`);
   };
   main.onclick = (e) => {
@@ -1433,19 +1537,19 @@ function renderBudget(main) {
     const clMark = e.target.closest('[data-cl-mark]');
     if (clMark) {
       const item = (data.settings.setupChecklist || []).find((i) => i.key === clMark.dataset.clMark);
-      if (item) { item.done = !item.done; markDirty(); render(); }
+      if (item) { item.done = !item.done; markDirty('the checklist change'); render(); }
       return;
     }
     if (e.target.closest('[data-cl-dismiss]')) {
       if (confirm("You can't get this list back — dismiss it?")) {
         delete data.settings.setupChecklist;
-        markDirty(); render();
+        markDirty('dismissing the setup checklist'); render();
       }
       return;
     }
     if (e.target.closest('[data-cl-done]')) {
       delete data.settings.setupChecklist;
-      markDirty(); render();
+      markDirty('dismissing the setup checklist'); render();
       return;
     }
     // Accordion toggle — but not when the click lands on a header action button.
@@ -1498,7 +1602,7 @@ function renderBudget(main) {
       promptName('New category', 'Category name', (nm) => {
         if (month.categories.some((c) => c.name.toLowerCase() === nm.toLowerCase())) return 'That category already exists.';
         month.categories.push({ name: nm, excludeFromTotals: false, funds: [] });
-        markDirty(); render();
+        markDirty(`adding "${nm}"`); render();
       });
       return;
     }
@@ -1509,7 +1613,7 @@ function renderBudget(main) {
       if (c.funds.length) return toast(`"${c.name}" still has ${c.funds.length} fund(s) — remove or empty them first.`);
       if (!confirm(`Remove category "${c.name}" from ${monthLabel(month.id)}? Past months keep it.`)) return;
       month.categories.splice(ci, 1);
-      markDirty(); render();
+      markDirty(`removing "${c.name}"`); render();
       return;
     }
     const addF = e.target.closest('[data-add-fund]');
@@ -1539,7 +1643,7 @@ function renderBudget(main) {
           if (wasChecks) toast(`"${f.fund}" planned is now set by hand — open the fund to reconnect it to your paycheck numbers.`);
         }
         f[el.dataset.k] = v;
-        recalcRules(month); markDirty();
+        recalcRules(month); markDirty(`the ${el.dataset.k === 'carryOver' ? 'carry-over' : 'planned'} change on "${f.fund}"`);
       }
       render(); return;
     }
@@ -1552,7 +1656,7 @@ function renderBudget(main) {
         f[k] = v;
         // Editing planned on a fixed-recurring fund is just a per-month override —
         // the setup stays, the "overridden" chip appears, and new months reset.
-        recalcRules(month); markDirty();
+        recalcRules(month); markDirty(`the ${k === 'carryOver' ? 'carry-over' : 'planned'} change on "${f.fund}"`);
       }
       render(); return;
     }
@@ -1635,7 +1739,7 @@ function renderTransactions(main) {
   $('#addTx').onclick = () => {
     month.transactions.push({ id: newTxId(), date: defaultDateFor(month), vendor: '', amount: 0, fund: '', description: '', account: '' });
     txSearch = ''; txFundFilter = '';
-    markDirty(); render();
+    markDirty('adding a transaction'); render();
     // U18: the new row sorts to the top for today's date — put the cursor in it
     // so there's no hunting for where to type.
     const nv = $('#main').querySelector(`[data-tx="${month.transactions.length - 1}"][data-k="vendor"]`);
@@ -1696,7 +1800,7 @@ function renderTransactions(main) {
           t.date = iso;
           month.transactions.splice(Number(el.dataset.tx), 1);
           target.transactions.push(t);
-          markDirty(); render();
+          markDirty(`moving the transaction to ${monthLabel(targetId)}`); render();
           toast(`Moved to ${monthLabel(targetId)}.`);
           return;
         }
@@ -1706,7 +1810,7 @@ function renderTransactions(main) {
       t[k] = el.value;
       if (k === 'fund' && t.amount > 0.004 && !t.isTransfer && isExpenseFund(month, t.fund)) warnMoneyIn(t);
     }
-    markDirty(); render();
+    markDirty(`the transaction ${k} edit`); render();
   };
   main.onclick = (e) => {
     const del = e.target.closest('[data-del-tx]');
@@ -1730,14 +1834,14 @@ function renderTransactions(main) {
           const [hi, lo] = idx > partner.j ? [idx, partner.j] : [partner.j, idx];
           month.transactions.splice(hi, 1);
           month.transactions.splice(lo, 1);
-          markDirty(); render();
+          markDirty('deleting the transfer pair'); render();
           return;
         }
         // No partner found (already orphaned) — fall through to the plain confirm.
       }
       if (confirm(`Delete: ${fmtDate(t.date)} ${t.vendor} ${money(t.amount)}?`)) {
         month.transactions.splice(idx, 1);
-        markDirty(); render();
+        markDirty(t.vendor ? `deleting "${t.vendor}"` : 'deleting the transaction'); render();
       }
     }
   };
@@ -2017,7 +2121,7 @@ function renderImport(main) {
       }
       persistResolvedProfile(importState.report, importState.answers);
       importState = null;
-      markDirty();
+      markDirty(`the import of ${n} transaction(s)`);
       toast(`Imported ${n} transaction(s).`);
       if (lastMonth) { currentMonthId = lastMonth; view = 'transactions'; txSearch = ''; txFundFilter = ''; }
       render();
@@ -2254,7 +2358,7 @@ function showWalkthrough(slides, flagKey) {
   const close = () => {
     overlay.remove();
     // Every dismissal counts as "seen" — Done, ✕, Escape, or overlay click.
-    if (!data.settings[flagKey]) { data.settings[flagKey] = true; markDirty(); }
+    if (!data.settings[flagKey]) { data.settings[flagKey] = true; silentDirty(); }
   };
   const paint = () => {
     const s = slides[slide];
@@ -2379,7 +2483,7 @@ function aumMutate(action, kind, item, { from = null, to = null } = {}) {
   data.aum.log.push({ date: todayISO(), kind, name: item.name, from, to, action });
   if (data.aum.log.length > 200) data.aum.log.splice(0, data.aum.log.length - 200);
   upsertSnapshot(data.aum, todayISO());
-  markDirty(); render();
+  markDirty(`the AUM change to "${item.name}"`); render();
 }
 
 function renderAum(main) {
@@ -2563,7 +2667,7 @@ function renderAum(main) {
     }
     if (e.target.closest('#aumSnapBtn')) {
       upsertSnapshot(aum, todayISO());
-      markDirty(); render();
+      markDirty("today's AUM snapshot"); render();
       toast('Snapshot recorded for today.');
       return;
     }
@@ -2673,7 +2777,7 @@ function showGardenIntro() {
   document.body.appendChild(overlay);
   const close = () => {
     overlay.remove();
-    if (!data.settings.gardenIntroSeen) { data.settings.gardenIntroSeen = true; markDirty(); }
+    if (!data.settings.gardenIntroSeen) { data.settings.gardenIntroSeen = true; silentDirty(); }
   };
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
   overlay.addEventListener('keydown', (e) => { if (e.key === 'Escape' || e.key === 'Enter') close(); });
@@ -2857,7 +2961,7 @@ function renameFundEverywhere(from, to) {
     for (const t of m.transactions) if (normFund(t.fund) === normFund(from)) { t.fund = to; nTx++; }
     if (m.checks && m.checks[from]) { m.checks[to] = m.checks[from]; delete m.checks[from]; }
   }
-  markDirty(); toast(`Renamed in ${nStruct} month table(s) and ${nTx} transaction(s).`);
+  markDirty(`the rename to "${to}"`); toast(`Renamed in ${nStruct} month table(s) and ${nTx} transaction(s).`);
   return null;
 }
 
@@ -3043,7 +3147,7 @@ function renderSettings(main) {
 
   $('#exTransfers').onchange = (e) => {
     data.settings.excludeTransfers = e.target.checked;
-    markDirty();
+    markDirty('the transfer-reporting change');
     toast(e.target.checked
       ? 'Transfers are now excluded from income & spending reporting.'
       : 'Transfers count in income & spending reporting again.');
@@ -3063,7 +3167,7 @@ function renderSettings(main) {
         }
         if (touched) applyTitheRules(m, data.settings.tithePercent);
       }
-      markDirty();
+      markDirty(`the tithe change to ${v}%`);
       toast(`Tithe set to ${v}% from ${monthLabel(currentMonthId)} forward — earlier months unchanged.`);
     }
     renderSettings(main);
@@ -3078,11 +3182,11 @@ function renderSettings(main) {
     if (!name) return;
     if (month.categories.some((c) => c.name.toLowerCase() === name.toLowerCase())) return toast('That category already exists.');
     month.categories.push({ name, excludeFromTotals: false, funds: [] });
-    markDirty(); toast(`Added "${name}" to ${monthLabel(month.id)}.`);
+    markDirty(`adding "${name}"`); toast(`Added "${name}" to ${monthLabel(month.id)}.`);
     view = 'budget'; render();
   };
   const dr = $('#dismissRetype');
-  if (dr) dr.onclick = () => { delete data.settings.lastRetype; markDirty(); renderSettings(main); };
+  if (dr) dr.onclick = () => { delete data.settings.lastRetype; markDirty('dismissing the adjusted-funds notice'); renderSettings(main); };
   $('#revealBtn').onclick = () => window.budgetAPI.revealData();
   $('#restoreBtn').onclick = () => showRestoreModal();
   wireUpdateButton();
@@ -3102,7 +3206,7 @@ function createNextMonth(last) {
   data.months.push(next);
   currentMonthId = next.id;
   view = 'budget'; flagPanel = null;
-  markDirty(); render();
+  markDirty(`starting ${monthLabel(next.id)}`); render();
   toast(`${monthLabel(next.id)} created — review planned amounts.`);
 }
 
@@ -3818,6 +3922,9 @@ function enterApp() {
   // mid-session update (future) can't stamp a stale number.
   $('#feedbackLink').onclick = () => window.budgetAPI.openExternal(
     FEEDBACK_MAILTO + '&body=' + encodeURIComponent('\n\n—\nApp version: ' + (appVersion || 'dev')));
+  $('#undoBtn').onclick = undo;
+  $('#redoBtn').onclick = redo;
+  seedUndoBaseline(); // migrations and wizard output are the floor — not undoable
   render();
 }
 

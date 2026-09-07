@@ -287,6 +287,15 @@
         <path class="nw2" d="M10,48 Q60,41 110,48" stroke="#8a6f4d" stroke-width="11" fill="none" stroke-linecap="round" opacity=".9"/>
         <path class="nw1" d="M34,44 C42,10 78,10 86,44" stroke="#8a6f4d" stroke-width="8" fill="none" stroke-linecap="round" opacity=".9"/>
       </g>
+
+      <!-- si-pin — pushpin for the pinnable Left-to-allocate card (needle carries
+           a curve: axis-aligned strokes inside a wash class never render) -->
+      <g id="si-pin">
+        <circle class="nw2" cx="63" cy="37" r="25" fill="#b8543a" opacity=".5"/>
+        <circle class="nw1" cx="60" cy="35" r="19" fill="#b8543a" opacity=".95"/>
+        <path class="nw1" d="M44,50 Q60,63 76,50 L71,71 Q60,78 49,71 Z" fill="#8a6f4d" opacity=".9"/>
+        <path class="nw3" d="M58,75 C57,85 56,94 53,105" stroke="#8a6f4d" stroke-width="6" fill="none" stroke-linecap="round" opacity=".95"/>
+      </g>
     </defs>
   </svg>
   <div id="app">
@@ -307,6 +316,10 @@
         <button data-view="settings" class="nav-btn"><svg class="ni" viewBox="0 0 120 120" aria-hidden="true"><use href="#ni-gear"/></svg><span>Settings</span></button>
       </nav>
       <div class="sidebar-foot">
+        <div class="undo-bar">
+          <button id="undoBtn" class="undo-btn" disabled title="Nothing to undo (Ctrl+Z)">↶ Undo</button>
+          <button id="redoBtn" class="undo-btn" disabled title="Nothing to redo (Ctrl+Y)">↷ Redo</button>
+        </div>
         <div id="saveStatus" class="save-status">All changes saved</div>
         <div class="foot-links">
           <button id="supportLink" class="foot-link"

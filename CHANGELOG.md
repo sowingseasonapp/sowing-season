@@ -9,6 +9,53 @@ so entries before that are dated by when the work happened, not by commit.
 
 ---
 
+## 2026-09-06 — Undo/redo + pinnable "Left to allocate" card
+
+Owner request: undo/redo with Ctrl+Z / Ctrl+Y, buttons by the save status, a
+toast naming what was undone, and a way to keep the Left-to-allocate card in
+view while scrolling — toggled by a watercolor pin on the card itself. All four
+suites green (1060 / 516 / 139 / 17); verified in the dev harness. Data version
+stays 6; one new settings key (`stickyAllocate`).
+
+- **Undo/redo (app.js)**: snapshot-based. `markDirty(label)` now files the
+  pre-change state (`undoBase`, a `structuredClone` refreshed on every commit)
+  onto a 50-deep undo stack before scheduling the save; the whole budget is
+  small JSON, so cloning beats threading inverse ops through ~40 call sites.
+  Every call site passes a human label ("the planned change on \"Gas\"",
+  "the $50.00 transfer", "starting October 2026") — `undo()`/`redo()` toast
+  `Undid/Redid {label}.` Session-only by design; `seedUndoBaseline()` runs in
+  `enterApp()` so migrations/wizard output are the floor. `restoreSnapshot`
+  swaps `data`, repoints `currentMonthId` if the viewed month vanished (undoing
+  "Start next month"), closes the fund panel (stale indices), saves via
+  `scheduleSave()` (the no-snapshot half of the old markDirty), renders.
+- **`silentDirty()`** — saves and folds the change into `undoBase` WITHOUT
+  filing an undo step. Used for automatic bookkeeping (checklist auto-latch,
+  walkthrough-seen flags, the recalc after `renameFundEverywhere` already
+  filed the step): Ctrl+Z must never appear to do nothing because it reverted
+  an invisible flag. Renames file exactly one step (panel caller downgraded
+  to silentDirty — it used to double-fire with renameFundEverywhere's).
+- **Shortcuts**: document-level Ctrl/Cmd+Z, Ctrl+Y and Ctrl+Shift+Z. Skipped
+  while focus is in an input/textarea/select (native text undo wins), while a
+  `.modal-overlay` is open (modals hold refs that would go stale over restored
+  data), and while the wizard owns the screen (months empty — nothing saved).
+  The fund side panel is fine: it re-resolves via `panelFund` and closes.
+- **Buttons**: `↶ Undo / ↷ Redo` in the sidebar foot above the save status
+  (index.html AND dev.html — the harness mirrors the sidebar), disabled states
+  + tooltips naming the next step, wired in `enterApp`.
+- **Pinnable hero**: the Budget hero moved OUT of `.month-head` to be a direct
+  child of #main — position:sticky pins only within its parent, which is why
+  it couldn't just get a class where it was. CSS `.month-head .hero` selectors
+  generalized to `.hero` (AUM's hero unaffected). `.hero-solo.pinned` sticks at
+  top:-26px (same #main-padding offset trick as `.acc-col-head`), z-index 6,
+  soft shadow as the pinned cue. Column headings pin BELOW the pinned hero:
+  renderBudget measures `hero.offsetHeight` each render into `--pin-offset` on
+  #main and `.acc-col-head` adds it to its top. Pinned is the DEFAULT
+  (`settings.stickyAllocate !== false`); the pin button toggles it (undoable),
+  unpinned state tilts the pin 40°. New watercolor `si-pin` def in both html
+  files (needle carries a curve — axis-aligned strokes in wash classes vanish).
+
+---
+
 ## 2026-08-27 — Fund intro in the wizard + first-run Budget walkthrough · v1.0.2
 
 Implements `_cowork\proposal-budget-walkthrough.md` in full (approved 2026-08-27;

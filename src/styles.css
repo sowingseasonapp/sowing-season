@@ -79,6 +79,13 @@ body {
 .nav-btn:hover { background: var(--sidebar-ctl); }
 .nav-btn.active { background: var(--accent); color: #fff; }
 .sidebar-foot { margin-top: auto; font-size: .78rem; opacity: .7; }
+.undo-bar { display: flex; gap: 6px; margin-bottom: 8px; }
+.undo-btn {
+  flex: 1; background: var(--sidebar-ctl); color: inherit; border: none; border-radius: 6px;
+  padding: 4px 6px; font-size: .78rem; cursor: pointer;
+}
+.undo-btn:hover:not(:disabled) { background: rgba(255, 255, 255, .18); }
+.undo-btn:disabled { opacity: .4; cursor: default; }
 .foot-links { display: flex; flex-wrap: wrap; gap: 2px 6px; padding-top: 2px; }
 .foot-link {
   background: none;
@@ -120,19 +127,38 @@ h2 { font-size: 1.05rem; margin: 0; }
 .card.bad .v { color: var(--red); }
 .card .note { font-size: .78rem; color: var(--ink-soft); margin-top: 2px; }
 
-/* Month header: one hero number + three compact stats */
+/* Month header: one hero number + three compact stats. The Budget page's hero
+   sits outside .month-head (a sticky element only pins within its parent), so
+   the selectors cover both placements. */
 .month-head { margin-bottom: 18px; }
-.month-head .hero {
+.hero {
   background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
   padding: 14px 18px; margin-bottom: 12px;
 }
-.month-head .hero .k {
+.hero .k {
   font-size: .78rem; color: var(--ink-soft); text-transform: uppercase; letter-spacing: .5px;
 }
-.month-head .hero .v { font-size: 2rem; font-weight: 600; line-height: 1.1; margin: 2px 0 3px; }
-.month-head .hero.good .v { color: var(--green); }
-.month-head .hero.bad .v { color: var(--red); }
-.month-head .hero .note { font-size: .82rem; color: var(--ink-soft); }
+.hero .v { font-size: 2rem; font-weight: 600; line-height: 1.1; margin: 2px 0 3px; }
+.hero.good .v { color: var(--green); }
+.hero.bad .v { color: var(--red); }
+.hero .note { font-size: .82rem; color: var(--ink-soft); }
+
+/* Budget hero: pinnable. top:-26px offsets #main's padding-top (same trick as
+   .acc-col-head); z-index clears the stuck column headings (3). The shadow
+   reads as "floating card" and doubles as the pinned-state cue. */
+.hero-solo { position: relative; }
+.hero-solo.pinned {
+  position: sticky; top: -26px; z-index: 6;
+  box-shadow: 0 3px 10px rgba(60, 50, 30, .12);
+}
+.pin-btn {
+  position: absolute; top: 8px; right: 10px; background: none; border: none;
+  cursor: pointer; padding: 3px; border-radius: 6px; opacity: .4; line-height: 0;
+}
+.pin-btn svg { width: 20px; height: 20px; transition: transform .15s; }
+.pin-btn:not(.on) svg { transform: rotate(40deg); }
+.pin-btn:hover { opacity: .95; background: var(--hover-row); }
+.pin-btn.on { opacity: .9; }
 .month-stats { margin: 0; }
 .month-head-note { font-size: .78rem; margin: 8px 0 0; }
 
@@ -165,7 +191,7 @@ h2 { font-size: 1.05rem; margin: 0; }
    top must offset #main's 26px padding-top: sticky elements pin inside the
    scroll container's padding, so top:0 would float 26px down with rows
    scrolling visibly through the gap above. */
-.acc-col-head { position: sticky; top: -26px; z-index: 3; background: #f3f2ea; }
+.acc-col-head { position: sticky; top: calc(-26px + var(--pin-offset, 0px)); z-index: 3; background: #f3f2ea; }
 .acc-col-head th { padding: 5px 12px; }
 table.tbl-fixed { table-layout: fixed; }
 
