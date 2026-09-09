@@ -9,7 +9,7 @@ CHANGELOG for the rename and the data-folder move-in.)
 
 ## Download
 
-**[⬇ Download for Windows](https://github.com/sowingseasonapp/sowing-season/releases/latest/download/Sowing-Season-Setup-1.0.3.exe)** — one-click installer, no setup questions.
+**[⬇ Download for Windows](https://github.com/sowingseasonapp/sowing-season/releases/latest/download/Sowing-Season-Setup-1.0.4.exe)** — one-click installer, no setup questions.
 
 Windows shows a SmartScreen warning on first run (the build is unsigned) — click
 **More info → Run anyway**. Every version lives on the
