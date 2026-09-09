@@ -68,16 +68,31 @@ const notes = fs.existsSync(notesFile) ? fs.readFileSync(notesFile, 'utf8') : `S
 
 (async () => {
   const token = getToken();
+  // Resumable: if the release already exists (a previous run died mid-upload —
+  // v1.0.4 lost latest.yml that way, which blinds the in-app updater), fetch it
+  // and upload only the assets it's missing.
+  let release;
   const rel = await api(token, 'POST', 'api.github.com', `/repos/${OWNER}/${REPO}/releases`, {
     tag_name: `v${version}`, name: `Sowing Season v${version}`, body: notes, draft: false, prerelease: false,
   });
-  if (rel.status !== 201) {
+  if (rel.status === 201) {
+    release = JSON.parse(rel.body);
+    console.log('release created:', release.html_url);
+  } else if (rel.status === 422) {
+    const got = await api(token, 'GET', 'api.github.com', `/repos/${OWNER}/${REPO}/releases/tags/v${version}`);
+    if (got.status !== 200) {
+      console.error('release exists but fetch failed:', got.status, got.body.slice(0, 400));
+      process.exit(1);
+    }
+    release = JSON.parse(got.body);
+    console.log('release already exists, resuming:', release.html_url);
+  } else {
     console.error('release create failed:', rel.status, rel.body.slice(0, 400));
     process.exit(1);
   }
-  const release = JSON.parse(rel.body);
-  console.log('release created:', release.html_url);
+  const have = new Set((release.assets || []).map((a) => a.name));
   for (const name of assets) {
+    if (have.has(name)) { console.log('already uploaded:', name); continue; }
     const buf = fs.readFileSync(path.join(stage, name));
     const up = await api(token, 'POST', 'uploads.github.com',
       `/repos/${OWNER}/${REPO}/releases/${release.id}/assets?name=${encodeURIComponent(name)}`,
