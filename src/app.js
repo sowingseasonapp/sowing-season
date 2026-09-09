@@ -2,7 +2,8 @@ import {
   computeMonth, applyTitheRules, applyChecksRules, buildNextMonth, fundSums,
   monthLabel, normFund, r2, migrateV2, migrateV3, migrateV4,
   autoPlanned, isOverridden, fundFlags, savingsMonthly, migrateV5,
-  migrateV6, aumTotals, upsertSnapshot, aumLastUpdated, MONTH_NAMES, nextMonthId,
+  migrateV6, migrateV7, resyncCarryOvers, aumTotals, upsertSnapshot, aumLastUpdated,
+  MONTH_NAMES, nextMonthId,
 } from './compute.js';
 import { gardenState, incomeCheckIns, stonesLaidIn, sownStreak } from './garden.js';
 import { sceneSvg, stripSvg, plantSprite, butterflySymbol, PALETTE_TOKENS, GARDEN_MILESTONE_LABELS } from './garden-scene.js';
@@ -71,6 +72,12 @@ function updateUndoButtons() {
   r.title = redoStack.length ? `Redo ${redoStack[redoStack.length - 1].label} (Ctrl+Y)` : 'Nothing to redo (Ctrl+Y)';
 }
 function markDirty(label = 'the last change') {
+  // Carry-overs are derived (v7): whatever just changed, every later month's
+  // carry-over follows before the state is filed or saved. Runs here — the
+  // save boundary — never in individual handlers. The undo snapshot being
+  // pushed below predates the change AND this resync, so Ctrl+Z restores the
+  // pre-change carry-overs with it.
+  const carryChanges = resyncCarryOvers(data);
   if (undoBase) {
     undoStack.push({ snap: undoBase, label });
     if (undoStack.length > UNDO_MAX) undoStack.shift();
@@ -79,17 +86,20 @@ function markDirty(label = 'the last change') {
     updateUndoButtons();
   }
   scheduleSave();
+  return carryChanges; // callers may mention a follow-on correction (import toast)
 }
 // For automatic bookkeeping (checklist auto-latch, walkthrough-seen flags):
 // saves without filing an undo step — Ctrl+Z should never appear to do nothing
 // because it reverted a flag the user can't see. The change folds into the
 // baseline so neighbouring undo steps stay accurate.
 function silentDirty() {
+  resyncCarryOvers(data);
   if (undoBase) undoBase = structuredClone(data);
   scheduleSave();
 }
 function restoreSnapshot(snap) {
   data = snap;
+  resyncCarryOvers(data); // the snapshot itself may predate a correction
   undoBase = structuredClone(data);
   // The restored data may not contain the month being viewed (undoing "Start
   // next month") — fall back to the newest month that exists.
@@ -269,6 +279,32 @@ function isExpenseFund(month, name) {
 function recalcRules(month) {
   applyChecksRules(month);
   applyTitheRules(month, data.settings.tithePercent ?? 0.15);
+}
+
+// C2 (v7): a fund's carry-over is derived from last month's leftover and can't
+// be typed — except where there is no last month to derive from: the budget's
+// first month, or a fund added mid-year. There it's the opening balance and
+// stays editable. Mirrors resyncCarryOvers' matching exactly (same-side fund
+// with the same normalized name in the previous month).
+function carryEditable(month, fundName, isIncome) {
+  const i = data.months.findIndex((m) => m.id === month.id);
+  if (i <= 0) return true;
+  const prev = data.months[i - 1];
+  const n = normFund(fundName);
+  return isIncome
+    ? !prev.income.some((f) => normFund(f.fund) === n)
+    : !prev.categories.some((c) => c.funds.some((f) => normFund(f.fund) === n));
+}
+// Plain month name ("August") — for copy where the year would be noise.
+function monthName(id) { return MONTH_NAMES[Number(id.split('-')[1]) - 1]; }
+// The previous month's plain name, for the derived-cell tooltip.
+function prevMonthName(month) {
+  const i = data.months.findIndex((m) => m.id === month.id);
+  return i > 0 ? monthName(data.months[i - 1].id) : '';
+}
+function carryLockTitle(month) {
+  const p = prevMonthName(month);
+  return `Carried from ${p}'s leftover. To change it, change ${p}.`;
 }
 
 // Average per-check actual over the last (up to) 3 months before `beforeId`
@@ -644,7 +680,10 @@ function renderFundPanel() {
       <div class="panel-body">
         <section class="panel-sec">
           <div class="panel-nums">
-            <label>Carry over<input class="money" id="pnlCarry" value="${money(f.carryOver)}"></label>
+            ${carryEditable(month, f.fund, isIncome)
+              ? `<label title="Opening balance — what's in this fund today. There's no earlier month to carry from.">Opening balance<input class="money" id="pnlCarry" value="${money(f.carryOver)}"></label>`
+              : `<div class="panel-num-ro"><span>Carry over</span>
+                  <b class="${moneyCls(f.carryOver)}" title="${esc(carryLockTitle(month))}">${money(f.carryOver)}</b></div>`}
             <label>Planned<input class="money" id="pnlPlanned" value="${money(f.planned)}"></label>
             <div class="panel-num-ro"><span>${isIncome ? 'Received' : 'Spent'}</span>
               ${isIncome
@@ -740,7 +779,8 @@ function renderFundPanel() {
       recalcRules(month); markDirty(`the ${key === 'carryOver' ? 'carry-over' : 'planned'} change on "${f.fund}"`); render();
     };
   };
-  applyNum($('#pnlCarry', wrap), 'carryOver');
+  const pnlCarry = $('#pnlCarry', wrap); // absent when carry-over is derived (C2)
+  if (pnlCarry) applyNum(pnlCarry, 'carryOver');
   applyNum($('#pnlPlanned', wrap), 'planned');
 
   if (isIncome) {
@@ -1405,7 +1445,9 @@ function renderBudget(main) {
           f.carryForward ? '<span class="type-mark" title="Leftover rolls into next month\'s carry-over instead of resetting to $0.">↷</span>' : ''}${
           isStd && !(f.rule && f.rule.type === 'checks')
             ? '<span class="rule-chip chip-warn" title="Planned no longer follows the paycheck numbers — it was typed by hand. Open the fund (click its name) to reconnect it.">set by hand</span>' : ''}${txChip(f)}${caption}</td>
-        <td><input class="money" data-inc="${i}" data-k="carryOver" value="${money(f.carryOver)}"></td>
+        <td>${carryEditable(month, f.fund, true)
+          ? `<input class="money" data-inc="${i}" data-k="carryOver" value="${money(f.carryOver)}" title="Opening balance — what's in this fund today. There's no earlier month to carry from."><div class="fund-note">opening</div>`
+          : `<span class="mono" title="${esc(carryLockTitle(month))}">${money(f.carryOver)}</span>`}</td>
         <td><input class="money" data-inc="${i}" data-k="planned" value="${money(f.planned)}"></td>
         <td class="${moneyCls(f.received)}"><a href="#" class="mono" data-txfund="${esc(f.fund)}" style="color:inherit">${money(f.received)}</a></td>
         <td class="${f.leftover < -0.004 ? 'muted' : moneyCls(f.leftover)}"${
@@ -1448,7 +1490,9 @@ function renderBudget(main) {
     rows.forEach(({ f, fi }) => {
       body += `<tr>
         <td><a href="#" class="fund-name" data-fund-setup="${ci}:${fi}" title="Open this fund — type, schedule, goal, actions">${esc(f.fund)}</a>${fundChips(f, flagMap[normFund(f.fund)], month.id)}${txChip(f)}</td>
-        <td><input class="money" data-cat="${ci}" data-fund="${fi}" data-k="carryOver" value="${money(f.carryOver)}"></td>
+        <td>${carryEditable(month, f.fund, false)
+          ? `<input class="money" data-cat="${ci}" data-fund="${fi}" data-k="carryOver" value="${money(f.carryOver)}" title="Opening balance — what's in this fund today. There's no earlier month to carry from."><div class="fund-note">opening</div>`
+          : `<span class="mono" title="${esc(carryLockTitle(month))}">${money(f.carryOver)}</span>`}</td>
         <td><input class="money" data-cat="${ci}" data-fund="${fi}" data-k="planned" value="${money(f.planned)}"></td>
         <td class="${f.expensed > 0.004 ? 'pos' : ''}"><a href="#" class="mono" data-txfund="${esc(f.fund)}" style="color:inherit"${
           f.expensed > 0.004 ? ' title="More came back in than went out this month"' : ''}>${
@@ -1633,6 +1677,9 @@ function renderBudget(main) {
     const el = e.target;
     if (el.matches('[data-inc]')) {
       const f = month.income[Number(el.dataset.inc)];
+      // Derived carry-over cells render as text, so this only fires from a
+      // stale input; resync in markDirty would overwrite it anyway.
+      if (el.dataset.k === 'carryOver' && !carryEditable(month, f.fund, true)) { render(); return; }
       const v = parseMoney(el.value);
       if (!isNaN(v)) {
         if (el.dataset.k === 'planned' && f.rule) {
@@ -1650,6 +1697,7 @@ function renderBudget(main) {
     if (el.matches('[data-cat]')) {
       const f = month.categories[Number(el.dataset.cat)].funds[Number(el.dataset.fund)];
       const k = el.dataset.k;
+      if (k === 'carryOver' && !carryEditable(month, f.fund, false)) { render(); return; }
       const v = parseMoney(el.value);
       if (!isNaN(v)) {
         if (k === 'planned' && f.rule) f.rule = null; // manual override clears auto rule
@@ -2006,6 +2054,21 @@ function renderImport(main) {
     // the file, and Import stays disabled until every question is resolved.
     if (questions.length) html += csvQuestionsHtml(questions);
 
+    // C3 notice — batch-level, once, only when an included row lands in a month
+    // the user has already moved past. Option A always (D2): rows post where
+    // their dates say, and the v7 resync trues up every later carry-over.
+    const early = importState.rows.filter((r) => r.include && r.earlierMonth);
+    if (early.length) {
+      const earlyMonths = [...new Set(early.map((r) => r.monthId))].sort();
+      const newest = data.months[data.months.length - 1];
+      const where = earlyMonths.length === 1 ? monthName(earlyMonths[0]) : 'months you\'ve already moved past';
+      html += `<div class="section import-summary">
+        <span><b>${early.length} row${early.length === 1 ? ' is' : 's are'} dated in ${earlyMonths.length === 1 ? `${where}, which you've already moved past` : where}.</b>
+        They'll post there — that's what the bank says happened. ${earlyMonths.length === 1 ? `${where}'s` : 'Those months\''} leftover changes
+        and ${monthName(newest.id)}'s carry-over follows automatically.</span>
+      </div>`;
+    }
+
     if (importState.rows.length) {
     html += `<div class="section"><table class="grid"><thead><tr>
       <th style="width:30px"></th><th style="text-align:left">Date</th><th style="text-align:left">Vendor</th>
@@ -2018,8 +2081,9 @@ function renderImport(main) {
       else if (row.possibleDup) badges.push('<span class="badge dup-maybe" title="Same place and a similar amount within a few days of an entry you already have — often a tip or a gas-pump hold posting. It will import unless you untick it.">possible duplicate</span>');
       if (rec.isCardPayment) badges.push('<span class="badge pay" title="Paying a credit-card bill isn\'t spending — the purchases it covers are already transactions on the card. Left unticked so nothing counts twice; tick it if you track this account differently.">card payment</span>');
       if (!row.monthExists) badges.push(`<span class="badge warn" title="Dated in a month that doesn't exist in the app yet, so it can't be imported right now.">month not started</span>`);
+      if (row.earlierMonth) badges.push(`<span class="badge warn" title="Dated in a month you've already moved past. It posts there, and every later month's carry-over follows automatically.">earlier month</span>`);
       if (row.include && !row.fund) badges.push('<span class="badge warn">pick a fund</span>');
-      if (row.include && row.fund && !row.duplicate && !row.possibleDup && !rec.isCardPayment) badges.push('<span class="badge new">ready</span>');
+      if (row.include && row.fund && !row.duplicate && !row.possibleDup && !rec.isCardPayment && !row.earlierMonth) badges.push('<span class="badge new">ready</span>');
       const month = row.monthExists ? data.months.find((m) => m.id === row.monthId) : null;
       html += `<tr class="${row.include ? '' : 'import-row-off'}">
         <td><input type="checkbox" data-imp-inc="${i}" ${row.include ? 'checked' : ''} ${row.monthExists ? '' : 'disabled'}></td>
@@ -2028,7 +2092,7 @@ function renderImport(main) {
           ${rec.account ? `<span class="fund-note"> · ${esc(rec.account)}</span>` : ''}
           ${rec.memo ? `<div class="fund-note">${esc(rec.memo.length > 44 ? rec.memo.slice(0, 44) + '…' : rec.memo)}</div>` : ''}</td>
         <td class="${moneyCls(rec.amount)}">${money(rec.amount)}</td>
-        <td>${monthLabel(row.monthId)}</td>
+        <td>${monthLabel(row.monthId)}${row.earlierMonth ? ' <span class="muted">(closed)</span>' : ''}</td>
         <td>${month ? `<select class="inline ${row.include && !row.fund ? 'missing' : ''}" data-imp-fund="${i}">${fundOptions(month, row.fund)}</select>` : '<span class="muted">—</span>'}
           ${row.suggestNote ? `<div class="fund-note">${esc(row.suggestNote)}</div>` : ''}</td>
         <td>${badges.join(' ')}</td></tr>`;
@@ -2080,6 +2144,10 @@ function renderImport(main) {
       }
       return {
         rec, monthId, monthExists: !!month, duplicate,
+        // Dated before the newest month — the app's "closed" months (C3). The
+        // row still posts where its date says; the badge and notice just make
+        // the consequence visible. Carry-overs follow automatically (v7).
+        earlierMonth: !!month && monthId < data.months[data.months.length - 1].id,
         possibleDup: !!dup && dup.score < 0.9, fund, suggestNote,
         include: !blocked && !!month && !duplicate && !rec.isCardPayment,
       };
@@ -2120,9 +2188,20 @@ function renderImport(main) {
         n++; lastMonth = month.id;
       }
       persistResolvedProfile(importState.report, importState.answers);
+      const early = chosen.filter((r) => r.earlierMonth);
       importState = null;
-      markDirty(`the import of ${n} transaction(s)`);
-      toast(`Imported ${n} transaction(s).`);
+      // markDirty runs the carry-over resync and reports what it corrected —
+      // the toast's "updated" clause is that report, not a guess (C3/Option A).
+      const carryChanges = markDirty(`the import of ${n} transaction(s)`);
+      let msg = `Imported ${n} transaction(s).`;
+      if (early.length) {
+        const where = [...new Set(early.map((r) => r.monthId))].sort().map(monthName).join(', ');
+        const fixed = [...new Set(carryChanges.map((c) => c.month))].sort().map(monthName);
+        msg = `Imported ${n} transaction(s) · ${early.length} posted to ${where}${fixed.length
+          ? ` — ${fixed.length === 1 ? `${fixed[0]}'s carry-over` : 'later carry-overs'} updated`
+          : ''}.`;
+      }
+      toast(msg);
       if (lastMonth) { currentMonthId = lastMonth; view = 'transactions'; txSearch = ''; txFundFilter = ''; }
       render();
     };
@@ -2429,10 +2508,10 @@ const BUDGET_SLIDES = [
   {
     img: 'assets/help/budget-funds.png',
     title: 'Reading a row',
-    body: `Every fund reads the same way: <b>Carry over</b> is what rolled in from last month,
-      <b>Planned</b> is this month's number, <b>Spent</b> is what actually happened (income rows
-      say <b>Received</b>), and <b>Leftover</b> is what remains. The Carry over and Planned
-      boxes are yours to type in — everything else is calculated for you.`,
+    body: `Every fund reads the same way: <b>Carry over</b> is last month's leftover —
+      it can't be typed; if it looks wrong, fix last month and it follows. <b>Planned</b> is
+      this month's number and is yours to type in. <b>Spent</b> is what actually happened
+      (income rows say <b>Received</b>), and <b>Leftover</b> is what remains.`,
   },
   {
     img: null,
@@ -3945,6 +4024,9 @@ async function boot() {
   // v6 must run after v5 — it bumps the version past 5, which would make
   // migrateV5 skip its re-type pass on a fresh seed.
   migrated = migrateV6(data) || migrated;
+  // v7: carry-overs become derived; the one-time history resync runs inside
+  // the migration and stashes what it corrected in settings.lastCarryFix.
+  migrated = migrateV7(data, todayISO()) || migrated;
   // Record the re-typed list before saving so it survives a restart — the
   // migration only runs once, and the user should be able to review it later.
   if (v5.retyped.length) data.settings.lastRetype = v5.retyped;
@@ -3964,5 +4046,39 @@ async function boot() {
     setTimeout(() => toast(`${v5.retyped.length} single-charge fund(s) switched from Pacing to Basic — see Settings for the list.`), 800);
   }
   enterApp();
+  showCarryFixNotice();
+}
+
+// One-time "carry-over check" notice (v7): if the migration's resync corrected
+// anything, say so once — the record survives restarts until it's been seen.
+// D1(a): everything is listed, but the 1–3¢ spreadsheet-rounding corrections
+// collapse behind a summary line so a real fix stands out.
+function showCarryFixNotice() {
+  const fix = data.settings.lastCarryFix;
+  if (!fix || fix.seen || !(fix.changes || []).length) return;
+  const line = (c) => `<li>${monthLabel(c.month)} — ${esc(c.fund)}: <span class="${moneyCls(c.from)}">${money(c.from)}</span> → <span class="${moneyCls(c.to)}">${money(c.to)}</span></li>`;
+  const isPenny = (c) => Math.abs(r2(c.to - c.from)) < 0.05;
+  const big = fix.changes.filter((c) => !isPenny(c));
+  const pennies = fix.changes.filter(isPenny);
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal" style="width:520px">
+      <h2>Carry-over check</h2>
+      <p class="muted">Sowing Season now keeps every month's carry-over equal to the previous
+        month's leftover, automatically. Checking your history found and fixed:</p>
+      ${big.length ? `<ul style="margin:8px 0 4px;padding-left:20px;max-height:38vh;overflow:auto">${big.map(line).join('')}</ul>` : ''}
+      ${pennies.length ? `<details style="margin:6px 0 4px"><summary class="muted" style="cursor:pointer">${big.length ? 'and ' : ''}${pennies.length} penny rounding correction${pennies.length === 1 ? '' : 's'} from the spreadsheet import</summary>
+        <ul style="margin:8px 0 4px;padding-left:20px;max-height:38vh;overflow:auto">${pennies.map(line).join('')}</ul></details>` : ''}
+      <div class="modal-actions">
+        <button class="btn btn-accent" id="cfOk">Got it</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  $('#cfOk', overlay).onclick = () => {
+    data.settings.lastCarryFix.seen = true;
+    silentDirty(); // a seen-flag, not an edit — no undo step
+    overlay.remove();
+  };
 }
 boot();

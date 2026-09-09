@@ -9,6 +9,66 @@ so entries before that are dated by when the work happened, not by commit.
 
 ---
 
+## 2026-09-08 — Carry-over integrity: derived carry-over, locked cells, import guard (v7)
+
+`_cowork/proposal-carry-over-integrity.md` C1–C5 in the D3 order, with Dustin's
+decisions applied: **D1(a)** one rule, no exceptions (full resync, pennies
+included); **D2** real month only (no "count in the new month" radio — `bankDate`
+and the `scoreDuplicate` change were dropped with it). Root cause: carry-over
+was a snapshot taken by "Start next month" and never re-checked, so anything
+that changed an older month (the Sep-6 import of three Aug-31 rows, −$137.27 on
+Essentials) silently left every later month wrong. Data version 6 → 7. All four
+suites green (1075 / 516 / 139 / 17); verified end-to-end in the dev harness.
+
+- **C1 `resyncCarryOvers(data)` (compute.js)**: pure, walks months in order —
+  expense fund carry-over = previous month's recomputed leftover; income fund =
+  `carryForward ? prev leftover : 0` using **month N's own** flag; a fund with
+  no same-named predecessor (first month, or added mid-year like Sam's Club) is
+  an opening balance and is never touched. 0.005 tolerance, returns a
+  `changes[]` list, idempotent, chains through all months in one pass. Never
+  touches `planned`. Called at the **save boundary only**: `markDirty()` (before
+  the post-change baseline is cloned, so undo restores pre-change carry-overs
+  correctly), `silentDirty()`, and `restoreSnapshot()` (a restored snapshot may
+  itself be stale). `markDirty` now returns the changes so the import toast can
+  report a follow-on correction honestly.
+- **C2 carry-over is read-only** except the opening-balance case
+  (`carryEditable()` mirrors the resync's matching). Grid rows render derived
+  carry-over as plain `mono` text with "Carried from {prev}'s leftover. To
+  change it, change {prev}."; editable cells keep the input plus a muted
+  "opening" chip. Fund panel: same split — `#pnlCarry` only exists (and is only
+  wired) in the opening case, labelled "Opening balance". Belt-and-braces guards
+  in both grid `onchange` handlers; walkthrough slide 4 rewritten ("it can't be
+  typed — fix last month and it follows").
+- **C3 import guard**: `row.earlierMonth` = dated before the newest month.
+  Preview shows a batch-level notice ("N rows are dated in July, which you've
+  already moved past… carry-over follows automatically"), an "earlier month"
+  warn badge in place of "ready", and "(closed)" in the Month column. Rows
+  always post where their dates say (Option A); the import toast appends
+  "· 3 posted to July — August's carry-over updated" only when the resync
+  actually reported changes.
+- **C4 `migrateV7(data, todayISO)`**: runs the resync once over history, bumps
+  the version, stashes corrections in `settings.lastCarryFix = { at, changes }`
+  (lastRetype pattern). `showCarryFixNotice()` after `enterApp()` shows a
+  one-time modal — corrections ≥5¢ listed openly, the 1–3¢ spreadsheet-rounding
+  moves collapsed behind a `<details>` ("and N penny rounding corrections…",
+  capped at 38vh and scrollable — 55 lines pushed "Got it" off-screen before
+  that). "Got it" sets `lastCarryFix.seen` via `silentDirty()`. `BLANK()` in
+  main.js is now version 7.
+- **C5 tests (test-compute.mjs)**: 15 hard assertions (they fail the run, unlike
+  most of this file's log-and-eyeball sections) — chained three-month resync,
+  income carryForward on/off decided by month N's flag, opening balance
+  untouched, idempotence, the anonymised live case (−306.31 → −443.58), and
+  migrateV7 version/lastCarryFix/skip/no-changes behaviour. §2.6's test 6
+  (scoreDuplicate + bankDate) was dropped with D2. No compute fixtures needed
+  re-baselining — the spreadsheet comparison never runs the resync.
+- **Traps**: the resync belongs at the save boundary, never in individual
+  handlers (do-not list §5); don't widen the 0.005 tolerance to hide pennies —
+  that turns a 1¢ correction into permanent silent drift. Expected D1(a) side
+  effects on live data: Tax Cost Aug $0.00→−$0.02 and Tithe Jul $0.00→−$0.01
+  paint penny-red "exceeded" chips on two closed months, and the dev seed's
+  August hero now reads ($0.01) left to allocate — rounding made visible, not a
+  bug.
+
 ## 2026-09-06 — Undo/redo + pinnable "Left to allocate" card
 
 Owner request: undo/redo with Ctrl+Z / Ctrl+Y, buttons by the save status, a

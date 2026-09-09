@@ -33,7 +33,7 @@ const MAX_BACKUPS = 30;
 // does the first save when it finishes — deliberately nothing is written here,
 // so quitting mid-wizard leaves no file and the wizard runs again next launch.
 const BLANK = () => ({
-  version: 6, // current — no migrations may run on it
+  version: 7, // current — no migrations may run on it
   settings: { tithePercent: 0.10, appName: 'Sowing Season' },
   months: [],
   aum: { assets: [], debts: [], snapshots: [], log: [] },

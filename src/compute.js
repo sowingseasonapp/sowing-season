@@ -406,6 +406,65 @@ export function migrateV6(data) {
   return true;
 }
 
+// ---- Carry-over integrity — v7 ----
+// Carry-over is a derived number: month N's carry-over IS month N−1's leftover
+// (an income fund's only when it opts into carryForward). buildNextMonth seeds
+// it; this keeps it true afterwards, whatever changes in an older month — an
+// import, an edit, a deleted transaction, a moved date. Walks months in order,
+// so a change anywhere chains forward through every later month in one pass.
+// Idempotent: a second call returns []. A fund with no same-named predecessor
+// (the budget's first month, or a fund added mid-year) is user-owned — its
+// carry-over is an opening balance and is never touched. Never touches planned:
+// planned is a decision, not a derivation.
+export function resyncCarryOvers(data) {
+  const changes = [];
+  const months = data.months || [];
+  for (let i = 1; i < months.length; i++) {
+    const cur = months[i];
+    const comp = computeMonth(months[i - 1]);
+    const prevExp = new Map();
+    for (const c of comp.categories) for (const f of c.funds) prevExp.set(normFund(f.fund), f);
+    const prevInc = new Map();
+    for (const f of comp.income) prevInc.set(normFund(f.fund), f);
+    for (const c of cur.categories) {
+      for (const f of c.funds) {
+        const p = prevExp.get(normFund(f.fund));
+        if (!p) continue;
+        const want = r2(p.leftover);
+        if (Math.abs(want - f.carryOver) < 0.005) continue;
+        changes.push({ month: cur.id, fund: f.fund, from: f.carryOver, to: want });
+        f.carryOver = want;
+      }
+    }
+    for (const f of cur.income) {
+      const p = prevInc.get(normFund(f.fund));
+      if (!p) continue;
+      // Month N's own carryForward flag decides — that's the one on the row
+      // the user is looking at.
+      const want = f.carryForward ? r2(p.leftover) : 0;
+      if (Math.abs(want - f.carryOver) < 0.005) continue;
+      changes.push({ month: cur.id, fund: f.fund, income: true, from: f.carryOver, to: want });
+      f.carryOver = want;
+    }
+  }
+  return changes;
+}
+
+// v6 → v7: carry-overs become derived (see resyncCarryOvers). The one-time
+// history resync happens here; anything it corrected is stashed in
+// settings.lastCarryFix (same survive-a-restart pattern as v5's lastRetype)
+// so the app can show the user what moved and why.
+export function migrateV7(data, todayISO) {
+  if ((data.version || 1) >= 7) return false;
+  const changes = resyncCarryOvers(data);
+  data.version = 7;
+  if (changes.length) {
+    data.settings = data.settings || {};
+    data.settings.lastCarryFix = { at: todayISO, changes };
+  }
+  return true;
+}
+
 // v1 → v2: income funds get a group (standard = paychecks / bonus = everything else)
 // and each checks entry gets a titheAmount, defaulting to the net per-check amount so
 // every existing month's tithe value is preserved exactly.

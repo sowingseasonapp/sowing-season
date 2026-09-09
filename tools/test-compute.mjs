@@ -4,7 +4,7 @@ import {
   computeMonth, buildNextMonth, normFund, migrateV2, migrateV3, migrateV4, migrateV5,
   applyTitheRules, titheBase, autoPlanned, isOverridden, fundFlags, r2,
   savingsMonthly, monthAdd, monthDiff,
-  migrateV6, aumTotals, upsertSnapshot, aumLastUpdated,
+  migrateV6, migrateV7, resyncCarryOvers, aumTotals, upsertSnapshot, aumLastUpdated,
 } from '../src/compute.js';
 import { parseBankCsv, buildVendorMap, suggestFund, findDuplicate } from '../src/csv.js';
 import fs from 'fs';
@@ -379,6 +379,90 @@ console.log(`\nCompute engine vs spreadsheet: ${ok} checks passed, ${bad} failed
   // Last updated: max date wins; empty list → null.
   const lu = aumLastUpdated([{ updatedAt: '2026-05-01' }, { updatedAt: '2026-08-02' }, { name: 'no date yet' }]);
   console.log(`Last updated: ${lu} (expect 2026-08-02) · empty=${aumLastUpdated([])} (expect null)`);
+}
+
+// ---- v7: derived carry-overs (resyncCarryOvers + migrateV7) ----
+{
+  // Hard assertions: failures here count into `bad` and fail the run.
+  const t = (label, cond, detail = '') => {
+    if (cond) ok++; else { bad++; console.log(`FAIL v7 ${label}${detail ? ` — ${detail}` : ''}`); }
+  };
+  const expFund = (fund, carryOver, planned = 100) => ({ fund, carryOver, planned, rule: null, setup: { type: 'basic' } });
+  const mkMonth = (id, funds, income = [], transactions = []) => ({
+    id, label: 'M', checks: {}, income, categories: [{ name: 'C', excludeFromTotals: false, funds }], transactions,
+  });
+  const tx = (date, amount, fund) => ({ id: 'x' + Math.random().toString(36).slice(2), date, vendor: 'v', amount, fund });
+  const groc = (d) => d.months.map((m) => m.categories[0].funds.find((f) => normFund(f.fund) === 'groc'));
+
+  // 1. Three months, chained: a new transaction in month 1 moves months 2 AND 3.
+  //    m1: carry 0 + planned 100 − 40 = 60 → m2: 60 + 100 − 50 = 110 → m3 carry 110.
+  const d1 = { version: 7, settings: {}, months: [
+    mkMonth('2026-01', [expFund('Groc', 0)], [], [tx('2026-01-05', -40, 'Groc')]),
+    mkMonth('2026-02', [expFund('Groc', 60)], [], [tx('2026-02-05', -50, 'Groc')]),
+    mkMonth('2026-03', [expFund('Groc', 110)]),
+  ] };
+  t('starts consistent', resyncCarryOvers(d1).length === 0);
+  d1.months[0].transactions.push(tx('2026-01-20', -10, 'Groc'));
+  const ch1 = resyncCarryOvers(d1);
+  t('chained change count', ch1.length === 2, `got ${ch1.length}`);
+  const [g1, g2, g3] = groc(d1);
+  t('month 2 follows', g2.carryOver === 50, `got ${g2.carryOver}`);
+  t('month 3 follows', g3.carryOver === 100, `got ${g3.carryOver}`); // 50 + 100 − 50
+  t('changes record from/to', ch1[0].month === '2026-02' && ch1[0].from === 60 && ch1[0].to === 50,
+    JSON.stringify(ch1[0]));
+  t('planned untouched', g1.planned === 100 && g2.planned === 100 && g3.planned === 100);
+
+  // 2. Income funds: month N's OWN carryForward flag decides.
+  //    m1 Pay: carry 0 + received 120 − planned 100 → leftover 20.
+  const inc = (carryOver, carryForward) => ({ fund: 'Pay', carryOver, planned: 100, rule: null, titheExempt: false, carryForward, group: 'bonus' });
+  const d2 = { version: 7, settings: {}, months: [
+    mkMonth('2026-01', [], [inc(0, false)], [tx('2026-01-05', 120, 'Pay')]),
+    mkMonth('2026-02', [], [inc(0, true)]),
+  ] };
+  const ch2 = resyncCarryOvers(d2);
+  t('income carryForward on → prev leftover', d2.months[1].income[0].carryOver === 20 && ch2.length === 1 && ch2[0].income === true,
+    JSON.stringify({ carry: d2.months[1].income[0].carryOver, ch2 }));
+  d2.months[1].income[0].carryForward = false;
+  resyncCarryOvers(d2);
+  t('income carryForward off → 0', d2.months[1].income[0].carryOver === 0, `got ${d2.months[1].income[0].carryOver}`);
+
+  // 3. A fund present only from month 2 (opening balance) is never touched.
+  const d3 = { version: 7, settings: {}, months: [
+    mkMonth('2026-01', [expFund('Groc', 0)], [], [tx('2026-01-05', -40, 'Groc')]),
+    mkMonth('2026-02', [expFund('Groc', 60), expFund("Sam's Club", 6.22, 0)]),
+  ] };
+  const ch3 = resyncCarryOvers(d3);
+  t('opening balance untouched', ch3.length === 0 && d3.months[1].categories[0].funds[1].carryOver === 6.22,
+    JSON.stringify(ch3));
+
+  // 4. Idempotence: the second pass finds nothing.
+  t('idempotent', resyncCarryOvers(d1).length === 0 && resyncCarryOvers(d2).length === 0);
+
+  // 5. The live-case shape: Essentials snapshot −306.31 vs recomputed −443.58
+  //    (prev: carry −243.58 + planned 100 − spent 300 = −443.58).
+  const d5 = { version: 7, settings: {}, months: [
+    mkMonth('2026-08', [expFund('Essentials', -243.58)], [], [tx('2026-08-31', -300, 'Essentials')]),
+    mkMonth('2026-09', [expFund('Essentials', -306.31)]),
+  ] };
+  const ch5 = resyncCarryOvers(d5);
+  t('live-case fix', ch5.length === 1 && ch5[0].from === -306.31 && ch5[0].to === -443.58,
+    JSON.stringify(ch5));
+
+  // 7. migrateV7 bumps the version and records lastCarryFix (§2.6 test 6 was
+  //    dropped with D2 — no bankDate, rows always post to their real month).
+  const d7 = { version: 6, settings: {}, months: [
+    mkMonth('2026-08', [expFund('Essentials', -243.58)], [], [tx('2026-08-31', -300, 'Essentials')]),
+    mkMonth('2026-09', [expFund('Essentials', -306.31)]),
+  ] };
+  const ran = migrateV7(d7, '2026-09-09');
+  t('migrateV7 runs on v6', ran === true && d7.version === 7);
+  t('lastCarryFix recorded', d7.settings.lastCarryFix?.at === '2026-09-09' && d7.settings.lastCarryFix?.changes.length === 1,
+    JSON.stringify(d7.settings.lastCarryFix));
+  t('migrateV7 skips on v7', migrateV7(d7, '2026-09-10') === false && d7.settings.lastCarryFix.at === '2026-09-09');
+  const clean = { version: 6, settings: {}, months: [] };
+  migrateV7(clean, '2026-09-09');
+  t('clean data records no fix', clean.version === 7 && !clean.settings.lastCarryFix);
+  console.log(`\nV7 derived carry-overs: assertions folded into the pass/fail totals above (now ${ok} ok / ${bad} bad)`);
 }
 
 // ---- checking-account CSV format ----
