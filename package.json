@@ -1,12 +1,13 @@
 {
   "name": "sowing-season",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Envelope-style budgeting app — tend your money like a garden",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "pack": "node tools/package-app.js",
-    "dist": "electron-builder",
+    "dist": "npm run release:check && electron-builder",
+    "dist:unchecked": "electron-builder",
+    "release:check": "node tools/release-check.js",
     "release": "electron-builder --publish always",
     "test": "node tools/test-compute.mjs",
     "test:csv": "node tools/test-csv.mjs",
@@ -16,17 +17,16 @@
   },
   "keywords": [],
   "author": "sowingseasonapp",
-  "license": "ISC",
+  "license": "UNLICENSED",
   "type": "commonjs",
   "devDependencies": {
-    "@electron/packager": "^20.2.0",
-    "electron": "^43.3.0",
-    "electron-builder": "^26.15.3",
+    "electron": "43.3.0",
+    "electron-builder": "26.15.3",
     "xlsx": "^0.18.5"
   },
   "productName": "Sowing Season",
   "dependencies": {
-    "electron-updater": "^6.8.9"
+    "electron-updater": "6.8.9"
   },
   "build": {
     "appId": "com.sowingseason.app",
@@ -42,7 +42,8 @@
       "package.json",
       "src/**/*",
       "!src/dev.html",
-      "build/icon.ico"
+      "build/icon.ico",
+      "build/icon.png"
     ],
     "win": {
       "target": "nsis",
@@ -52,6 +53,36 @@
       "oneClick": true,
       "runAfterFinish": true,
       "deleteAppDataOnUninstall": false
+    },
+    "mac": {
+      "category": "public.app-category.finance",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png",
+      "artifactName": "Sowing-Season-${version}-${arch}.${ext}",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "notarize": true,
+      "darkModeSupport": true
+    },
+    "dmg": {
+      "artifactName": "Sowing-Season-${version}-${arch}.${ext}"
     },
     "publish": {
       "provider": "github",

@@ -28,7 +28,6 @@ function friendly(err) {
     return "Couldn't reach the update server — if you're offline, that's all this is. Try again when you're connected.";
   }
   if (/404|not found/i.test(m)) return 'No published release was found to compare against.';
-  if (/OWNER_TBD/.test(m)) return 'Updates aren’t configured yet in this build.';
   return m.split('\n')[0].slice(0, 200);
 }
 
@@ -43,7 +42,7 @@ function registerUpdaterIpc(ipcMain, getWin) {
         const win = getWin();
         if (win) win.webContents.send('update:progress', { percent: p.percent });
       });
-    } catch { autoUpdater = null; } // not bundled (electron-packager build) → check-only
+    } catch { autoUpdater = null; } // not bundled → check-only
   }
 
   ipcMain.handle('update:caps', () => ({
@@ -54,7 +53,6 @@ function registerUpdaterIpc(ipcMain, getWin) {
 
   ipcMain.handle('update:check', async () => {
     if (!app.isPackaged) return { error: 'Update checks only work in the installed app.' };
-    if (REPO_OWNER === 'OWNER_TBD') return { error: 'Updates aren’t configured yet in this build.' };
     if (!autoUpdater) return { error: 'Checking from inside the app isn’t supported on this platform yet.' };
     try {
       const r = await autoUpdater.checkForUpdates();

@@ -23,8 +23,10 @@
     <clipPath id="tile"><rect x="8" y="8" width="240" height="240" rx="56"/></clipPath>
   </defs>
   <style>.wc1{filter:url(#wc1)}.wc2{filter:url(#wc2)}.wc3{filter:url(#wc3)}</style>
-  <!-- parchment tile -->
-  <rect x="8" y="8" width="240" height="240" rx="56" fill="#fdfcf7" filter="url(#paper)"/>
+  <!-- parchment tile. The paper filter's region extends past the rect (filters
+       default to a 120% box), so the grain is clipped to the tile or it spills a
+       faint grey band into the transparent margin — visible on a Mac Dock icon. -->
+  <g clip-path="url(#tile)"><rect x="8" y="8" width="240" height="240" rx="56" fill="#fdfcf7" filter="url(#paper)"/></g>
   <g clip-path="url(#tile)">
     <!-- a warm sun wash upper-left, sky wash, soil at the foot -->
     <circle class="wc2" cx="62" cy="58" r="54" fill="#f1cf6a" opacity=".35"/>

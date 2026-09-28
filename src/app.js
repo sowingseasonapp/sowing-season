@@ -68,8 +68,13 @@ function updateUndoButtons() {
   if (!u || !r) return;
   u.disabled = !undoStack.length;
   r.disabled = !redoStack.length;
-  u.title = undoStack.length ? `Undo ${undoStack[undoStack.length - 1].label} (Ctrl+Z)` : 'Nothing to undo (Ctrl+Z)';
-  r.title = redoStack.length ? `Redo ${redoStack[redoStack.length - 1].label} (Ctrl+Y)` : 'Nothing to redo (Ctrl+Y)';
+  // ⌘Z / ⇧⌘Z on a Mac (⌘Y isn't a Mac redo convention), Ctrl+Z / Ctrl+Y
+  // elsewhere. The platform lives in preload's modKey — display copy only.
+  const mac = (window.budgetAPI && window.budgetAPI.modKey) === '⌘';
+  const undoKey = mac ? '⌘Z' : 'Ctrl+Z';
+  const redoKey = mac ? '⇧⌘Z' : 'Ctrl+Y';
+  u.title = undoStack.length ? `Undo ${undoStack[undoStack.length - 1].label} (${undoKey})` : `Nothing to undo (${undoKey})`;
+  r.title = redoStack.length ? `Redo ${redoStack[redoStack.length - 1].label} (${redoKey})` : `Nothing to redo (${redoKey})`;
 }
 function markDirty(label = 'the last change') {
   // Carry-overs are derived (v7): whatever just changed, every later month's
@@ -125,10 +130,27 @@ function redo() {
   restoreSnapshot(step.snap);
   toast(`Redid ${step.label}.`);
 }
-// Ctrl+Z / Ctrl+Y (Ctrl+Shift+Z works too). Typing in a field keeps the
-// browser's native text undo; an open modal holds references that would go
-// stale over restored data, so the shortcuts wait until it closes; during the
-// onboarding wizard nothing is saved yet, so there is nothing to undo.
+// Undo/redo hotkey dispatch, shared by the keydown listener (Windows, and any
+// platform without an app menu) and the macOS Edit menu (main.js forwards
+// menu:undo / menu:redo, because a menu accelerator fires before the renderer
+// ever sees the key). Rules: a text field keeps native text undo — the menu
+// path has no browser default to fall back on, so it asks for it explicitly;
+// an open modal holds references that would go stale over restored data, so
+// the shortcuts wait until it closes; during the onboarding wizard nothing is
+// saved yet, so there is nothing to undo. Returns true when it acted.
+function hotkeyUndoRedo(isUndo, target) {
+  const t = target;
+  if (t && ((t.matches && t.matches('input, textarea, select')) || t.isContentEditable)) {
+    document.execCommand(isUndo ? 'undo' : 'redo');
+    return true;
+  }
+  if (!data || !data.months || !data.months.length) return false;
+  if ($('.modal-overlay')) return false;
+  if (isUndo) undo(); else redo();
+  return true;
+}
+// Ctrl+Z / Ctrl+Y (Ctrl+Shift+Z works too). In a text field the event is left
+// alone so the browser's own text undo handles it.
 document.addEventListener('keydown', (e) => {
   if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
   const k = e.key.toLowerCase();
@@ -137,10 +159,7 @@ document.addEventListener('keydown', (e) => {
   if (!isUndo && !isRedo) return;
   const t = e.target;
   if (t && ((t.matches && t.matches('input, textarea, select')) || t.isContentEditable)) return;
-  if (!data || !data.months || !data.months.length) return;
-  if ($('.modal-overlay')) return;
-  e.preventDefault();
-  if (isUndo) undo(); else redo();
+  if (hotkeyUndoRedo(isUndo, t)) e.preventDefault();
 });
 async function flushSave() {
   clearTimeout(saveTimer); saveTimer = null;
@@ -3064,6 +3083,19 @@ function fmtBackupStamp(stamp) {
   return `${dd} — ${h}:${String(d.getMinutes()).padStart(2, '0')} ${ap}`;
 }
 
+// Rolling backups get no suffix; the two kinds of safety copy say what they
+// are. A keep file is named keep-before-v{N}-{stamp} by boot() when a
+// data-version migration runs (main.js data:keep-backup).
+function backupRowNote(b) {
+  const kind = b.kind || (String(b.stamp).startsWith('prerestore-') ? 'prerestore' : 'rolling');
+  if (kind === 'prerestore') return ' <span class="muted">· saved before a restore</span>';
+  if (kind === 'keep') {
+    const v = (String(b.name).match(/^keep-before-v(\d+)-/) || [])[1];
+    return ` <span class="muted">· saved before the ${v ? 'v' + v + ' ' : ''}update</span>`;
+  }
+  return '';
+}
+
 function fmtBytes(n) {
   return n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
 }
@@ -3086,7 +3118,7 @@ async function showRestoreModal() {
         Your current data is saved as a backup first, then replaced, and the app reloads.</p>
       ${backups.length ? `<div class="restore-list">
         ${backups.map((b) => `<div class="restore-row">
-          <span>${esc(fmtBackupStamp(b.stamp))}${b.stamp.startsWith('prerestore-') ? ' <span class="muted">· saved before a restore</span>' : ''}</span>
+          <span>${esc(fmtBackupStamp(b.stamp))}${backupRowNote(b)}</span>
           <span class="muted">${fmtBytes(b.bytes)}</span>
           <button class="btn btn-sm" data-restore="${esc(b.name)}">Restore</button>
         </div>`).join('')}
@@ -4017,7 +4049,11 @@ async function boot() {
   if (window.budgetAPI.onUpdateProgress) {
     window.budgetAPI.onUpdateProgress((p) => { if (updProgressCb) updProgressCb(p); });
   }
+  // macOS Edit menu (main.js) — absent on Windows and in the dev harness.
+  if (window.budgetAPI.onMenuUndo) window.budgetAPI.onMenuUndo(() => hotkeyUndoRedo(true, document.activeElement));
+  if (window.budgetAPI.onMenuRedo) window.budgetAPI.onMenuRedo(() => hotkeyUndoRedo(false, document.activeElement));
   data = await window.budgetAPI.loadData();
+  const fromVersion = data.version || 0; // what's on disk, before the chain below
   let migrated = migrateV2(data) | migrateV3(data) | migrateV4(data);
   const v5 = migrateV5(data);
   migrated = migrated || v5.changed;
@@ -4041,6 +4077,14 @@ async function boot() {
   // is saved until the wizard finishes, so quitting mid-way is a clean no-op.
   if (!data.months.length) { renderOnboarding(); return; }
 
+  // A data-version bump gets one permanent copy of the pre-migration file
+  // (backups/keep-before-v{N}-{stamp}.json, never pruned) so an installer can
+  // always be stepped back to. It copies the ON-DISK file, so it must run
+  // before the save below. Guarded on the version, not on `migrated`: the
+  // appName rewrite above sets migrated without changing the format.
+  if (migrated && data.version > fromVersion && window.budgetAPI.keepBackup) {
+    await window.budgetAPI.keepBackup(`before-v${data.version}`);
+  }
   if (migrated) await window.budgetAPI.saveData(data);
   if (v5.retyped.length) {
     setTimeout(() => toast(`${v5.retyped.length} single-charge fund(s) switched from Pacing to Basic — see Settings for the list.`), 800);

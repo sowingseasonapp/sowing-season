@@ -9,7 +9,9 @@ CHANGELOG for the rename and the data-folder move-in.)
 
 ## Download
 
-**[⬇ Download for Windows](https://github.com/sowingseasonapp/sowing-season/releases/latest/download/Sowing-Season-Setup-1.0.4.exe)** — one-click installer, no setup questions.
+**[⬇ Download for Windows](https://github.com/sowingseasonapp/sowing-season/releases/latest)** —
+open the latest release and grab `Sowing-Season-Setup-{version}.exe`. One-click installer,
+no setup questions.
 
 Windows shows a SmartScreen warning on first run (the build is unsigned) — click
 **More info → Run anyway**. Every version lives on the
@@ -18,7 +20,8 @@ can check for updates itself from **Settings → Check for updates**.
 
 ## Running it
 
-- **Packaged app**: `dist/Sowing Season-win32-x64/Sowing Season.exe` — double-click to run.
+- **Installed app**: the installer from the releases page puts it in
+  `%LOCALAPPDATA%\Programs\Sowing Season\` and on the Start menu.
 - **From source**: `npm start` in this folder.
 
 Your data lives in `%APPDATA%\Sowing Season\budget-data.json` (auto-saved on every change,
@@ -170,11 +173,9 @@ packaging trap, the BOM crash). Start there before changing behaviour.
 ## Development
 
 - `npm start` — run the app.
-- `npm run pack` — rebuild the packaged exe into `dist/` (via `tools/package-app.js`, which
-  drives the packager's JS API: CLI `--ignore` regexes silently match nothing on Windows,
-  which once bundled each previous build inside the next one).
-- `npm run dist` — build the NSIS one-click installer into `dist-installer/` (electron-builder).
-  Releases, updates and the SmartScreen note are covered in [RELEASING.md](RELEASING.md).
+- `npm run dist` — build the NSIS one-click installer into `dist-installer/` (electron-builder,
+  the only build path since 1.0.5; it runs `npm run release:check` first). Releases, updates
+  and the SmartScreen note are covered in [RELEASING.md](RELEASING.md).
 - `npm test` — the verification suite: every month re-checked against the original
   workbook, plus the migration, tithe, savings, insight and CSV cases.
 - `npm run test:garden` — the garden engine: every plant state, seasons, maturity, the

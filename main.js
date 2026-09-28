@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { migrateLegacyData, LEGACY_APP_NAME } = require('./legacy-data');
@@ -75,9 +75,14 @@ function loadData() {
     return parsed;
   } catch (err) {
     // Unreadable data file: fall back to the newest good backup rather than
-    // starting empty, and keep the bad file for inspection.
+    // starting empty, and keep the bad file for inspection. Newest by mtime,
+    // not by name: keep-* files (the pre-migration copies) sort after budget-*
+    // alphabetically and would otherwise be tried first, silently recovering
+    // the user to old-format data when a newer rolling backup exists.
+    const mtime = (f) => { try { return fs.statSync(path.join(BACKUP_DIR(), f)).mtimeMs; } catch { return 0; } };
     const backups = fs.existsSync(BACKUP_DIR())
-      ? fs.readdirSync(BACKUP_DIR()).filter((f) => f.endsWith('.json')).sort().reverse()
+      ? fs.readdirSync(BACKUP_DIR()).filter((f) => f.endsWith('.json'))
+          .map((f) => ({ f, t: mtime(f) })).sort((a, b) => b.t - a.t).map((x) => x.f)
       : [];
     for (const b of backups) {
       try {
@@ -86,7 +91,7 @@ function loadData() {
         fs.copyFileSync(file, file + '.corrupt');
         fs.writeFileSync(file, JSON.stringify(data));
         dialog.showErrorBox('Budget data recovered',
-          `The budget file couldn't be read (${err.message}).\n\nIt was restored from the backup taken ${b.replace(/^budget-|\.json$/g, '')}.\nThe unreadable file was kept as budget-data.json.corrupt.`);
+          `The budget file couldn't be read (${err.message}).\n\nIt was restored from the backup taken ${b.replace(/^(budget|keep)-|\.json$/g, '')}.\nThe unreadable file was kept as budget-data.json.corrupt.`);
         return data;
       } catch { /* try the next backup */ }
     }
@@ -118,13 +123,48 @@ function saveData(data) {
       fs.mkdirSync(BACKUP_DIR(), { recursive: true });
       const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 16);
       fs.writeFileSync(path.join(BACKUP_DIR(), `budget-${stamp}.json`), json);
-      const old = fs.readdirSync(BACKUP_DIR()).filter((f) => f.endsWith('.json')).sort();
+      // Only the rolling budget-{stamp}.json files are ever pruned. The
+      // budget-prerestore-* safety copies and the keep-* pre-migration copies
+      // are exempt — they're the way back, and there are only ever a few.
+      const old = fs.readdirSync(BACKUP_DIR()).filter((f) => /^budget-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}\.json$/.test(f)).sort();
       while (old.length > MAX_BACKUPS) fs.unlinkSync(path.join(BACKUP_DIR(), old.shift()));
     } catch (err) {
       console.warn('Backup write failed (data itself saved):', err.message);
     }
   }
   return true;
+}
+
+// macOS only. With no explicit menu Electron installs its default one, whose
+// Edit → Undo/Redo are role-based ⌘Z / ⇧⌘Z accelerators that the menu handles
+// BEFORE the renderer's keydown listener sees the key — the app's own undo
+// would silently stop working for keyboard users. So Undo/Redo here are plain
+// items that forward to the renderer (menu:undo / menu:redo), which decides
+// (text field → native, modal open → ignore, else the app's undo stack).
+// The default View menu would also expose Reload/DevTools to every user, so
+// packaged builds get none. On Windows nothing changes: no menu is set and
+// autoHideMenuBar keeps the default one hidden.
+function installDarwinMenu() {
+  if (process.platform !== 'darwin') return;
+  const send = (channel) => () => { if (mainWin) mainWin.webContents.send(channel); };
+  const template = [
+    { label: app.name, submenu: [
+      { role: 'about' }, { type: 'separator' },
+      { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' },
+      { role: 'quit' },
+    ] },
+    { label: 'Edit', submenu: [
+      { label: 'Undo', accelerator: 'CmdOrCtrl+Z', click: send('menu:undo') },
+      { label: 'Redo', accelerator: 'Shift+CmdOrCtrl+Z', click: send('menu:redo') },
+      { type: 'separator' },
+      { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' },
+    ] },
+    ...(app.isPackaged ? [] : [{ label: 'View', submenu: [
+      { role: 'reload' }, { role: 'forceReload' }, { role: 'toggleDevTools' },
+    ] }]),
+    { label: 'Window', submenu: [{ role: 'minimize' }, { role: 'zoom' }, { role: 'close' }] },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
 function createWindow() {
@@ -175,8 +215,25 @@ app.whenReady().then(() => {
   ipcMain.handle('data:load', () => loadData());
   ipcMain.handle('data:save', (_e, data) => saveData(data));
   ipcMain.on('data:save-sync', (e, data) => { e.returnValue = saveData(data); });
+  // One copy of the file as it was BEFORE a data-version migration, named so
+  // the rolling prune never touches it (keep-{label}-{stamp}.json). The
+  // renderer calls this after the migration chain and before its first save,
+  // so what's on disk is still the old format. A failed keep never blocks boot.
+  ipcMain.handle('data:keep-backup', (_e, label) => {
+    try {
+      if (typeof label !== 'string' || !/^[a-z0-9-]{1,40}$/.test(label)) return false;
+      if (!fs.existsSync(DATA_FILE())) return false; // fresh install, wizard not finished
+      fs.mkdirSync(BACKUP_DIR(), { recursive: true });
+      const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 16);
+      fs.copyFileSync(DATA_FILE(), path.join(BACKUP_DIR(), `keep-${label}-${stamp}.json`));
+      return true;
+    } catch (err) {
+      console.warn('Keep-backup write failed:', err.message);
+      return false;
+    }
+  });
   ipcMain.handle('csv:open', async () => {
-    const res = await dialog.showOpenDialog({
+    const res = await dialog.showOpenDialog(mainWin, {
       title: 'Choose bank CSV export',
       filters: [{ name: 'CSV files', extensions: ['csv'] }, { name: 'All files', extensions: ['*'] }],
       properties: ['openFile'],
@@ -216,12 +273,16 @@ app.whenReady().then(() => {
   ipcMain.handle('backups:list', () => {
     try {
       if (!fs.existsSync(BACKUP_DIR())) return [];
+      // Newest first by the trailing date stamp, whatever the prefix — the
+      // three kinds (rolling, prerestore, keep) share one list.
+      const stampOf = (f) => (f.match(/(\d{4}-\d{2}-\d{2}-\d{2}-\d{2})\.json$/) || [])[1] || '';
       return fs.readdirSync(BACKUP_DIR())
-        .filter((f) => /^budget-[\w-]+\.json$/.test(f))
-        .sort().reverse()
+        .filter((f) => /^(budget|keep)-[\w-]+\.json$/.test(f))
+        .sort((a, b) => stampOf(b).localeCompare(stampOf(a)) || b.localeCompare(a))
         .map((name) => ({
           name,
-          stamp: name.replace(/^budget-|\.json$/g, ''),
+          kind: name.startsWith('keep-') ? 'keep' : name.startsWith('budget-prerestore-') ? 'prerestore' : 'rolling',
+          stamp: name.replace(/^(budget|keep)-|\.json$/g, ''),
           bytes: fs.statSync(path.join(BACKUP_DIR(), name)).size,
         }));
     } catch { return []; }
@@ -230,7 +291,7 @@ app.whenReady().then(() => {
     try {
       // The name must be one of the saver's own files, resolved inside the
       // backups folder — never a path the renderer composed.
-      if (typeof name !== 'string' || !/^budget-[\w-]+\.json$/.test(name)) throw new Error('not a backup file name');
+      if (typeof name !== 'string' || !/^(budget|keep)-[\w-]+\.json$/.test(name)) throw new Error('not a backup file name');
       const file = path.join(BACKUP_DIR(), name);
       if (path.dirname(path.resolve(file)) !== path.resolve(BACKUP_DIR())) throw new Error('not a backup file name');
       applyRestoredData(fs.readFileSync(file, 'utf8'));
@@ -238,7 +299,7 @@ app.whenReady().then(() => {
     } catch (err) { return err.message; }
   });
   ipcMain.handle('data:import-file', async () => {
-    const res = await dialog.showOpenDialog({
+    const res = await dialog.showOpenDialog(mainWin, {
       title: 'Choose an exported budget file',
       filters: [{ name: 'JSON', extensions: ['json'] }],
       properties: ['openFile'],
@@ -250,7 +311,7 @@ app.whenReady().then(() => {
     } catch (err) { return err.message; }
   });
   ipcMain.handle('data:export', async (_e, data) => {
-    const res = await dialog.showSaveDialog({
+    const res = await dialog.showSaveDialog(mainWin, {
       title: 'Export budget data',
       defaultPath: `budget-export-${new Date().toISOString().slice(0, 10)}.json`,
       filters: [{ name: 'JSON', extensions: ['json'] }],
@@ -263,6 +324,7 @@ app.whenReady().then(() => {
       return true;
     } catch (err) { return err.message; }
   });
+  installDarwinMenu();
   createWindow();
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });

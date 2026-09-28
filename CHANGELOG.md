@@ -9,6 +9,116 @@ so entries before that are dated by when the work happened, not by commit.
 
 ---
 
+## 2026-09-27 — 1.0.5: release-process debt paid, Mac prep committed but inert
+
+`_cowork/work-order-1.0.5.md` P1–P12 (sources: `release-plan-audit.md` R1–R14,
+`macos-readiness-audit.md` M1–M10). A **Windows-only** release shipped the
+existing local way (`npm run dist` → `node tools/publish-release.js`). No Electron
+bump, no CI, data version stays 7, no migration, **no new features** — Phone
+Wallet and everything else user-facing waits until after 1.1.0 (decided
+2026-09-27). The one thing a Windows user can notice: Settings → Restore can now
+list `keep-*` rows. Suites 1075 / 516 / 139 / 17, unchanged.
+
+- **P1 — second build system retired.** `tools/package-app.js`, `npm run pack`
+  and the `@electron/packager` devDependency are gone; `npm run dist` is the only
+  build path. The packager build had no electron-updater bundled (it silently ran
+  check-only) and its KEEP allowlist was a hand-synced copy of `build.files`.
+  `.gitignore` keeps `dist/` — the folder still exists on the owner's disk until
+  the desktop shortcut is repointed at `%LOCALAPPDATA%\Programs\Sowing Season\`
+  **after** 1.0.5 is installed (owner's step, not the code's).
+- **P2 — dead code and notes-in-repo.** The two `OWNER_TBD` branches in
+  `updater.js` are deleted. RELEASING §One-time setup now reads as done (repo,
+  scrub, signing deferred). Release notes live in `releases/v{version}.md` —
+  v1.0.2/3/4 backfilled from the live release bodies — and
+  `tools/publish-release.js` **refuses to run** without the file rather than
+  falling back to a bare title.
+- **P3 — `tools/release-check.js` (`npm run release:check`)**: semver, tag unused
+  locally and on origin, clean tree, CHANGELOG mentions the version in its first
+  40 lines, notes file present, all four suites pass. `npm run dist` runs it
+  first; `npm run dist:unchecked` is the escape hatch. README's Download link
+  now points at `releases/latest` (it was one version stale — the finding proving
+  itself), so RELEASING's "update the README link" step is gone.
+- **P4 — post-publish verification.** `publish-release.js` ends with `verify()`:
+  GET `releases/latest/download/latest.yml` following redirects (up to 5 tries,
+  3 s apart — `releases/latest` can lag), assert `version:` equals package.json,
+  HEAD the asset URL built from its `url:` line, print
+  `verified: latest.yml v{version} → {asset} (200)` or exit 1 naming the failed
+  assertion. Dependency-free (plain `https`, two regexes; no YAML lib).
+- **P5 — one kept backup per migration, and the prune leaves the safety copies
+  alone.** New IPC `data:keep-backup` (`keepBackup(label)` in preload; label must
+  match `/^[a-z0-9-]{1,40}$/`) copies the **on-disk** `budget-data.json` to
+  `backups/keep-{label}-{stamp}.json`. `boot()` captures `fromVersion` before the
+  migration chain and calls `keepBackup(\`before-v${data.version}\`)` when
+  `migrated && data.version > fromVersion` — guarded on the version, not on
+  `migrated`, because the appName rewrite sets `migrated` without a format change
+  — and it must run *before* the first save, since it is the file on disk that's
+  copied. Naming convention: `keep-before-v{N}-{stamp}.json`. Traps fixed on the
+  way:
+  - The prune filter was `f.endsWith('.json')`, so `budget-prerestore-*` (the
+    "what I had before I clicked Restore" copies) were prunable. It is now
+    `/^budget-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}\.json$/` — only rolling backups go.
+  - **The corruption-recovery ladder now sorts by mtime, not by name.** It took
+    every `.json` and tried the alphabetically last first; `'k' > 'b'`, so a
+    `keep-before-v7-…` file (old-format data) would have been tried before every
+    rolling backup and silently recovered the user to pre-migration data. mtime
+    descending also fixes the older quirk where `budget-prerestore-…` sorted
+    after `budget-2026-…` regardless of age.
+  - `backups:list` and `data:restore` accept `^(budget|keep)-`; the list carries a
+    `kind` (`rolling | prerestore | keep`) and is ordered by the trailing stamp so
+    the three kinds interleave chronologically. The Restore modal labels keep
+    rows "· saved before the v7 update" (`backupRowNote`, number from the name).
+  - Restoring a keep file re-runs the migration on reload, which writes a
+    **new** keep file. Expected; they accumulate one per migration.
+  - Rehearsed with `BUDGET_DATA_DIR` on a scratch copy of a v6 file: keep file
+    byte-identical to the original, none on the second launch, prune leaves
+    keep-*/prerestore-*, truncated main file recovers from the newest rolling
+    backup (v7), not the keep file.
+- **P6 — license.** `"license": "UNLICENSED"` in package.json, no LICENSE file
+  (decided 2026-09-27): the public repo reads as all-rights-reserved on purpose.
+- **P7 — macOS application menu (inert on Windows).** `installDarwinMenu()` in
+  main.js, darwin only: App (about/hide/quit), Edit with **plain** Undo/Redo
+  items on ⌘Z / ⇧⌘Z that send `menu:undo` / `menu:redo` to the renderer — *not*
+  `role: 'undo'`, whose accelerator would swallow the key before the renderer's
+  keydown listener ever saw it — then cut/copy/paste/selectAll roles; a View
+  menu (reload/devtools) only when `!app.isPackaged`; Window roles. Renderer:
+  `hotkeyUndoRedo(isUndo, target)` extracted from the keydown listener — text
+  field → `document.execCommand('undo'|'redo')` (the menu path has no browser
+  default to fall back on), no months / modal open → no-op, else `undo()` /
+  `redo()`; returns true when it acted so the keydown path only
+  `preventDefault`s then. Preload exposes `onMenuUndo` / `onMenuRedo`; `boot()`
+  registers them behind `if (window.budgetAPI.onMenuUndo)` for the dev harness.
+  Windows: no menu bar, Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z unchanged.
+- **P8 — dialogs get a parent.** `csv:open`, `data:import-file`, `data:export`
+  pass `mainWin` — a sheet on Mac, a window-modal dialog on Windows.
+- **P9 — modifier key in tooltips.** Preload exposes `modKey` (`'⌘'` on darwin,
+  `'Ctrl'` elsewhere — a value, so the renderer still never reads
+  `process.platform`). `updateUndoButtons()` builds the titles: `⌘Z` / `⇧⌘Z` on
+  Mac (⌘Y is not a Mac redo convention), `Ctrl+Z` / `Ctrl+Y` elsewhere. The
+  hardcoded `title` attributes left `index.html` and `dev.html`; JS owns them
+  (`seedUndoBaseline()` → `updateUndoButtons()` runs in `enterApp()`).
+- **P10 — Mac build config committed, not built.** `build.mac` (dmg + zip, x64 +
+  arm64, hardened runtime, notarize, `Sowing-Season-${version}-${arch}.${ext}`
+  as a *literal* electron-builder template) and `build.dmg` in package.json;
+  `build/entitlements.mac.plist` (allow-jit + allow-unsigned-executable-memory,
+  nothing else); `build/icon.png` 1024×1024 RGBA rendered from `build/icon.svg`
+  with the tile in an 880 px box → 99 px (~10 %) padding per side, Apple's grid
+  (the existing 1024 render in `_cowork` filled the canvas to 3 %). Found on the
+  way: the `#paper` grain filter's region extends 10 % past the tile rect, so it
+  spilled a faint 6 %-alpha grey band into the transparent margin — `icon.svg`
+  now clips that rect to `#tile`. `build/icon.ico` was **not** regenerated (the
+  band is invisible at ≤256 px; regenerate on the next icon pass). **No
+  `.github/workflows/mac-release.yml` in this release** — it would trigger a Mac
+  build of a version whose updater gate and docs aren't ready; it lands in 1.1.0.
+  `npm run dist` on Windows still builds only the NSIS installer.
+- **P11 — exact pins.** `electron 43.3.0`, `electron-builder 26.15.3`,
+  `electron-updater 6.8.9` (what the lockfile already held — no upgrade this
+  cycle). RELEASING gains the standing rule: bump Electron to the current major
+  twice a year (March/September), never more than two majors behind, builder and
+  updater together; first scheduled bump is 1.1.0.
+- **P12** — version 1.0.5, this entry, `releases/v1.0.5.md`.
+
+---
+
 ## 2026-09-08 — Carry-over integrity: derived carry-over, locked cells, import guard (v7)
 
 `_cowork/proposal-carry-over-integrity.md` C1–C5 in the D3 order, with Dustin's
