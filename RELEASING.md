@@ -34,8 +34,9 @@ TESTERS.md walks them through it. Azure Artifact Signing slots in later via
    `backups/keep-before-v{N}-{stamp}.json`, which is never pruned — that's the
    way back if a release ever has to be pulled.
 2. Commit, then `npm run release:check` — semver, tag unused (locally and on
-   origin), clean tree, CHANGELOG mentions the version, notes file present,
-   all four suites green. `npm run dist` runs it first anyway;
+   origin), clean tree, local branch not behind origin/main (a README edit made
+   on the website once put the release tag on a stale commit), CHANGELOG mentions
+   the version, notes file present, all four suites green. `npm run dist` runs it first anyway;
    `npm run dist:unchecked` is the escape hatch for local experiments.
 3. `npm run dist` → installer in `dist-installer/`. Smoke-test it:
    - Install on a machine (or rehearse with `BUDGET_DATA_DIR` first), and

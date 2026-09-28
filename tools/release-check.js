@@ -43,6 +43,18 @@ try {
   report(false, 'working tree is clean', err.message.split('\n')[0]);
 }
 
+// 3b. local main is not behind origin. A commit made on the website (a README
+// edit) that this clone never pulled makes the push fail AND lets GitHub put
+// the release tag on the stale commit — it did on v1.0.5.
+try {
+  git('fetch --quiet origin');
+  const behind = git('rev-list --count HEAD..origin/main');
+  report(behind === '0', 'local branch is up to date with origin/main',
+    behind === '0' ? '' : `behind by ${behind} commit(s) — run: git pull --rebase origin main`);
+} catch (err) {
+  report(false, 'local branch is up to date with origin/main', `couldn't check: ${err.message.split('\n')[0]}`);
+}
+
 // 4. CHANGELOG mentions this version near the top
 const changelogHead = fs.existsSync(path.join(ROOT, 'CHANGELOG.md'))
   ? fs.readFileSync(path.join(ROOT, 'CHANGELOG.md'), 'utf8').split('\n').slice(0, 40).join('\n')
