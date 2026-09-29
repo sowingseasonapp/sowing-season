@@ -120,6 +120,16 @@ downloads). Config is `build.mac` / `build.dmg` in package.json,
   `APPLE_TEAM_ID`. The job fails on its first step with a plain message if the
   certificate or the API key is missing. How each was made:
   `_cowork/mac-ci-workflow.md` Part 1.
+- **`MAC_CERT_P12` must be an old-format `.p12`** (SHA-1 MAC, 3DES). OpenSSL 3
+  on Windows exports AES-256 / SHA-256 by default, which macOS refuses with a
+  misleading "wrong password?". Re-export, if the certificate is ever renewed:
+  `openssl pkcs12 -export -inkey developerid.key -in developerid.pem -out developerid-mac.p12 -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1`,
+  then base64 the file into the secret. `MAC_CERT_PASSWORD` is that file's
+  export password.
+- **The job imports the certificate into its own keychain** and passes
+  `CSC_KEYCHAIN`, not `CSC_LINK` — electron-builder 26.15.3 mis-passes the
+  keychain password on its own import path (CHANGELOG 1.1.0). Remove the step
+  when the builder is bumped to a version that fixes it.
 - **Minimum macOS 13 Ventura.**
 - **userData path**, for support questions:
   `~/Library/Application Support/Sowing Season/`.

@@ -85,6 +85,20 @@ tags, pushes. Suites 1075 / 516 / 139 / 17, unchanged.
     to `needs: draft` — that skips the builds on a dry run.
   - **Dry run** = Actions → Run workflow: same builds, no release, installers
     attached to the run. It is the test of the workflow file itself.
+  - **One departure from the work order's file, found by the first dry runs:
+    the Mac job builds its own keychain and passes `CSC_KEYCHAIN` instead of
+    `CSC_LINK` / `CSC_KEY_PASSWORD`.** electron-builder 26.15.3's `importCerts`
+    (`macCodeSign.js`) calls `security set-key-partition-list -k` with the
+    *certificate* password where the *keychain* password (random, generated a
+    few lines earlier) belongs, so the build dies on "SecKeychainUnlock: The
+    user name or passphrase you entered is not correct" right after a
+    successful import. The builder stays pinned; the step goes away when it
+    moves to a version that fixes this.
+  - **Trap before that one: the `.p12` must be in the old format.** A `.p12`
+    exported by OpenSSL 3 (Git for Windows) defaults to AES-256 + SHA-256 MAC,
+    which macOS `security import` rejects as "MAC verification failed during
+    PKCS12 import (wrong password?)" — with the right password. Export with
+    `-keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1`.
 - **W4 — docs.** RELEASING.md rewritten around the flow (§Every release,
   signing deferral, §macOS as shipped, cadence record, build paths). TESTERS.md
   gained "Installing on a Mac", "Updating" and the Mac data path. README's
