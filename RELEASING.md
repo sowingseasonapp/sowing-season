@@ -48,7 +48,7 @@ line — no code change.
    and pushes `main` + the tag. The version is typed once, in package.json: the
    tag, the release title and the notes file lookup are all derived from it.
 3. Watch **Actions → Release**. Five jobs: `check` → `draft` → `windows` + `mac`
-   (in parallel) → `publish`. 15–25 minutes, most of it notarization. Green =
+   (in parallel) → `publish`. 15–25 minutes when Apple is quick, most of it notarization (the first runs took over 45 — the Mac job allows 120). Green =
    the release is published, marked latest, and `verify-release.js` printed two
    `verified:` lines in the `publish` job (`latest.yml` and `latest-mac.yml`:
    each names this version and every file it lists resolves). The run isn't

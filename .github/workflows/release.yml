@@ -107,7 +107,7 @@ jobs:
     needs: [check, draft]
     if: always() && needs.check.result == 'success' && (needs.draft.result == 'success' || needs.draft.result == 'skipped')
     runs-on: macos-latest
-    timeout-minutes: 45   # notarization is usually 2–10 min; can spike
+    timeout-minutes: 120  # two notarizations (x64, arm64); the first dry runs took ~30 min for one
     env:
       GH_TOKEN: ${{ github.token }}
       TAG: ${{ github.ref_name }}
