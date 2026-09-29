@@ -99,6 +99,14 @@ tags, pushes. Suites 1075 / 516 / 139 / 17, unchanged.
     which macOS `security import` rejects as "MAC verification failed during
     PKCS12 import (wrong password?)" — with the right password. Export with
     `-keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1`.
+  - **The sanity check validates the `.app` bundles, not the `.dmg`s.** The
+    work order ran `xcrun stapler validate` on each `.dmg`, which fails with
+    "does not have a ticket stapled to it" on a perfectly good build:
+    electron-builder notarizes and staples the app, then wraps it, and the
+    `.dmg` is neither signed nor stapled. The Mac job's timeout is 120 minutes
+    — two notarizations per run, and the first took about half an hour.
+  - The Mac job emits **eight** files plus `latest-mac.yml` (each `.dmg` has a
+    blockmap too), so a release carries **twelve** assets, not ten.
 - **W4 — docs.** RELEASING.md rewritten around the flow (§Every release,
   signing deferral, §macOS as shipped, cadence record, build paths). TESTERS.md
   gained "Installing on a Mac", "Updating" and the Mac data path. README's

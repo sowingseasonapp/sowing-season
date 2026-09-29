@@ -169,9 +169,14 @@ jobs:
         run: |
           ls -la dist-installer
           test -f dist-installer/latest-mac.yml || { echo "::error::latest-mac.yml missing — the in-app updater would be blind"; exit 1; }
-          for f in dist-installer/*.dmg; do
-            xcrun stapler validate "$f"
-            spctl --assess --type open --context context:primary-signature -v "$f" || echo "::warning::spctl assess failed for $f (often benign on CI; the stapler line above is the one that counts)"
+          ls dist-installer/*.dmg dist-installer/*.zip >/dev/null
+          # electron-builder notarizes and staples the .app, then wraps it; the
+          # .dmg itself carries no ticket (and is not signed), so the app bundles
+          # are what gets validated. Gatekeeper checks the app on first open.
+          for app in dist-installer/mac/*.app dist-installer/mac-arm64/*.app; do
+            xcrun stapler validate "$app"
+            codesign --verify --deep --strict --verbose=2 "$app"
+            spctl --assess --type execute -v "$app" || echo "::warning::spctl assess failed for $app (often benign on CI; the stapler line above is the one that counts)"
           done
       - name: Upload to the draft release
         if: env.IS_RELEASE == 'true'
