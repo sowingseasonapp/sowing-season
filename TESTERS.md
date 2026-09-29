@@ -10,7 +10,7 @@ month, and the Budget page is where the numbers live.
 
 ## Installing (the scary-looking Windows warning)
 
-The app isn't code-signed yet (that's a paid certificate — coming later), so the
+The app isn't code-signed yet (signing is planned before the public launch), so the
 first time you run the installer, Windows shows a blue box that says
 **"Windows protected your PC"**. That's SmartScreen not recognizing a new
 program, not a virus verdict.
@@ -18,10 +18,33 @@ program, not a virus verdict.
 To continue: click the small **More info** link in that blue box, then the
 **Run anyway** button that appears. You only have to do this once.
 
+## Installing on a Mac
+
+Download `Sowing-Season-{version}-arm64.dmg` for Apple Silicon (any M-series
+Mac) or `Sowing-Season-{version}-x64.dmg` for an Intel Mac. Open it, drag
+Sowing Season to Applications, then open it from Applications. It needs
+macOS 13 Ventura or newer.
+
+The build is signed and notarized by Apple, so you should **not** see an
+"unidentified developer" warning. **If you do see one, that is exactly the
+report we need** — send it in along with your macOS version. (If macOS still
+refuses to open the app, right-click it and choose **Open**.)
+
+One plain fact: this is the first Mac build, and nobody on the team has a Mac
+to test it on. The first Mac tester is the test.
+
+## Updating
+
+**Settings → Check for updates** looks for a newer version — only when you
+press it. On Windows it downloads and installs the update in place. On a Mac it
+currently opens the downloads page instead, where you grab the new `.dmg`;
+updating in place arrives in a later version.
+
 ## Where your data lives
 
-Everything is stored in one file on your computer, in your Windows profile
-(`%APPDATA%\Sowing Season`). Backups are automatic — the app keeps a rolling set
+Everything is stored in one file on your computer — on Windows in your profile
+(`%APPDATA%\Sowing Season`), on a Mac in
+`~/Library/Application Support/Sowing Season/`. Backups are automatic — the app keeps a rolling set
 as you work, and Settings → Restore… can take you back to any of them. You can
 also export a copy any time from Settings.
 

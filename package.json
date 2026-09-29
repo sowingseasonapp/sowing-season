@@ -1,6 +1,6 @@
 {
   "name": "sowing-season",
-  "version": "1.0.5",
+  "version": "1.1.0",
   "description": "Envelope-style budgeting app — tend your money like a garden",
   "main": "main.js",
   "scripts": {
@@ -8,7 +8,8 @@
     "dist": "npm run release:check && electron-builder",
     "dist:unchecked": "electron-builder",
     "release:check": "node tools/release-check.js",
-    "release": "electron-builder --publish always",
+    "release": "node tools/release-check.js && node tools/tag-release.js",
+    "release:verify": "node tools/verify-release.js",
     "test": "node tools/test-compute.mjs",
     "test:csv": "node tools/test-csv.mjs",
     "dev": "node tools/dev-server.js",
@@ -20,7 +21,7 @@
   "license": "UNLICENSED",
   "type": "commonjs",
   "devDependencies": {
-    "electron": "43.3.0",
+    "electron": "44.4.5",
     "electron-builder": "26.15.3",
     "xlsx": "^0.18.5"
   },
@@ -47,7 +48,8 @@
     ],
     "win": {
       "target": "nsis",
-      "icon": "build/icon.ico"
+      "icon": "build/icon.ico",
+      "artifactName": "Sowing-Season-Setup-${version}.${ext}"
     },
     "nsis": {
       "oneClick": true,

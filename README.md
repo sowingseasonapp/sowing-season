@@ -9,9 +9,14 @@ CHANGELOG for the rename and the data-folder move-in.)
 
 ## Download
 
-**[⬇ Download for Windows](https://github.com/sowingseasonapp/sowing-season/releases/latest)** —
-open the latest release and grab `Sowing-Season-Setup-{version}.exe`. One-click installer,
-no setup questions.
+- **[⬇ Download for Windows](https://github.com/sowingseasonapp/sowing-season/releases/latest)** —
+  open the latest release and grab `Sowing-Season-Setup-{version}.exe`. One-click installer,
+  no setup questions.
+- **[⬇ Download for Mac](https://github.com/sowingseasonapp/sowing-season/releases/latest)** —
+  same page: `Sowing-Season-{version}-arm64.dmg` for Apple Silicon (M-series),
+  `Sowing-Season-{version}-x64.dmg` for Intel. macOS 13 Ventura or newer; open the file and
+  drag Sowing Season to Applications. This is the first Mac build — tell us if it doesn't
+  open clean. On a Mac, **Check for updates** opens this page rather than updating in place.
 
 Windows shows a SmartScreen warning on first run (the build is unsigned) — click
 **More info → Run anyway**. Every version lives on the
@@ -173,8 +178,9 @@ packaging trap, the BOM crash). Start there before changing behaviour.
 ## Development
 
 - `npm start` — run the app.
-- `npm run dist` — build the NSIS one-click installer into `dist-installer/` (electron-builder,
-  the only build path since 1.0.5; it runs `npm run release:check` first). Releases, updates
+- `npm run dist` — build the NSIS one-click installer into `dist-installer/` (electron-builder;
+  it runs `npm run release:check` first). Since 1.1.0 this is a local smoke build only — what
+  ships is built by GitHub Actions from a tag pushed by `npm run release`. Releases, updates
   and the SmartScreen note are covered in [RELEASING.md](RELEASING.md).
 - `npm test` — the verification suite: every month re-checked against the original
   workbook, plus the migration, tithe, savings, insight and CSV cases.

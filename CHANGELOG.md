@@ -9,6 +9,95 @@ so entries before that are dated by when the work happened, not by commit.
 
 ---
 
+## 2026-09-28 — 1.1.0: first Mac release, one CI workflow, Electron 44
+
+`_cowork/work-order-1.1.0.md` W1–W5 (sources: `release-plan-audit.md` R1, R4, R6,
+R8; `macos-readiness-audit.md` M4, M5, M8–M10; `mac-ci-workflow.md`). **No
+features, no Windows signing** (deferred 2026-09-28 to ~2 months before real
+users), data version stays 7, no migration, `compute.js` and `updater.js`
+untouched. The PC stops building releases: it writes code, runs tests, bumps,
+tags, pushes. Suites 1075 / 516 / 139 / 17, unchanged.
+
+- **W1 — Electron 43.3.0 → 44.4.5** (exact pin; the September bump per the
+  standing rule). Needs Node ≥ 22.12.0. The 44 breaking changes were read against
+  what the app calls — `BrowserWindow`, `Menu`, the three `dialog` methods,
+  `ipcMain.handle/on`, `requestSingleInstanceLock`, `app.getPath/setPath`,
+  `shell.openExternal/showItemInFolder`, `contextBridge`, `ipcRenderer`,
+  `webContents.send`, `setWindowOpenHandler` — and **nothing applies**: the
+  changes are the `clipboard` module (rearchitected, gone from the renderer; the
+  app never used it), workers in subframes, `net.request` frame destinations,
+  login-item attributes, 32-bit and Unity removal. One is relevant by
+  coincidence: 44 drops macOS 12, which is why the Mac minimum is 13 Ventura.
+  electron-builder 26.15.3 / electron-updater 6.8.9 deliberately not moved.
+- **W1 — `win.artifactName`: `Sowing-Season-Setup-${version}.${ext}`.** The
+  installer, its blockmap and `latest.yml`'s `url:` are dashed straight out of
+  the build, matching the Mac block. The hand-rename into
+  `dist-installer/release-v{version}/` is dead. It mattered now because CI
+  uploads files by name, and GitHub turns spaces into dots. The name is what
+  1.0.5's updater will fetch, so it has to stay exactly this.
+- **W2 — `tools/publish-release.js` is gone**, and with it the
+  `git credential fill` path. Its `verify()` / `fetchFollow()` survive as
+  **`tools/verify-release.js`** (`npm run release:verify`), generalized: for
+  `latest.yml` and `latest-mac.yml` it GETs the feed via `releases/latest`
+  (5 tries, 3 s apart), asserts `version:`, collects **every** `url:` line (the
+  Mac feed lists four) and HEADs each under the `v{version}` tag. `--version`
+  overrides package.json (CI passes the tag); `--windows-only` skips the Mac
+  feed. Trap: `npm run release:verify --windows-only` without the `--`
+  separator never reaches argv — npm keeps the flag and sets
+  `npm_config_windows_only` — so the script reads that too.
+- **W2 — `npm run release` now means "check, tag, push"**:
+  `release-check.js && tag-release.js`. It used to be
+  `electron-builder --publish always`, the local-publish path.
+  `tools/tag-release.js` has no checks of its own on purpose.
+- **W2 — `release-check.js --ci`** skips the git checks (2, 3, 3b) and, when
+  `GITHUB_REF_TYPE === 'tag'`, asserts `GITHUB_REF_NAME === 'v' + version`.
+  Gated on the ref *type* because `GITHUB_REF_NAME` is always set in Actions
+  (it's the branch name on a dry run). Without `--ci` nothing changed.
+- **W2 — the compute suite cannot run in CI, and `--ci` says so instead of
+  failing.** Not in the work order; found by running the preflight in a fresh
+  clone. `tools/test-compute.mjs` reads `data/seed.json` and the source workbook
+  — the owner's real history, git-ignored by design — so on a runner it dies
+  with ENOENT and the `check` job could never go green. Under `--ci`, when
+  `data/seed.json` is absent, `npm run test` is skipped with a printed `–` line;
+  csv / garden / migrate still run there. The compute suite's gate is the local
+  preflight inside `npm run release`, which runs before the tag exists. (So the
+  workflow's "all four suites" comment is three on the runner.) The durable fix
+  is a synthetic fixture for the compute suite — not this release.
+- **W3 — `.github/workflows/release.yml`**, verbatim from the work order. A
+  pushed `v*` tag runs `check` → `draft` → `windows` + `mac` → `publish`.
+  - **Draft, then publish — and why.** The release is created as a draft and
+    both jobs upload into it; only `publish` flips it to published + latest,
+    then runs `verify-release.js`. A failure anywhere leaves a draft, which
+    `releases/latest` and every installed app cannot see. The 1.0.4 failure —
+    half a release went live, `latest.yml` missing, updater blind — can't
+    happen. Both platforms ship or neither does (R8), enforced by the graph.
+  - **`--publish never` + `gh release upload --clobber`**, not electron-builder's
+    publisher: two jobs racing to create one release, and a publisher that
+    behaves differently against drafts, both fail quietly. `--clobber` makes
+    "Re-run failed jobs" safe and replaces the old resumable-upload logic.
+  - **`--publish never` still writes `latest.yml` / `latest-mac.yml`** —
+    `app-builder-lib@26.15.3` `PublishManager.js:136–160` writes update-info
+    whenever the `publish` block resolves, independent of the publish policy.
+    That is why the `build.publish` block must stay.
+  - **`needs: [check, draft]` + `if: always() && …`** on the build jobs is the
+    shape for "run after an optional job": the dry run skips `draft`, and the
+    two result checks keep a real failure from being ignored. Don't simplify it
+    to `needs: draft` — that skips the builds on a dry run.
+  - **Dry run** = Actions → Run workflow: same builds, no release, installers
+    attached to the run. It is the test of the workflow file itself.
+- **W4 — docs.** RELEASING.md rewritten around the flow (§Every release,
+  signing deferral, §macOS as shipped, cadence record, build paths). TESTERS.md
+  gained "Installing on a Mac", "Updating" and the Mac data path. README's
+  Download has a Mac bullet.
+- **Mac ships untested on hardware, by decision.** Nobody on the team has a
+  Mac. The acceptance test is the notarization ticket plus
+  `xcrun stapler validate` in the CI log, and the docs say so to testers in
+  plain words. On a Mac the app reports `check-only` and the update button opens
+  the releases page; **M4** (widening `updater.js:36` to `win32 || darwin`) is
+  1.1.1, after one Mac user confirms the .dmg opens with no Gatekeeper dialog.
+
+---
+
 ## 2026-09-27 — 1.0.5: release-process debt paid, Mac prep committed but inert
 
 `_cowork/work-order-1.0.5.md` P1–P12 (sources: `release-plan-audit.md` R1–R14,

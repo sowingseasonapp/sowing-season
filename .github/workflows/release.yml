@@ -1,0 +1,176 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    # Dry run: builds both platforms from the current branch and attaches the
+    # installers to this run. Creates no release, no tag, uploads nothing to
+    # Releases. Use it to test the pipeline before tagging.
+    inputs:
+      note:
+        description: "Why this dry run (free text, for the run log)"
+        required: false
+
+permissions:
+  contents: write   # create/edit the release, upload assets
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  IS_RELEASE: ${{ github.event_name == 'push' }}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - id: v
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+      # release-check --ci: semver, CHANGELOG mentions the version, releases/v{version}.md
+      # exists, all four suites pass, and when GITHUB_REF_TYPE is 'tag' the tag must equal v{version}.
+      - run: node tools/release-check.js --ci
+
+  draft:
+    needs: check
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create the draft release (idempotent)
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG already exists — reusing it"
+          else
+            gh release create "$TAG" --draft \
+              --title "Sowing Season $TAG" \
+              --notes-file "releases/$TAG.md"
+          fi
+
+  windows:
+    needs: [check, draft]
+    # 'always()' lets the dry run proceed even though 'draft' was skipped;
+    # the two result checks keep a real failure from being ignored.
+    if: always() && needs.check.result == 'success' && (needs.draft.result == 'success' || needs.draft.result == 'skipped')
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # Unsigned, exactly like a local `npm run dist`. Windows signing is deferred;
+      # when it lands it is four --config.win.azureSignOptions.* flags on this line
+      # (see _cowork/azure-artifact-signing-setup.md Part 5). No other change.
+      - name: Build (NSIS, unsigned)
+        shell: pwsh
+        run: npx electron-builder --win --publish never
+      - name: Sanity-check the outputs
+        shell: pwsh
+        run: |
+          Get-ChildItem dist-installer
+          if (-not (Test-Path "dist-installer/latest.yml")) { throw "latest.yml missing — the in-app updater would be blind" }
+          if (-not (Get-ChildItem "dist-installer/Sowing-Season-Setup-*.exe")) { throw "installer not found under the dashed name — check win.artifactName" }
+      - name: Upload to the draft release
+        if: env.IS_RELEASE == 'true'
+        shell: pwsh
+        run: gh release upload "$env:TAG" (Get-ChildItem dist-installer/Sowing-Season-Setup-*.exe, dist-installer/*.blockmap, dist-installer/latest.yml).FullName --clobber
+      - name: Attach to this run (dry run)
+        if: env.IS_RELEASE != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-${{ needs.check.outputs.version }}
+          path: |
+            dist-installer/Sowing-Season-Setup-*.exe
+            dist-installer/*.blockmap
+            dist-installer/latest.yml
+          if-no-files-found: error
+
+  mac:
+    needs: [check, draft]
+    if: always() && needs.check.result == 'success' && (needs.draft.result == 'success' || needs.draft.result == 'skipped')
+    runs-on: macos-latest
+    timeout-minutes: 45   # notarization is usually 2–10 min; can spike
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fail fast if the Apple secrets aren't set
+        env:
+          P12: ${{ secrets.MAC_CERT_P12 }}
+          KEY: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          [ -n "$P12" ] || { echo "::error::MAC_CERT_P12 secret is empty — see _cowork/mac-ci-workflow.md Part 1"; exit 1; }
+          [ -n "$KEY" ] || { echo "::error::APPLE_API_KEY secret is empty — see _cowork/mac-ci-workflow.md Part 1"; exit 1; }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Write the App Store Connect API key to disk
+        # electron-builder's notarize step wants a path to the .p8, not its contents.
+        run: |
+          echo "${{ secrets.APPLE_API_KEY }}" > "$RUNNER_TEMP/AuthKey.p8"
+          echo "APPLE_API_KEY=$RUNNER_TEMP/AuthKey.p8" >> "$GITHUB_ENV"
+      - name: Build, sign, notarize (dmg + zip, x64 + arm64)
+        run: npx electron-builder --mac --x64 --arm64 --publish never
+        env:
+          CSC_LINK: ${{ secrets.MAC_CERT_P12 }}          # raw base64; electron-builder builds a throwaway keychain
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      - name: Sanity-check the outputs
+        run: |
+          ls -la dist-installer
+          test -f dist-installer/latest-mac.yml || { echo "::error::latest-mac.yml missing — the in-app updater would be blind"; exit 1; }
+          for f in dist-installer/*.dmg; do
+            xcrun stapler validate "$f"
+            spctl --assess --type open --context context:primary-signature -v "$f" || echo "::warning::spctl assess failed for $f (often benign on CI; the stapler line above is the one that counts)"
+          done
+      - name: Upload to the draft release
+        if: env.IS_RELEASE == 'true'
+        run: gh release upload "$TAG" dist-installer/*.dmg dist-installer/*.zip dist-installer/*.blockmap dist-installer/latest-mac.yml --clobber
+      - name: Attach to this run (dry run)
+        if: env.IS_RELEASE != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-${{ needs.check.outputs.version }}
+          path: |
+            dist-installer/*.dmg
+            dist-installer/*.zip
+            dist-installer/*.blockmap
+            dist-installer/latest-mac.yml
+          if-no-files-found: error
+
+  publish:
+    needs: [check, windows, mac]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish the release and mark it latest
+        run: gh release edit "$TAG" --draft=false --latest
+      - name: Verify what the updaters will read
+        run: node tools/verify-release.js --version "${TAG#v}"
