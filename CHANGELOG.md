@@ -9,6 +9,77 @@ so entries before that are dated by when the work happened, not by commit.
 
 ---
 
+## 2026-10-25 — Money in the right month: dated transfers, import landing, auto-planned follows a resync (3-year sim S5, S8, S7)
+
+Batch 3 of the three-year longevity simulation (`_cowork/3yr-sim/pass4/three-year-report.md`
+S5, S8, S7; pass-2 evidence L1 and F4; pass-3 repro scripts P1 and P5). Three defects that
+put money, or a planned amount, in the wrong month. `src/app.js`, `src/compute.js`,
+`tools/test-compute.mjs`. **First batch to touch `compute.js`** since 1.1.0, and additive
+only. **No data.version bump**: nothing saved changes shape — resync already rewrote
+carry-overs on every `markDirty`; S7 lets it rewrite one more derived value under one
+narrow condition. Suites 599 / 1060 (1091) / 156 / 17 (compute's v7 block was 1075; the
+other three unchanged). **Batches 1–3 ship together as 1.1.1.**
+
+- **S5 — A transfer posts to the month its date names, or is refused.** `showTransferModal`'s
+  `#tGo` handler pushed both legs into the month on screen whatever date was typed, so a
+  pair dated 10/15 with November open sat in November's math (and a date in a month that
+  doesn't exist landed there too). It now follows the same rule as the Transactions date
+  edit (W6): a date inside the open month behaves as before; a date in a month that doesn't
+  exist is refused in the dialog's own error line ("September 2026 doesn't exist yet, so the
+  date must stay inside August 2026."); a date in another existing month asks "This transfer
+  is dated 7/15/26 — post it to July 2026?" and on OK pushes **both legs** there, with the
+  toast adding "in July 2026". Cancel returns to the dialog with nothing pushed. One
+  `markDirty` after both pushes, so Ctrl+Z still removes the pair as one step and the resync
+  carries a cross-month pair forward from the month it landed in. The dialog now clears its
+  error line at the start of each attempt, so a refusal doesn't outlive the fix. The
+  month-close "transfer it" links open the same dialog with `currentMonthId` already set to
+  the closing month, so their default date sits inside it — unchanged, re-verified. No
+  balance check against the target month (that's 1.2.1's #23).
+- **S8 — After an import, land on the newest month that got rows.** `#doImport` tracked the
+  month of the *last* row pushed; bank files list newest first, so a file spanning months
+  left you on its OLDEST month and the next edit landed in the past. It now tracks
+  `newest = max(month.id)` over the rows actually pushed and switches there only when
+  `newest >= currentMonthId`; when every row went to earlier months it stays on the current
+  month. Either way the view is Transactions with the filter reset. The C3 toast still names
+  the earlier months that got rows and the carry-over correction.
+- **S7 — A never-typed auto-planned value follows a late resync.** `buildNextMonth` derives a
+  target or capped-build fund's planned from the carry-over at build time. When a row later
+  lands in an earlier month, `resyncCarryOvers` fixed the carry but left that derived
+  planned, so the fund asked for the wrong amount and showed an `overridden` chip nobody set
+  (R9: Baby built April from carry $2,250 → planned $20.83; a March line imported in May
+  dropped the carry → auto $41.67, planned stayed $20.83). **The rule, in one sentence:
+  planned follows a resync only when it equalled the auto value on the old carry.** Inside
+  the expense loop, before the carry moves, `autoOld = autoPlanned(f, cur.id)`; if
+  `|planned − autoOld| ≤ 0.004` (never typed) then after the new carry is set
+  `autoNew = autoPlanned(f, cur.id)` and planned becomes `autoNew` when it differs by more
+  than 0.004. Every other planned is untouched: a typed value (Invariant 13), a `fixed` fund
+  (its auto doesn't depend on the carry, so nothing moves), a fund with no setup, a fund
+  whose carry didn't change. Income funds are out of scope. It runs in the same iteration,
+  before the next month is computed from this one, so the changed planned feeds the next
+  month's carry in one pass and a second run still returns `[]` (Invariant 10). The change
+  object gains `plannedFrom` / `plannedTo` when planned moved; `#doImport`'s toast adds
+  "· 1 planned amount followed" (or "N planned amounts followed"); other `markDirty`
+  callers ignore the extra keys. The rule is stated in a comment at the top of
+  `resyncCarryOvers` — the roadmap I1 session that deletes the income loop needs to keep it.
+  **Known limit:** this prevents new stale values; it does not heal one left by an earlier
+  release, because the carry has to change for the rule to fire. Cowork's read-only check
+  against the 2026-09-28 live export (`_cowork/3yr-sim/pass4/s7-live-check-2026-09-28.md`)
+  found exactly one candidate — Eye Care, Sep 2026, planned $6.67 vs auto $6.70 (3¢) — not
+  worth a migration. That check is unchanged after this release: 0 carry changes, 0 planned
+  cells differ, a second run → 0.
+- **Tests.** Six S7 cases in `tools/test-compute.mjs`'s v7 block (16 assertions): the R9
+  shape (derived planned follows, `isOverridden` false afterwards), a typed planned stays,
+  a fixed fund is unmoved, a capped build fund (carry 280 → planned 20; late −30 → carry
+  250 → planned 50), a fund with no setup, and a three-month cascade whose second resync
+  returns `[]`. `starts consistent`, `idempotent` and the migration tests are unchanged.
+  The R9 fixture gives month A a −250 spend before the build so month B's derived planned
+  is the report's $20.83 rather than $0 (a fund already at target). S5 and S8 live in
+  app.js and have no unit tests; they're covered by Cowork's P1 and P5 scripts and the walks
+  (a-L1-transfer-date, a-M20-catchup, b-M09-catchup), plus the dev-harness checks recorded
+  in the Batch 3 session.
+- Verified: `node repro.mjs R9` → does not reproduce (overridden false, planned 20.83);
+  R1, R1b, R2, R3, R4 still "does not reproduce" (csv.js untouched).
+
 ## 2026-10-25 — Paycheck numbers: no $0 estimates, a real recent average, weekly pay detected (3-year sim S3, S9, S10, S17)
 
 Batch 2 of the three-year longevity simulation (`_cowork/3yr-sim/pass4/three-year-report.md`;

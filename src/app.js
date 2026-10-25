@@ -451,16 +451,33 @@ function showTransferModal(presetFrom = '', onDone = null, presetTo = '') {
     const date = parseUserDate($('#tDate', overlay).value);
     const note = $('#tNote', overlay).value.trim();
     const err = $('#tErr', overlay);
+    err.textContent = ''; // a refusal from the last attempt shouldn't outlive the fix
     if (!from || !to) { err.textContent = 'Pick both funds.'; return; }
     if (normFund(from) === normFund(to)) { err.textContent = 'Pick two different funds.'; return; }
     if (isNaN(amt) || amt <= 0) { err.textContent = 'Enter an amount greater than zero.'; return; }
     if (!date) { err.textContent = 'Enter the date as m/d/yy.'; return; }
-    month.transactions.push(
+    // S5: the pair posts to the month its date names, or is refused — the same
+    // W6 rule the Transactions date edit follows. compute.js counts a row by the
+    // month that holds it, so a pair dated elsewhere would move money between
+    // months silently. Same-month dates behave as before.
+    const targetId = date.slice(0, 7);
+    let target = month;
+    if (targetId !== month.id) {
+      target = data.months.find((mm) => mm.id === targetId);
+      if (!target) {
+        err.textContent = `${monthLabel(targetId)} doesn't exist yet, so the date must stay inside ${monthLabel(month.id)}.`;
+        return;
+      }
+      if (!confirm(`This transfer is dated ${$('#tDate', overlay).value.trim()} — post it to ${monthLabel(targetId)}?`)) return;
+    }
+    target.transactions.push(
       { id: newTxId(), date, vendor: `Transfer to ${to}`, amount: -amt, fund: from, description: note, account: '', isTransfer: true },
       { id: newTxId(), date, vendor: `Transfer from ${from}`, amount: amt, fund: to, description: note, account: '', isTransfer: true },
     );
+    // One markDirty after both pushes: Ctrl+Z removes the pair as one step, and
+    // the resync carries a cross-month pair forward from the month it landed in.
     markDirty(`the ${money(amt)} transfer`); close();
-    toast(`Moved ${money(amt)}: ${from} → ${to}.`);
+    toast(`Moved ${money(amt)}: ${from} → ${to}${target !== month ? ` in ${monthLabel(targetId)}` : ''}.`);
     if (onDone) onDone(); else render();
   };
 }
@@ -2217,12 +2234,14 @@ function renderImport(main) {
       const chosen = importState.rows.filter((r) => r.include);
       const missing = chosen.filter((r) => !r.fund);
       if (missing.length && !confirm(`${missing.length} selected row(s) have no fund picked — they'll show as "unassigned" until you fix them. Import anyway?`)) return;
-      let n = 0, lastMonth = null;
+      // S8: bank files list newest first, so the LAST row pushed is the oldest
+      // month the file touched. Track the newest month that received a row.
+      let n = 0, newest = null;
       for (const row of chosen) {
         const month = data.months.find((m) => m.id === row.monthId);
         if (!month) continue;
         pushImportedTx(month, row.rec, row.fund, importState.report?.externalIdTrusted);
-        n++; lastMonth = month.id;
+        n++; if (!newest || month.id > newest) newest = month.id;
       }
       persistResolvedProfile(importState.report, importState.answers);
       const early = chosen.filter((r) => r.earlierMonth);
@@ -2230,16 +2249,25 @@ function renderImport(main) {
       // markDirty runs the carry-over resync and reports what it corrected —
       // the toast's "updated" clause is that report, not a guess (C3/Option A).
       const carryChanges = markDirty(`the import of ${n} transaction(s)`);
-      let msg = `Imported ${n} transaction(s).`;
+      let msg = `Imported ${n} transaction(s)`;
       if (early.length) {
         const where = [...new Set(early.map((r) => r.monthId))].sort().map(monthName).join(', ');
         const fixed = [...new Set(carryChanges.map((c) => c.month))].sort().map(monthName);
-        msg = `Imported ${n} transaction(s) · ${early.length} posted to ${where}${fixed.length
+        msg += ` · ${early.length} posted to ${where}${fixed.length
           ? ` — ${fixed.length === 1 ? `${fixed[0]}'s carry-over` : 'later carry-overs'} updated`
-          : ''}.`;
+          : ''}`;
       }
-      toast(msg);
-      if (lastMonth) { currentMonthId = lastMonth; view = 'transactions'; txSearch = ''; txFundFilter = ''; }
+      // S7: the resync may also have re-derived a never-typed auto-planned value
+      // (a change object carrying plannedTo). Say so — the cell moved on its own.
+      const followed = carryChanges.filter((c) => c.plannedTo != null).length;
+      if (followed) msg += ` · ${followed} planned amount${followed === 1 ? '' : 's'} followed`;
+      toast(`${msg}.`);
+      // S8: land on the newest month that got rows; when every row went to an
+      // earlier month, stay where you were. Either way show the rows.
+      if (newest) {
+        if (newest >= currentMonthId) currentMonthId = newest;
+        view = 'transactions'; txSearch = ''; txFundFilter = '';
+      }
       render();
     };
     main.onchange = (e) => {

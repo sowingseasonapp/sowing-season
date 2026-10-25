@@ -462,6 +462,105 @@ console.log(`\nCompute engine vs spreadsheet: ${ok} checks passed, ${bad} failed
   const clean = { version: 6, settings: {}, months: [] };
   migrateV7(clean, '2026-09-09');
   t('clean data records no fix', clean.version === 7 && !clean.settings.lastCarryFix);
+
+  // ---- S7 (3-year sim): a never-typed auto-planned value follows a late resync.
+  //    Rule: when a fund's carry changes and planned equalled autoPlanned() on the
+  //    OLD carry, planned becomes autoPlanned() on the new carry. Nothing else moves.
+  const babyA = () => ({ fund: 'Baby', carryOver: 2310, planned: 190, rule: null,
+    setup: { type: 'savings', savingsMode: 'target', targetAmount: 2500, targetMonth: '2026-03' } });
+  const fundIn = (m, name) => m.categories[0].funds.find((f) => normFund(f.fund) === normFund(name));
+  // R9 shape: March holds Baby, spends 250 → leftover 2,250; April is built from it
+  // (target re-aimed at 2027-03, 12 months) → planned derived 20.83; a late March
+  // row drops the carry to 2,000 → auto 41.67 and planned follows.
+  const s7Fixture = () => {
+    const A = mkMonth('2026-03', [babyA()], [], [tx('2026-03-10', -250, 'Baby')]);
+    const B = buildNextMonth(A, 0);
+    return { version: 7, settings: {}, months: [A, B] };
+  };
+
+  // S7-1. R9 shape.
+  {
+    const d = s7Fixture();
+    const B = d.months[1], b = fundIn(B, 'Baby');
+    const derived = b.planned;
+    t('S7 built planned is derived', b.carryOver === 2250 && derived === 20.83 && !isOverridden(b, B.id),
+      JSON.stringify({ carry: b.carryOver, planned: derived }));
+    d.months[0].transactions.push(tx('2026-03-14', -250, 'Baby'));
+    const ch = resyncCarryOvers(d);
+    t('S7 R9 one change', ch.length === 1 && ch[0].month === '2026-04' && ch[0].from === 2250 && ch[0].to === 2000, JSON.stringify(ch));
+    t('S7 R9 planned follows', ch[0].plannedFrom === derived && ch[0].plannedTo === autoPlanned(b, B.id) && b.planned === 41.67,
+      JSON.stringify({ ch: ch[0], planned: b.planned }));
+    t('S7 R9 not overridden after', isOverridden(b, B.id) === false);
+    t('S7 R9 idempotent', resyncCarryOvers(d).length === 0);
+  }
+
+  // S7-2. A typed planned stays (Invariant 13).
+  {
+    const d = s7Fixture();
+    const B = d.months[1], b = fundIn(B, 'Baby');
+    b.planned = 300;
+    d.months[0].transactions.push(tx('2026-03-14', -250, 'Baby'));
+    const ch = resyncCarryOvers(d);
+    t('S7 typed planned stays', ch.length === 1 && b.carryOver === 2000 && b.planned === 300 && !('plannedTo' in ch[0]) && !('plannedFrom' in ch[0]),
+      JSON.stringify({ ch, planned: b.planned }));
+  }
+
+  // S7-3. A fixed fund's auto does not depend on the carry: planned stays, no plannedTo.
+  {
+    const fixed = { fund: 'Ins', carryOver: 0, planned: 100, rule: null, setup: { type: 'fixed', everyMonths: 12, totalAmount: 1200 } };
+    const A = mkMonth('2026-03', [fixed], [], [tx('2026-03-10', -30, 'Ins')]);
+    const B = buildNextMonth(A, 0);
+    const d = { version: 7, settings: {}, months: [A, B] };
+    const b = fundIn(B, 'Ins');
+    t('S7 fixed built', b.carryOver === 70 && b.planned === 100);
+    A.transactions.push(tx('2026-03-20', -20, 'Ins'));
+    const ch = resyncCarryOvers(d);
+    t('S7 fixed fund unmoved', ch.length === 1 && b.carryOver === 50 && b.planned === 100 && !('plannedTo' in ch[0]), JSON.stringify(ch));
+  }
+
+  // S7-4. Capped build fund: carry 280 at build → planned 20; a late −30 → carry 250 → planned 50.
+  {
+    const build = { fund: 'Eye', carryOver: 230, planned: 50, rule: null, setup: { type: 'savings', savingsMode: 'build', monthlyAmount: 50, buildGoal: 300 } };
+    const A = mkMonth('2026-03', [build]);
+    const B = buildNextMonth(A, 0);
+    const d = { version: 7, settings: {}, months: [A, B] };
+    const b = fundIn(B, 'Eye');
+    t('S7 capped build built', b.carryOver === 280 && b.planned === 20, JSON.stringify({ carry: b.carryOver, planned: b.planned }));
+    A.transactions.push(tx('2026-03-20', -30, 'Eye'));
+    const ch = resyncCarryOvers(d);
+    t('S7 capped build follows', ch.length === 1 && b.carryOver === 250 && b.planned === 50 && ch[0].plannedFrom === 20 && ch[0].plannedTo === 50,
+      JSON.stringify(ch));
+  }
+
+  // S7-5. No setup: carry changes, planned untouched, no plannedTo.
+  {
+    const A = mkMonth('2026-03', [expFund('Groc', 0, 100)], [], [tx('2026-03-05', -40, 'Groc')]);
+    const B = buildNextMonth(A, 0);
+    const d = { version: 7, settings: {}, months: [A, B] };
+    const b = fundIn(B, 'Groc');
+    A.transactions.push(tx('2026-03-20', -10, 'Groc'));
+    const ch = resyncCarryOvers(d);
+    t('S7 no setup untouched', ch.length === 1 && b.carryOver === 50 && b.planned === 100 && !('plannedTo' in ch[0]), JSON.stringify(ch));
+  }
+
+  // S7-6. Cascade A→B→C: the re-derived planned in B feeds C's carry in the same pass.
+  {
+    const A = mkMonth('2026-03', [babyA()], [], [tx('2026-03-10', -250, 'Baby')]);
+    const B = buildNextMonth(A, 0);
+    const C = buildNextMonth(B, 0);
+    const d = { version: 7, settings: {}, months: [A, B, C] };
+    const b = fundIn(B, 'Baby'), c = fundIn(C, 'Baby');
+    t('S7 cascade starts consistent', resyncCarryOvers(d).length === 0 && c.carryOver === 2270.83 && c.planned === 20.83,
+      JSON.stringify({ carry: c.carryOver, planned: c.planned }));
+    A.transactions.push(tx('2026-03-14', -250, 'Baby'));
+    const ch = resyncCarryOvers(d);
+    t('S7 cascade two changes', ch.length === 2 && ch.every((x) => x.plannedTo != null), JSON.stringify(ch));
+    t('S7 cascade B', b.carryOver === 2000 && b.planned === 41.67, JSON.stringify({ carry: b.carryOver, planned: b.planned }));
+    // C's carry is B's NEW leftover: 2000 + 41.67 − 0 = 2041.67; its planned re-derives to (2500 − 2041.67) / 11.
+    t('S7 cascade C follows B\'s new leftover', c.carryOver === 2041.67 && c.planned === 41.67 && !isOverridden(c, C.id),
+      JSON.stringify({ carry: c.carryOver, planned: c.planned }));
+    t('S7 cascade idempotent', resyncCarryOvers(d).length === 0);
+  }
   console.log(`\nV7 derived carry-overs: assertions folded into the pass/fail totals above (now ${ok} ok / ${bad} bad)`);
 }
 

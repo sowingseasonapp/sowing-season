@@ -414,8 +414,22 @@ export function migrateV6(data) {
 // so a change anywhere chains forward through every later month in one pass.
 // Idempotent: a second call returns []. A fund with no same-named predecessor
 // (the budget's first month, or a fund added mid-year) is user-owned — its
-// carry-over is an opening balance and is never touched. Never touches planned:
-// planned is a decision, not a derivation.
+// carry-over is an opening balance and is never touched.
+//
+// Planned (S7, 3-year sim): a planned amount the user typed never moves
+// (Invariant 13). But buildNextMonth derives a target / capped-build fund's
+// planned from the carry-over at build time, and that value was never typed —
+// so when this resync changes an EXPENSE fund's carry-over and the fund's
+// planned still equals autoPlanned() on the OLD carry, planned is re-derived as
+// autoPlanned() on the new carry, in the same iteration, before the next month
+// is computed from this one (that is what keeps a second pass at []). In every
+// other case planned is untouched: a typed value, a fixed fund (its auto does
+// not depend on the carry, so nothing moves), a fund with no setup, a fund
+// whose carry did not change. Income funds are not in scope. Such a change is
+// recorded with plannedFrom / plannedTo on the change object. The rule only
+// fires when a carry changes, so it prevents new stale values; it does not heal
+// one left by an earlier release. (A future I1 session deleting the income
+// loop below: keep this rule in the expense loop.)
 export function resyncCarryOvers(data) {
   const changes = [];
   const months = data.months || [];
@@ -432,8 +446,19 @@ export function resyncCarryOvers(data) {
         if (!p) continue;
         const want = r2(p.leftover);
         if (Math.abs(want - f.carryOver) < 0.005) continue;
-        changes.push({ month: cur.id, fund: f.fund, from: f.carryOver, to: want });
+        const ch = { month: cur.id, fund: f.fund, from: f.carryOver, to: want };
+        // S7: was planned following the auto value? Ask on the OLD carry, before it moves.
+        const autoOld = autoPlanned(f, cur.id);
+        const followed = autoOld != null && Math.abs(f.planned - autoOld) <= 0.004;
         f.carryOver = want;
+        if (followed) {
+          const autoNew = autoPlanned(f, cur.id);
+          if (autoNew != null && Math.abs(autoNew - f.planned) > 0.004) {
+            ch.plannedFrom = f.planned; ch.plannedTo = autoNew;
+            f.planned = autoNew;
+          }
+        }
+        changes.push(ch);
       }
     }
     for (const f of cur.income) {
