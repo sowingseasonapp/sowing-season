@@ -9,6 +9,72 @@ so entries before that are dated by when the work happened, not by commit.
 
 ---
 
+## 2026-10-06 — Importer: money stops going missing or counting twice (3-year sim S1, S2, S4, S6)
+
+Batch 1 of the three-year longevity simulation (`_cowork/3yr-sim/pass4/three-year-report.md`;
+pass-2 evidence F1, F2, F3, F7). Four importer defects, all in how the preview decides
+what is already in the budget. `src/csv.js`, `src/csv/import.js`, `tools/test-csv.mjs`,
+and three small spots in `src/app.js`. **No data.version bump**: the one data-shape
+addition is an optional `source: 'import'` key on imported transactions; absent means
+"typed by hand, or imported before this date", and nothing migrates. Suites 592 / 1060 /
+139 / 17 (CSV was 516; the other three unchanged).
+
+- **S1 — weekly paychecks were thrown out as duplicates.** An identical vendor + amount
+  up to 7 days after an existing row scored 1.0, so the first weekly check in nearly
+  every new import file was unticked as a "duplicate" (Persona A lost 57 paychecks,
+  $42,150, over 36 months). **The lag rule now** (Dustin, 2026-10-05): a *confident*
+  match (score 1.0, auto-unticked) needs the same vendor, the same cents, **and |lag| ≤ 3
+  days**. An exact match **4–7 days out is no match at all** — score 0, the row stays
+  ticked with no badge — not a 0.6 "possible". A week-later identical line is a paycheck
+  or a standing order, not the same line twice. The −3…+7 window still applies to the
+  *possible* tiers (near-equal cents, tip/pump-hold, typed twin). A file imported twice
+  still dedupes 100% (every row is a same-date exact match), which the catch-up loop and
+  re-imports depend on; tested on two fixtures.
+- **S1 — claims are assigned best-first across the whole file**, not in file order. Bank
+  files are newest first, so the first row to score could claim an existing row whose
+  real twin was further down the file. New `matchDuplicates(months, records, claimed,
+  opts)` scores every pair inside the date window, then hands out claims in two tiers —
+  all confident matches first, then possible ones — ordered by score, then smallest
+  |lag|, then file position. Each existing transaction is still claimed at most once
+  (Invariant 12; three identical coffees still dedupe as three). The preview in app.js
+  now calls it once per file instead of `findDuplicateScored` once per row; the per-row
+  function stays (same scoring, used by the tests and the simulation's `repro.mjs`).
+  The "duplicate" badge gained a title explaining why it is unticked.
+- **S6 — two real purchases a few cents apart became one.** The near-equal band (≤ 2¢ or
+  ≤ 0.5%) scored 0.9, a confident duplicate, so TARGET −45.18 then −45.13 a week later
+  unticked the second. It now scores 0.6 — "possible duplicate", ticked, badged — and the
+  user decides. The tip/fuel 0.6 rule is unchanged.
+- **S4 — a hand-typed payment and its bank line both counted.** Vendor equality was
+  required before any amount test, so "Hospital deposit" typed on 3/14 and "LAKELAND
+  REGIONAL HEALTH" imported on 3/14 never met. `pushImportedTx` now stamps
+  `source: 'import'`. When the existing transaction has **no** source stamp, no
+  `externalId`, and isn't a transfer leg, and the cents are equal with |lag| ≤ 3 days,
+  the row scores 0.6 whatever the vendor text — the badge title says "You typed a $612.00
+  entry on 11/15 — is this the same one?". **Not widened to imported rows**: two $5
+  coffees at different shops the same day are two transactions (tested). Older imports
+  lack the stamp and count as typed; worst case is an extra "possible" badge on a row
+  that stays ticked.
+- **S2 — paying the card from checking imported as spending.** `isCardPaymentRow` (the
+  identical copy in `src/csv/import.js` and the legacy `src/csv.js`) only knew
+  "online/autopay pymt", "payment thank you" and one Capital One string. Added the
+  issuer + payment wording banks actually write: `payment to chase card`, `chase credit
+  crd autopay|epay`, `capital one crcardpmt`, `discover e-payment`, `amex epayment`,
+  `citi autopay`, `cardmember serv`. Anchored on the issuer name plus a card or payment
+  word — "PAYMENT TO CITY WATER" and "FPL DIRECT DEBIT ELEC PYMT" stay bills (tested
+  through both parsers). The flagged row's existing "card payment" badge already
+  explains itself.
+- **Decisions not in the work order**, flagged for review: (1) best-first matching and
+  the typed-twin badge title both needed the preview's row-building code in app.js, not
+  just `pushImportedTx` and the badge strings — the matcher call changed from per-row to
+  per-file (3 lines) and each preview row now carries its `dup` match so the badge can
+  name the typed entry. (2) The Chase pattern is `payment to chase card` (the "ending
+  in" is optional) — still issuer + card + payment. (3) Rows dated in a month that
+  doesn't exist yet still take no part in matching, as before.
+- Verified: `node tools/test-csv.mjs` 592/0; compute 1060/0, garden 139/0, migrate 17/0;
+  `_cowork/3yr-sim` `node repro.mjs R1 | R1b | R2 | R3 | R4` each "does not reproduce".
+
+---
+
 ## 2026-09-28 — 1.1.0: first Mac release, one CI workflow, Electron 44
 
 `_cowork/work-order-1.1.0.md` W1–W5 (sources: `release-plan-audit.md` R1, R4, R6,

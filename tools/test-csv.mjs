@@ -12,7 +12,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   parseCsv, parseBankCsv, parseBankFile, scoreDuplicate, findDuplicateScored,
-  findDuplicate, suggestStarterFunds, starterFundFor,
+  findDuplicate, matchDuplicates, suggestStarterFunds, starterFundFor,
 } from '../src/csv.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -255,8 +255,10 @@ for (const [file, expected] of Object.entries(baseline)) {
     account: '', bankCategory: '', memo: '', ...over });
 
   check('dup exact = 1.0', scoreDuplicate(t({}), r({})) === 1);
-  check('dup 2¢ off = 0.9', scoreDuplicate(t({}), r({ amount: -40.02, amountCents: -4002 })) === 0.9);
-  check('dup 0.5% off = 0.9', scoreDuplicate(t({ amount: -500 }), r({ amount: -502, amountCents: -50200 })) === 0.9);
+  // Near-equal cents are "possible" (ticked, badged), never confident — a
+  // second real purchase 5¢ apart must not be unticked (3-year sim S6).
+  check('dup 2¢ off = 0.6 possible, not confident (S6)', scoreDuplicate(t({}), r({ amount: -40.02, amountCents: -4002 })) === 0.6);
+  check('dup 0.5% off = 0.6 possible, not confident (S6)', scoreDuplicate(t({ amount: -500 }), r({ amount: -502, amountCents: -50200 })) === 0.6);
   check('dup tip at a grill, later and larger = 0.6',
     scoreDuplicate(t({}), r({ date: '2026-01-12', amount: -41.5, amountCents: -4150 })) === 0.6);
   check('dup 5% at a non-dining vendor = no match',
@@ -264,10 +266,16 @@ for (const [file, expected] of Object.entries(baseline)) {
   check('dup tip where the EARLIER amount is larger = no match',
     scoreDuplicate(t({ amount: -41.5 }), r({ date: '2026-01-12', amount: -40, amountCents: -4000 })) === 0);
 
-  // The window is asymmetric (−3…+7): a CSV row posts up to a week AFTER the
-  // entry the user typed, but at most 3 days before it.
-  check('dup csv +7 days after entry matches', scoreDuplicate(t({}), r({ date: '2026-01-17' })) === 1);
+  // The window is asymmetric (−3…+7) for the POSSIBLE tiers: a CSV row posts up
+  // to a week AFTER the entry the user typed, but at most 3 days before it. A
+  // CONFIDENT match (same vendor, same cents) is only within ±3 days: an exact
+  // match 4–7 days out is a weekly paycheck, not the same line twice, and is
+  // NO match at all — not 0.6 (decision 2026-10-05, 3-year sim S1).
+  check('dup csv +3 days after entry matches', scoreDuplicate(t({}), r({ date: '2026-01-13' })) === 1);
+  check('dup csv +4 days after entry is no match (S1)', scoreDuplicate(t({}), r({ date: '2026-01-14' })) === 0);
+  check('dup csv +7 days after entry is no match (S1)', scoreDuplicate(t({}), r({ date: '2026-01-17' })) === 0);
   check('dup csv +8 days after entry does not', scoreDuplicate(t({}), r({ date: '2026-01-18' })) === 0);
+  check('dup near-equal +7 days is still possible', scoreDuplicate(t({}), r({ date: '2026-01-17', amount: -40.02, amountCents: -4002 })) === 0.6);
   check('dup csv −3 days before entry matches', scoreDuplicate(t({}), r({ date: '2026-01-07' })) === 1);
   check('dup csv −4 days before entry does not (old ±4 would have matched)',
     scoreDuplicate(t({}), r({ date: '2026-01-06' })) === 0);
@@ -476,6 +484,168 @@ for (const [file, expected] of Object.entries(baseline)) {
     starterFundFor(rec('2026-08-05', 'POS 1234', -5, { memo: 'NETFLIX.COM' })) === 'subscriptions');
   check('starter [starterFundFor: unknown → null]',
     starterFundFor(rec('2026-08-05', 'SOME LOCAL SHOP', -5)) === null);
+}
+
+// ================= 3-year simulation, batch 1 (S1, S2, S4, S6) =================
+{
+  const mk = (id, date, vendor, amount, extra = {}) => ({ id, date, vendor, amount, fund: 'x', description: '', account: '', ...extra });
+  const rec = (date, vendor, amount, extra = {}) => ({ date, vendor, amount, amountCents: Math.round(amount * 100), account: '', bankCategory: '', memo: '', ...extra });
+  const months = (txs) => {
+    const by = {};
+    for (const t of txs) (by[t.date.slice(0, 7)] ||= []).push(t);
+    return Object.keys(by).sort().map((id) => ({ id, transactions: by[id] }));
+  };
+  // What pushImportedTx stores for a parsed record (source stamp included).
+  const stored = (r, i, report) => ({ id: 'e' + i, date: r.date, vendor: r.vendor, amount: r.amount, fund: 'x',
+    description: r.memo || '', account: r.account, source: 'import',
+    ...(report?.externalIdTrusted && r.externalId ? { externalId: r.externalId } : {}) });
+  const ANS = { answers: { dateOrder: 'MDY', signConvention: 'as-is' } };
+
+  // ---- S1: weekly paychecks are not duplicates of last week's ----
+  const PAY = 'COOL AIR MECHANICAL PAYROLL';
+  const pay = mk('p1', '2027-07-09', PAY, 610, { source: 'import' });
+  check('S1 [weekly $610 seven days later scores 0]', scoreDuplicate(pay, rec('2027-07-16', PAY, 610)) === 0);
+  check('S1 [… and the preview matcher leaves it included]',
+    findDuplicateScored(months([pay]), rec('2027-07-16', PAY, 610), new Set(), { idTrusted: false }) === null);
+  check('S1 [exact +3 days is still confident]', scoreDuplicate(pay, rec('2027-07-12', PAY, 610)) === 1);
+  check('S1 [exact −3 days is still confident]', scoreDuplicate(pay, rec('2027-07-06', PAY, 610)) === 1);
+  check('S1 [exact +4 days is no match, not 0.6]', scoreDuplicate(pay, rec('2027-07-13', PAY, 610)) === 0);
+
+  // The same file imported twice: every row a confident duplicate (re-imports
+  // and the "month not started" catch-up loop depend on this).
+  for (const file of ['01-chase-checking.csv', '57-edge-duplicate-sameday.csv']) {
+    const { records, report } = parseBankFile(fs.readFileSync(path.join(FIX, file)), ANS);
+    const existing = records.map((r, i) => stored(r, i, report));
+    const out = matchDuplicates(months(existing), records, new Set(), { idTrusted: report.externalIdTrusted });
+    check(`S1 [${file} re-imported: every row a confident duplicate]`,
+      records.length > 0 && out.every((d) => d && d.score >= 0.9),
+      JSON.stringify(out.map((d, i) => d ? d.score : `${records[i].date} ${records[i].vendor} ${records[i].amount}`)));
+    check(`S1 [${file} re-imported: each row claims a distinct entry]`,
+      new Set(out.map((d) => d?.t.id)).size === records.length);
+  }
+
+  // Two overlapping checking files (newest first, as banks write them): file 1
+  // Oct 9 – Nov 6, file 2 Nov 1 – Nov 30, $610 every Friday, one Nov 4 debit
+  // in both. After both imports each paycheck exists exactly once, on its date.
+  const chaseFile = (rowsOldestFirst) => {
+    let bal = 1000;
+    const lines = rowsOldestFirst.map(([d, v, a]) => { bal += a; return [d, v, a, bal]; }).reverse()
+      .map(([d, v, a, b]) => `${a > 0 ? 'CREDIT' : 'DEBIT'},${d},"${v}",${a.toFixed(2)},${a > 0 ? 'ACH_CREDIT' : 'DEBIT_CARD'},${b.toFixed(2)},,`);
+    return 'Details,Posting Date,"Description",Amount,Type,Balance,Check or Slip #,\r\n' + lines.join('\r\n') + '\r\n';
+  };
+  const file1 = chaseFile([
+    ['10/09/2026', PAY, 610], ['10/14/2026', 'WAWA 5123', -20], ['10/16/2026', PAY, 610], ['10/23/2026', PAY, 610],
+    ['10/30/2026', PAY, 610], ['11/04/2026', 'PUBLIX SUPER MAR 1234', -40], ['11/06/2026', PAY, 610],
+  ]);
+  const file2 = chaseFile([
+    ['11/04/2026', 'PUBLIX SUPER MAR 1234', -40], ['11/06/2026', PAY, 610], ['11/13/2026', PAY, 610],
+    ['11/18/2026', 'WAWA 5123', -20], ['11/20/2026', PAY, 610], ['11/27/2026', PAY, 610],
+  ]);
+  const budget = [{ id: '2026-10', transactions: [] }, { id: '2026-11', transactions: [] }];
+  const importInto = (text, label) => {
+    const { records, report, error } = parseBankFile(text, ANS);
+    check(`S1 [overlap: ${label} parses`, !error && records.length > 0 && !report.questions.length, error || JSON.stringify(report?.questions));
+    const out = matchDuplicates(budget, records, new Set(), { idTrusted: report.externalIdTrusted });
+    records.forEach((r, i) => {
+      if (out[i] && out[i].score >= 0.9) return; // the preview unticks it
+      budget.find((m) => m.id === r.date.slice(0, 7)).transactions.push(stored(r, label + i, report));
+    });
+    return { records, out };
+  };
+  const first = importInto(file1, 'file 1');
+  check('S1 [overlap: file 1 into an empty budget — nothing matches]', first.out.every((d) => d === null));
+  const second = importInto(file2, 'file 2');
+  const dupDates = second.records.filter((r, i) => second.out[i]?.score >= 0.9).map((r) => r.date).sort();
+  check('S1 [overlap: file 2 — only the Nov 4 debit and the Nov 6 check are duplicates]',
+    JSON.stringify(dupDates) === JSON.stringify(['2026-11-04', '2026-11-06']),
+    JSON.stringify(second.out.map((d, i) => `${second.records[i].date} → ${d ? d.score : 'new'}`)));
+  const checks = budget.flatMap((m) => m.transactions).filter((t) => t.vendor === PAY).map((t) => t.date).sort();
+  check('S1 [overlap: each of the 8 Fridays exists exactly once, on its own date]',
+    JSON.stringify(checks) === JSON.stringify(['2026-10-09', '2026-10-16', '2026-10-23', '2026-10-30', '2026-11-06', '2026-11-13', '2026-11-20', '2026-11-27']),
+    JSON.stringify(checks));
+  check('S1 [overlap: the shared Nov 4 debit exists once]',
+    budget[1].transactions.filter((t) => t.date === '2026-11-04').length === 1);
+
+  // Claims are best-first across the file, not in file order: with a file
+  // listed newest first, the row 2 days off must not steal the twin of the
+  // same-date row listed after it.
+  const wawa = mk('w1', '2026-11-04', 'WAWA 5123', -20, { source: 'import' });
+  const bf = matchDuplicates(months([wawa]), [rec('2026-11-06', 'WAWA 5123', -20), rec('2026-11-04', 'WAWA 5123', -20)], new Set(), {});
+  check('S1 [best-first: the same-date row claims the twin, the earlier-listed row stays new]',
+    bf[0] === null && bf[1]?.t.id === 'w1' && bf[1].score === 1, JSON.stringify(bf.map((d) => d?.score ?? null)));
+  // …and confident matches are assigned before possible ones, whatever the order.
+  const grill = mk('g1', '2026-11-04', 'JOES GRILL', -40, { source: 'import' });
+  const tiers = matchDuplicates(months([grill]), [rec('2026-11-06', 'JOES GRILL', -42), rec('2026-11-04', 'JOES GRILL', -40)], new Set(), {});
+  check('S1 [confident matches are assigned before possible ones]',
+    tiers[0] === null && tiers[1]?.score === 1, JSON.stringify(tiers.map((d) => d?.score ?? null)));
+  check('S1 [each existing transaction is claimed at most once (Inv. 12)]',
+    (() => { const c = new Set(); const o = matchDuplicates(months([grill]), [rec('2026-11-04', 'JOES GRILL', -40), rec('2026-11-04', 'JOES GRILL', -40)], c, {});
+      return o.filter(Boolean).length === 1 && c.size === 1; })());
+
+  // ---- S6: near-equal amounts are possible, never confident ----
+  const tgt = mk('t1', '2028-11-26', 'TARGET 00012345', -45.18, { source: 'import' });
+  const d6 = findDuplicateScored(months([tgt]), rec('2028-12-03', 'TARGET 00012345', -45.13), new Set(), {});
+  check('S6 [TARGET 45.18 vs 45.13 a week later → possible (0.6), stays included]', !!d6 && d6.score === 0.6);
+  const wal = mk('t2', '2029-05-10', 'WALMART.COM 8009256278', -73.63, { source: 'import', account: '9811' });
+  check('S6 [WALMART 73.63 vs 73.71 six days later → possible]',
+    scoreDuplicate(wal, rec('2029-05-16', 'WALMART.COM 8009256278', -73.71, { account: '9811' })) === 0.6);
+  check('S6 [same cents same vendor same day is still 1.0]', scoreDuplicate(tgt, rec('2028-11-26', 'TARGET 00012345', -45.18)) === 1);
+
+  // ---- S4: a typed entry and its bank line ----
+  const typed = mk('h1', '2028-03-14', 'Hospital deposit', -250); // no source stamp = typed by hand
+  const LRH = 'LAKELAND REGIONAL HEALTH';
+  const d4 = findDuplicateScored(months([typed]), rec('2028-03-14', LRH, -250), new Set(), {});
+  check('S4 [typed −250 on 03-14 vs bank −250 on 03-14, other vendor → 0.6, flagged typed]',
+    !!d4 && d4.score === 0.6 && d4.typed === true && d4.t.id === 'h1', JSON.stringify(d4));
+  check('S4 [… at +3 days too]', scoreDuplicate(typed, rec('2028-03-17', LRH, -250)) === 0.6);
+  check('S4 [… at −3 days too]', scoreDuplicate(typed, rec('2028-03-11', LRH, -250)) === 0.6);
+  check('S4 [… but not at +4 days]', scoreDuplicate(typed, rec('2028-03-18', LRH, -250)) === 0);
+  check('S4 [… not when the cents differ]', scoreDuplicate(typed, rec('2028-03-14', LRH, -250.01)) === 0);
+  check('S4 [… not when the sign differs]', scoreDuplicate(typed, rec('2028-03-14', LRH, 250)) === 0);
+  check('S4 [not for an imported row (source stamp)]', scoreDuplicate({ ...typed, source: 'import' }, rec('2028-03-14', LRH, -250)) === 0);
+  check('S4 [not for a row with a bank id]', scoreDuplicate({ ...typed, externalId: 'X1' }, rec('2028-03-14', LRH, -250)) === 0);
+  check('S4 [not for a transfer leg (flag)]',
+    scoreDuplicate(mk('tr', '2028-03-14', 'Transfer to Baby', -250, { isTransfer: true }), rec('2028-03-14', LRH, -250)) === 0);
+  check('S4 [not for a transfer leg (vendor text only)]',
+    scoreDuplicate(mk('tr2', '2028-03-14', 'Transfer from Savings', 250), rec('2028-03-14', 'ACME PAYROLL', 250)) === 0);
+  check('S4 [typed entry with the same vendor and cents is still confident]',
+    scoreDuplicate(typed, rec('2028-03-14', 'Hospital deposit', -250)) === 1);
+  check('S4 [typed flag is only set by the cross-vendor rule]',
+    findDuplicateScored(months([mk('g2', '2028-03-14', 'JOES GRILL', -40)]), rec('2028-03-16', 'JOES GRILL', -42), new Set(), {})?.typed === false);
+  // Control: two imported $5.00 coffees at different shops the same day stay two transactions.
+  const cafe = mk('c1', '2028-03-14', 'BLUE BOTTLE COFFEE', -5, { source: 'import' });
+  const d4c = matchDuplicates(months([cafe]), [rec('2028-03-14', 'STARBUCKS 1234', -5)], new Set(), {});
+  check('S4 [control: two imported $5 coffees at different shops → no match]', d4c[0] === null);
+  // A typed card payment and the checking line that paid it: the row is a card
+  // payment (unticked) AND a typed twin — both badges, nothing counted twice.
+  const typedPay = mk('cp', '2026-11-15', 'Chase card payment', -612);
+  const payRec = parseBankFile('Details,Posting Date,"Description",Amount,Type,Balance,Check or Slip #,\r\n'
+    + 'DEBIT,11/15/2026,"Payment to Chase card ending in 4471 11/15",-612.00,LOAN_PMT,1388.00,,\r\n'
+    + 'DEBIT,11/13/2026,"PUBLIX SUPER MAR 1234",-62.00,DEBIT_CARD,2000.00,,\r\n'
+    + 'CREDIT,11/06/2026,"BRIGHT SMILES DENTAL PAYROLL",1205.00,ACH_CREDIT,2062.00,,\r\n', ANS).records;
+  const d4p = matchDuplicates(months([typedPay]), payRec, new Set(), {});
+  check('S4 [typed $612 card payment vs "Payment to Chase card ending in 4471" → typed twin + card payment]',
+    d4p[0]?.typed === true && d4p[0].score === 0.6 && payRec[0].isCardPayment === true, JSON.stringify([d4p[0], payRec[0]?.isCardPayment]));
+
+  // ---- S2: card payments from checking, through BOTH parsers ----
+  const viaImport = (v) => parseBankFile(`Date,Description,Amount\n06/03/2028,${v},-100.00\n06/04/2028,WAWA 5123,-20.00\n06/05/2028,PAYROLL,900.00\n06/21/2028,PUBLIX,-30.00\n`, ANS).records[0]?.isCardPayment;
+  const viaLegacy = (v) => parseBankCsv(`Account Number,Transaction Description,Transaction Date,Transaction Type,Transaction Amount,Balance\n1234,${v},06/03/2028,Debit,100.00,900.00\n`)[0]?.isCardPayment;
+  const yes = [
+    'Payment to Chase card ending in 4471 11/15', 'CHASE CREDIT CRD AUTOPAY', 'CHASE CREDIT CRD EPAY',
+    'ACH DEBIT CAPITAL ONE CRCARDPMT 1872', 'DISCOVER E-PAYMENT', 'AMEX EPAYMENT ACH PMT', 'CITI AUTOPAY PAYMENT',
+    'CARDMEMBER SERV WEB PYMT',
+    // true before this change, must stay true
+    'PAYMENT THANK YOU-MOBILE', 'CAPITAL ONE MOBILE PYMT', 'CAPITAL ONE ONLINE PMT', 'ONLINE PYMT 4471', 'AUTOPAY PYMT',
+  ];
+  const no = ['PAYMENT TO CITY WATER', 'FPL DIRECT DEBIT ELEC PYMT', 'PUBLIX SUPER MAR 1234', 'CHASE SAPPHIRE ANNUAL FEE', 'DISCOVER SAVINGS DEPOSIT', 'AMEX MEMBERSHIP FEE'];
+  for (const v of yes) {
+    check(`S2 [card payment via import.js: ${v}]`, viaImport(v) === true);
+    check(`S2 [card payment via legacy csv.js: ${v}]`, viaLegacy(v) === true);
+  }
+  for (const v of no) {
+    check(`S2 [not a card payment via import.js: ${v}]`, viaImport(v) === false);
+    check(`S2 [not a card payment via legacy csv.js: ${v}]`, viaLegacy(v) === false);
+  }
 }
 
 console.log(`\nCSV importer: ${pass} passed, ${fail} failed`);

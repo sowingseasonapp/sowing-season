@@ -52,10 +52,18 @@ export function parseCsv(text) {
 
 // A row that is a credit-card payment (either side: the card statement's credit,
 // or the checking account's withdrawal that funded it) — not a budget expense.
+// Checking-side lines that name the issuer plus a card or payment word (3-year
+// sim S2): "Payment to Chase card ending in 4471", "CHASE CREDIT CRD AUTOPAY",
+// "ACH DEBIT CAPITAL ONE CRCARDPMT 1872", "DISCOVER E-PAYMENT", "AMEX EPAYMENT
+// ACH PMT", "CITI AUTOPAY PAYMENT", "CARDMEMBER SERV WEB PYMT". Issuer AND a
+// card/payment word, never a bare payment word — "PAYMENT TO CITY WATER" and
+// "FPL DIRECT DEBIT ELEC PYMT" are bills.
+const ISSUER_CARD_PAYMENT = /payment to chase card|chase credit crd\s*(autopay|epay)|capital one crcardpmt|discover e-?payment|amex epayment|citi autopay|cardmember serv/i;
 function isCardPaymentRow(vendor, bankCategory) {
   return /payment\/credit/i.test(bankCategory)
     || /online pymt|autopay pymt|payment thank you/i.test(vendor)
-    || /capital one.*\b(mobile|online|autopay)?\s*(pymt|pmt)\b/i.test(vendor);
+    || /capital one.*\b(mobile|online|autopay)?\s*(pymt|pmt)\b/i.test(vendor)
+    || ISSUER_CARD_PAYMENT.test(vendor);
 }
 
 // Amount cell → integer cents, null for an empty/non-numeric cell, or NaN for a
@@ -275,61 +283,112 @@ export function suggestFund(vendorMap, vendor) {
 const TIP_OR_FUEL = /\b(restaurants?|grill|cafe|caffe|coffee|espresso|pizz(a|eria)|sushi|taco|burger|burrito|wings?|bbq|barbecue|steak(house)?|diner|deli|bistro|brewer(y|ies)|brewhouse|taphouse|bar|pub|cantina|kitchen|cocina|thai|pho|ramen|doordash|uber\s?eats|grubhub|postmates|shell|chevron|exxon|mobil|texaco|marathon|sunoco|valero|conoco|phillips\s?66|circle\s?k|speedway|quiktrip|racetrac|wawa|sheetz|caseys?|maverik|pilot|arco|fuel|gas\s?station)\b/i;
 const DAY = 86400000;
 
+// Was the stored transaction typed by hand? Imported rows carry
+// source: 'import' (pushImportedTx, since 2026-10-06); rows with a bank id came from a
+// file whatever the stamp says; transfer legs are the app's own. Rows imported
+// before the stamp existed count as typed — the worst case is an extra
+// "possible duplicate" badge on a row that stays ticked.
+function isTypedTx(t) {
+  return !t.source && !String(t.externalId || '').trim() && !isTransferTx(t);
+}
+
 // Score how likely `rec` (a CSV row) is a re-import of `t` (a stored
-// transaction). 0 = no match; 1.0 exact; 0.9 near-exact (rounding); 0.6 the
-// tip/pump-hold pattern. The date window is asymmetric (−3…+7 days): pending
-// appears BEFORE posted, so a CSV row posts up to a week after the entry the
-// user typed, but rarely precedes it.
-export function scoreDuplicate(t, rec, { idTrusted = false } = {}) {
-  if (!t.date || !rec.date) return 0;
+// transaction), with the reason. score: 0 = no match; 1.0 = the same vendor and
+// the same cents within ±3 days; 0.6 = "possible" — a near-equal amount at the
+// same vendor, the tip/pump-hold pattern, or (typed: true) a hand-typed entry
+// with the same cents within ±3 days whatever its vendor text (3-year sim S4).
+// The possible tiers use the asymmetric −3…+7 day window: pending appears
+// BEFORE posted, so a CSV row posts up to a week after the entry the user
+// typed, but rarely precedes it. A CONFIDENT match is tighter: an identical
+// vendor + amount 4–7 days out is a weekly paycheck or a standing order, not
+// the same line twice, and scores 0 — not 0.6 (decision 2026-10-05, S1).
+function scoreDuplicateDetail(t, rec, { idTrusted = false } = {}) {
+  if (!t.date || !rec.date) return { score: 0, typed: false };
   const tAcct = String(t.account || '').trim(), rAcct = String(rec.account || '').trim();
-  if (tAcct && rAcct && tAcct !== rAcct) return 0; // the same $50 on two cards is two transactions (§8.2)
+  if (tAcct && rAcct && tAcct !== rAcct) return { score: 0, typed: false }; // the same $50 on two cards is two transactions (§8.2)
   const tId = String(t.externalId || '').trim(), rId = String(rec.externalId || '').trim();
-  if (idTrusted && tId && rId) return tId === rId ? 1 : 0; // bank IDs are exact, not heuristic (§8.1)
+  if (idTrusted && tId && rId) return { score: tId === rId ? 1 : 0, typed: false }; // bank IDs are exact, not heuristic (§8.1)
   const lagDays = (Date.parse(rec.date) - Date.parse(t.date)) / DAY;
-  if (lagDays < -3 || lagDays > 7) return 0;
-  const tv = normVendor(t.vendor);
-  if (!tv || (tv !== normVendor(rec.vendor) && (!rec.memo || tv !== normVendor(rec.memo)))) return 0;
+  if (lagDays < -3 || lagDays > 7) return { score: 0, typed: false };
   const a = Math.round(t.amount * 100);
   const b = Number.isFinite(rec.amountCents) ? rec.amountCents : Math.round(rec.amount * 100);
   const diff = Math.abs(a - b), mag = Math.max(Math.abs(a), Math.abs(b));
-  if (diff === 0) return 1;
-  if (diff <= 2 || diff <= mag * 0.005) return 0.9;
+  const tv = normVendor(t.vendor);
+  const sameVendor = !!tv && (tv === normVendor(rec.vendor) || (!!rec.memo && tv === normVendor(rec.memo)));
+  if (!sameVendor) {
+    // S4: "Hospital deposit" typed on the 14th, "LAKELAND REGIONAL HEALTH" in
+    // the bank file on the 14th. Only a typed entry, only the same cents, only
+    // within ±3 days, and only ever "possible" — this is NOT widened to
+    // imported rows: two $5 coffees at different shops the same day are two
+    // transactions.
+    const typed = diff === 0 && Math.abs(lagDays) <= 3 && isTypedTx(t);
+    return { score: typed ? 0.6 : 0, typed };
+  }
+  if (diff === 0) return { score: Math.abs(lagDays) <= 3 ? 1 : 0, typed: false };
+  // Near-equal cents (rounding on the same posting — or a second real purchase
+  // 5¢ apart, S6): the user decides, so never a confident duplicate.
+  if (diff <= 2 || diff <= mag * 0.005) return { score: 0.6, typed: false };
   const largerIsLater = lagDays === 0 || (lagDays > 0) === (Math.abs(b) >= Math.abs(a));
   const tippable = TIP_OR_FUEL.test(rec.vendor || '') || TIP_OR_FUEL.test(rec.memo || '')
     || TIP_OR_FUEL.test(t.vendor || '') || /dining|restaurant|food|gas|fuel/i.test(rec.bankCategory || '');
-  if (diff <= mag * 0.05 && largerIsLater && tippable) return 0.6;
-  return 0;
+  if (diff <= mag * 0.05 && largerIsLater && tippable) return { score: 0.6, typed: false };
+  return { score: 0, typed: false };
 }
 
-// Best-scoring unclaimed transaction at or above minScore, or null. Claims the
-// match: each existing transaction can claim only ONE csv row — the shared
-// `claimed` Set preserves multiplicity (three identical coffees dedupe as
-// three, not one).
-function bestDuplicate(months, rec, claimed, minScore, opts) {
-  let best = null, bestScore = 0;
-  outer: for (const m of months) {
-    for (const t of m.transactions) {
-      if (claimed.has(t.id)) continue;
-      const s = scoreDuplicate(t, rec, opts);
-      if (s > bestScore) { best = t; bestScore = s; if (s === 1) break outer; }
+export function scoreDuplicate(t, rec, opts) {
+  return scoreDuplicateDetail(t, rec, opts).score;
+}
+
+// Match a whole file against the budget, best-first (S1). Every candidate pair
+// inside the date window is scored; claims are then handed out in two tiers —
+// confident (≥0.9) first, then possible — and within a tier by highest score,
+// smallest |lag|, file order last. So a file's own copy of a line claims its
+// twin before a week-later line can, whatever order the bank listed the rows
+// in (bank files are newest first). Each existing transaction is claimed at
+// most once (Invariant 12): the shared `claimed` Set preserves multiplicity —
+// three identical coffees dedupe as three, not one. A null record is skipped.
+// Returns an array aligned with `records`: {t, score, typed} or null.
+function assignDuplicates(months, records, claimed, opts, minScore) {
+  const cands = [];
+  records.forEach((rec, i) => {
+    if (!rec || !rec.date) return;
+    const recMs = Date.parse(rec.date);
+    for (const m of months) {
+      for (const t of m.transactions) {
+        if (claimed.has(t.id) || !t.date) continue;
+        const lag = (recMs - Date.parse(t.date)) / DAY; // cheap gate before the vendor work
+        if (!(lag >= -3 && lag <= 7)) continue;
+        const d = scoreDuplicateDetail(t, rec, opts);
+        if (d.score >= minScore) cands.push({ i, t, score: d.score, typed: d.typed, lag: Math.abs(lag) });
+      }
     }
+  });
+  cands.sort((x, y) => (y.score >= 0.9) - (x.score >= 0.9) || y.score - x.score || x.lag - y.lag || x.i - y.i);
+  const out = new Array(records.length).fill(null);
+  for (const c of cands) {
+    if (out[c.i] || claimed.has(c.t.id)) continue;
+    claimed.add(c.t.id);
+    out[c.i] = { t: c.t, score: c.score, typed: c.typed };
   }
-  if (!best || bestScore < minScore) return null;
-  claimed.add(best.id);
-  return { t: best, score: bestScore };
+  return out;
 }
 
-// Preview matcher: ≥0.9 auto-marks as a duplicate, 0.6–0.9 is a "possible
-// duplicate" the user reviews. Nothing is ever silently dropped.
+// Preview matcher for a whole file: ≥0.9 auto-marks as a duplicate, 0.6–0.9 is
+// a "possible duplicate" the user reviews. Nothing is ever silently dropped.
+export function matchDuplicates(months, records, claimed, opts) {
+  return assignDuplicates(months, records, claimed, opts, 0.6);
+}
+
+// One row at a time (the same scoring; claims in call order). Kept for the
+// tests and the simulation harness — the preview uses matchDuplicates.
 export function findDuplicateScored(months, rec, claimed, opts) {
-  return bestDuplicate(months, rec, claimed, 0.6, opts);
+  return assignDuplicates(months, [rec], claimed, opts, 0.6)[0];
 }
 
 // Legacy surface (the onboarding wizard calls this): a duplicate is only a
 // CONFIDENT scored match (≥0.9) — what the preview would auto-mark.
 export function findDuplicate(months, rec, claimed) {
-  return bestDuplicate(months, rec, claimed, 0.9)?.t ?? null;
+  return assignDuplicates(months, [rec], claimed, {}, 0.9)[0]?.t ?? null;
 }
 
 /* ---------------- Onboarding starter-fund suggestions ----------------

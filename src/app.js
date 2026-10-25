@@ -8,7 +8,7 @@ import {
 import { gardenState, incomeCheckIns, stonesLaidIn, sownStreak } from './garden.js';
 import { sceneSvg, stripSvg, plantSprite, butterflySymbol, PALETTE_TOKENS, GARDEN_MILESTONE_LABELS } from './garden-scene.js';
 import {
-  parseBankFile, buildVendorMap, suggestFund, findDuplicateScored,
+  parseBankFile, buildVendorMap, suggestFund, matchDuplicates,
   suggestStarterFunds, starterFundFor, normVendor,
 } from './csv.js';
 import { groupedBars, barList, lineArea } from './charts.js';
@@ -1990,10 +1990,14 @@ function pushImportedTx(month, rec, fund, idTrusted) {
   // The memo (Comments / Extended Details) is often the real merchant string —
   // keep it on the transaction as its description. A validated bank
   // transaction id rides along so the next import of this account can dedupe
-  // exactly instead of heuristically.
+  // exactly instead of heuristically. source: 'import' tells the next import
+  // this row came from a file, so only hand-typed rows get the "you typed a
+  // $X entry on M/D" possible-duplicate check (S4). Absent = typed, or an
+  // import from before the stamp existed (2026-10-06); optional key, no
+  // data.version bump.
   const tx = {
     id: newTxId(), date: rec.date, vendor: rec.vendor, amount: rec.amount,
-    fund, description: rec.memo || '', account: rec.account,
+    fund, description: rec.memo || '', account: rec.account, source: 'import',
   };
   if (idTrusted && rec.externalId) tx.externalId = rec.externalId;
   month.transactions.push(tx);
@@ -2096,8 +2100,16 @@ function renderImport(main) {
     importState.rows.forEach((row, i) => {
       const rec = row.rec;
       const badges = [];
-      if (row.duplicate) badges.push('<span class="badge dup">duplicate</span>');
-      else if (row.possibleDup) badges.push('<span class="badge dup-maybe" title="Same place and a similar amount within a few days of an entry you already have — often a tip or a gas-pump hold posting. It will import unless you untick it.">possible duplicate</span>');
+      if (row.duplicate) badges.push('<span class="badge dup" title="Matches an entry you already have on the same date (± a few days). Unticked so it isn\'t counted twice — tick it if it\'s a separate payment.">duplicate</span>');
+      else if (row.possibleDup) {
+        // A hand-typed entry with the same amount within a few days (S4): say
+        // which one, so "is this the same one?" is answerable at a glance.
+        const typed = row.dup?.typed ? row.dup.t : null;
+        const title = typed
+          ? `You typed a ${fmtUSD.format(Math.abs(typed.amount))} entry on ${Number(typed.date.slice(5, 7))}/${Number(typed.date.slice(8, 10))} — is this the same one? It will import unless you untick it.`
+          : 'Same place and a similar amount within a few days of an entry you already have — often a tip or a gas-pump hold posting. It will import unless you untick it.';
+        badges.push(`<span class="badge dup-maybe" title="${esc(title)}">possible duplicate</span>`);
+      }
       if (rec.isCardPayment) badges.push('<span class="badge pay" title="Paying a credit-card bill isn\'t spending — the purchases it covers are already transactions on the card. Left unticked so nothing counts twice; tick it if you track this account differently.">card payment</span>');
       if (!row.monthExists) badges.push(`<span class="badge warn" title="Dated in a month that doesn't exist in the app yet, so it can't be imported right now.">month not started</span>`);
       if (row.earlierMonth) badges.push(`<span class="badge warn" title="Dated in a month you've already moved past. It posts there, and every later month's carry-over follows automatically.">earlier month</span>`);
@@ -2142,13 +2154,17 @@ function renderImport(main) {
     const vendorMap = buildVendorMap(data.months);
     const claimed = new Set();
     const blocked = report.questions.length > 0;
-    const rows = records.map((rec) => {
+    // Scored matching (§8) over the whole file at once, best match first (S1):
+    // ≥0.9 auto-marks as a duplicate; 0.6–0.9 is a "possible duplicate" —
+    // still selected, badged for the user to review. Rows dated in a month
+    // that doesn't exist yet can't import, so they don't take part.
+    const dups = matchDuplicates(data.months,
+      records.map((rec) => (data.months.some((m) => m.id === rec.date.slice(0, 7)) ? rec : null)),
+      claimed, { idTrusted: report.externalIdTrusted });
+    const rows = records.map((rec, i) => {
       const monthId = rec.date.slice(0, 7);
       const month = data.months.find((m) => m.id === monthId);
-      // Scored matching (§8): ≥0.9 auto-marks as a duplicate; 0.6–0.9 is a
-      // "possible duplicate" — still selected, badged for the user to review.
-      const dup = month ? findDuplicateScored(data.months, rec, claimed,
-        { idTrusted: report.externalIdTrusted }) : null;
+      const dup = month ? dups[i] : null;
       const duplicate = !!dup && dup.score >= 0.9;
       let fund = '', suggestNote = '';
       if (month) {
@@ -2167,7 +2183,7 @@ function renderImport(main) {
         // row still posts where its date says; the badge and notice just make
         // the consequence visible. Carry-overs follow automatically (v7).
         earlierMonth: !!month && monthId < data.months[data.months.length - 1].id,
-        possibleDup: !!dup && dup.score < 0.9, fund, suggestNote,
+        possibleDup: !!dup && dup.score < 0.9, dup, fund, suggestNote,
         include: !blocked && !!month && !duplicate && !rec.isCardPayment,
       };
     });

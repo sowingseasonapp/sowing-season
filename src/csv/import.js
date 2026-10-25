@@ -17,10 +17,18 @@ import { matchProfile, applyProfile, buildResolvedProfile } from './profiles.js'
 
 // Same heuristic as the legacy csv.js path, so both paths agree on what a
 // card payment looks like.
+// Checking-side lines that name the issuer plus a card or payment word (3-year
+// sim S2): "Payment to Chase card ending in 4471", "CHASE CREDIT CRD AUTOPAY",
+// "ACH DEBIT CAPITAL ONE CRCARDPMT 1872", "DISCOVER E-PAYMENT", "AMEX EPAYMENT
+// ACH PMT", "CITI AUTOPAY PAYMENT", "CARDMEMBER SERV WEB PYMT". Issuer AND a
+// card/payment word, never a bare payment word — "PAYMENT TO CITY WATER" and
+// "FPL DIRECT DEBIT ELEC PYMT" are bills.
+const ISSUER_CARD_PAYMENT = /payment to chase card|chase credit crd\s*(autopay|epay)|capital one crcardpmt|discover e-?payment|amex epayment|citi autopay|cardmember serv/i;
 function isCardPaymentRow(vendor, bankCategory) {
   return /payment\/credit/i.test(bankCategory)
     || /online pymt|autopay pymt|payment thank you/i.test(vendor)
-    || /capital one.*\b(mobile|online|autopay)?\s*(pymt|pmt)\b/i.test(vendor);
+    || /capital one.*\b(mobile|online|autopay)?\s*(pymt|pmt)\b/i.test(vendor)
+    || ISSUER_CARD_PAYMENT.test(vendor);
 }
 
 // Status values that mean the money hasn't (or won't) settle — the flag list
