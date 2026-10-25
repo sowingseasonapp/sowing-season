@@ -473,6 +473,29 @@ for (const [file, expected] of Object.entries(baseline)) {
     s2.paycheck && Math.abs(s2.paycheck.amount - 1850) <= 10, JSON.stringify(s2.paycheck));
   check('starter [checks/month from the last full month]',
     s2.paycheck?.perMonth === 2, JSON.stringify(s2.paycheck));
+  check('starter [S10: the ACME cluster reads biweekly]',
+    s2.paycheck?.cadence === 'biweekly', JSON.stringify(s2.paycheck));
+
+  // 3-year sim S10: cadence from the gaps between deposits, count from cadence.
+  const pay = (dates, amount = 610, extra = []) => suggestStarterFunds([...dates.map((d) => rec(d, 'ACME PAYROLL - Deposit', amount)), ...extra]).paycheck;
+  const p8 = pay(['2026-09-18', '2026-09-25', '2026-10-02']);
+  check('starter [S10: P8 weekly $610 → weekly, 4, 610]',
+    p8?.cadence === 'weekly' && p8.perMonth === 4 && p8.amount === 610, JSON.stringify(p8));
+  const wk = pay(['2026-09-04', '2026-09-11', '2026-09-18', '2026-10-02', '2026-10-09']); // gaps 7, 7, 14, 7
+  check('starter [S10: weekly with one missed week stays weekly]',
+    wk?.cadence === 'weekly' && wk.perMonth === 4, JSON.stringify(wk));
+  const semi = pay(['2026-06-01', '2026-06-15', '2026-07-01', '2026-07-15', '2026-08-01', '2026-08-15'], 1500); // gaps 14, 16, 14, 17, 14
+  check('starter [S10: 1st and 15th → semimonthly, 2]',
+    semi?.cadence === 'semimonthly' && semi.perMonth === 2, JSON.stringify(semi));
+  const semiEom = pay(['2026-06-15', '2026-06-30', '2026-07-15', '2026-07-31', '2026-08-14', '2026-08-31'], 1500); // 15th and last day, one weekend shift
+  check('starter [S10: 15th and last day → semimonthly, 2]',
+    semiEom?.cadence === 'semimonthly' && semiEom.perMonth === 2, JSON.stringify(semiEom));
+  const mo = pay(['2026-06-01', '2026-07-01', '2026-08-01'], 3000);
+  check('starter [S10: one deposit a month → monthly, 1]',
+    mo?.cadence === 'monthly' && mo.perMonth === 1, JSON.stringify(mo));
+  const irr = pay(['2026-06-01', '2026-06-08', '2026-06-29', '2026-08-03'], 900); // gaps 7, 21, 35
+  check('starter [S10: irregular → cadence null, perMonth from the last full month (3)]',
+    irr?.cadence === null && irr.perMonth === 3, JSON.stringify(irr));
   check('starter [vendor keywords map checking rows]',
     s2.suggestions.some((s) => s.starterKey === 'groceries') && s2.suggestions.some((s) => s.starterKey === 'gas'),
     JSON.stringify(s2.suggestions));

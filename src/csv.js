@@ -439,10 +439,45 @@ const DAY_MS = 86400000;
 const centsAbs = (r) => Math.abs(Number.isFinite(r.amountCents) ? r.amountCents : Math.round(r.amount * 100));
 
 // Records → { suggestions: [{starterKey, monthlyAmount, txCount, source}],
-//             paycheck: {amount, perMonth} | null }.
+//             paycheck: {amount, perMonth, cadence} | null }.
+// cadence is 'weekly' | 'biweekly' | 'semimonthly' | 'monthly' | null, read
+// off the gaps between the cluster's deposits (see payCadence); it only feeds
+// the wizard's label and count and never reaches the data file.
 // monthlyAmount = total ÷ months spanned, rounded UP to the nearest $5
 // (budgets should breathe). Pending rows never reach this function; card
 // payments and fund-to-fund transfers are excluded on both sides.
+// Pay cadence from the median gap (in days) between a cluster's sorted deposit
+// dates: 5–10 → weekly; 11–17 → every two weeks or twice a month; 26–35 →
+// monthly; anything else → null (irregular, or too few deposits to tell).
+// The 11–17 band is one band on purpose: 1st-and-15th pay has gaps of 14 and
+// 17, so its median (14) looks biweekly. Within the band it's 'semimonthly'
+// when every deposit's day-of-month sits within ±1 of one of two anchor days
+// (1 and 15, or 15 and the last day of the month — a weekend shift of a day is
+// fine), else 'biweekly' (every-other-Friday pay drifts through the month).
+// The median uses the same convention as the amount median (upper middle), so
+// a weekly payer with one missed week (7, 7, 14, 7) still reads weekly.
+export function payCadence(dates, gaps) {
+  if (!gaps.length) return null;
+  const sorted = [...gaps].sort((a, b) => a - b);
+  const median = sorted[Math.floor(sorted.length / 2)];
+  if (median >= 5 && median <= 10) return 'weekly';
+  if (median >= 26 && median <= 35) return 'monthly';
+  if (median < 11 || median > 17) return null;
+  // Anchors: each day-of-month seen, plus "last day of the month" (whatever it is).
+  const days = dates.map((d) => {
+    const [y, m, day] = d.split('-').map(Number);
+    return { day, fromEnd: new Date(y, m, 0).getDate() - day };
+  });
+  const near = (x, anchor) => anchor === 'eom' ? x.fromEnd <= 1 : Math.abs(x.day - anchor) <= 1;
+  const anchors = [...new Set(days.map((x) => x.day)), 'eom'];
+  for (let i = 0; i < anchors.length; i++) {
+    for (let j = i; j < anchors.length; j++) {
+      if (days.every((x) => near(x, anchors[i]) || near(x, anchors[j]))) return 'semimonthly';
+    }
+  }
+  return 'biweekly';
+}
+
 export function suggestStarterFunds(recs) {
   // ── paycheck detection (checking format): payroll-flavoured deposits,
   // clustered by similar amount (±10%); a steady cluster of ≥2 wins.
@@ -466,15 +501,25 @@ export function suggestStarterFunds(recs) {
     if (gaps.length && Math.max(...gaps) <= 40) { // roughly regular cadence
       const amts = best.rows.map((r) => r.amount).sort((a, b) => a - b);
       const median = amts[Math.floor(amts.length / 2)];
-      // Checks per month: count in the last FULL month — the newest month in
-      // the file is usually cut off mid-way and would undercount.
-      const byMonth = {};
-      for (const d of dates) byMonth[d.slice(0, 7)] = (byMonth[d.slice(0, 7)] || 0) + 1;
-      const months = Object.keys(byMonth).sort();
-      const newestData = recs.map((r) => r.date).sort()[recs.length - 1] || '';
-      let mo = months[months.length - 1];
-      if (months.length > 1 && mo === newestData.slice(0, 7)) mo = months[months.length - 2];
-      paycheck = { amount: r2(median), perMonth: Math.min(5, Math.max(1, byMonth[mo])) };
+      // Checks per month from the cadence of the deposits (weekly → 4, every
+      // two weeks / twice a month → 2, monthly → 1). Counting the newest "full"
+      // month undercounted a file that starts mid-month — a weekly payer was
+      // pre-filled at 2 (3-year sim S10). The count-a-month fallback stays for
+      // deposits with no readable cadence.
+      const cadence = payCadence(dates, gaps);
+      let perMonth = cadence === 'weekly' ? 4 : cadence === 'monthly' ? 1 : cadence ? 2 : null;
+      if (perMonth == null) {
+        // Count in the last FULL month — the newest month in the file is
+        // usually cut off mid-way and would undercount.
+        const byMonth = {};
+        for (const d of dates) byMonth[d.slice(0, 7)] = (byMonth[d.slice(0, 7)] || 0) + 1;
+        const months = Object.keys(byMonth).sort();
+        const newestData = recs.map((r) => r.date).sort()[recs.length - 1] || '';
+        let mo = months[months.length - 1];
+        if (months.length > 1 && mo === newestData.slice(0, 7)) mo = months[months.length - 2];
+        perMonth = Math.min(5, Math.max(1, byMonth[mo]));
+      }
+      paycheck = { amount: r2(median), perMonth, cadence };
     }
   }
 

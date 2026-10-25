@@ -9,6 +9,77 @@ so entries before that are dated by when the work happened, not by commit.
 
 ---
 
+## 2026-10-25 — Paycheck numbers: no $0 estimates, a real recent average, weekly pay detected (3-year sim S3, S9, S10, S17)
+
+Batch 2 of the three-year longevity simulation (`_cowork/3yr-sim/pass4/three-year-report.md`;
+pass-2 evidence F9b, pass-3 repro scripts P3, P8, P7). Four defects that put the wrong
+number on a paycheck. `src/garden.js`, `src/app.js`, `src/csv.js`, `tools/test-garden.mjs`,
+`tools/test-csv.mjs`. **No data.version bump**: nothing saved changes shape — the wizard's
+paycheck suggestion gains an in-memory `cadence` field that never reaches the data file.
+Suites 599 / 1060 (1075) / 156 / 17 (CSV was 592, garden 139; compute and migrate unchanged).
+
+- **S3 — "Use actual" on an empty month set the paycheck to $0.** At month end a variable-pay
+  fund that received $0 because nothing was logged got the same "came in $2,480.00 under the
+  estimate [Use actual]" as one whose checks really were short, and one click wrote
+  `amount: 0`, which every later month inherited. **The guard** lives in `incomeCheckIns`
+  (garden.js), the one place both the Budget review strip and the Garden card build their
+  buttons from: the under-received nudge now needs the month to be done **and** something to
+  have been received (`received > 0.004`). The over-received nudge is unchanged, any time of
+  month. A month whose checks really arrived short (A-M08: one $1,050 deposit against
+  3 × $1,240, month over) is still offered. Roadmap 1.3.0 I1 moves `applyActualChecks` into
+  compute.js as `setIncomeActual`; it keeps calling `incomeCheckIns`, so it inherits the guard.
+- **S3 — "Use actual" divides by the checks that arrived, never writes $0.** `applyActualChecks`
+  divided received by the *planned* count, so a lapse month with one deposit against a
+  count of 3 wrote a third of a real check. **The deposit rule** (new `fundDeposits(month,
+  fund)` in garden.js, shared with the helper below): the deposits are the positive,
+  non-transfer (`isTransferTx`) transactions assigned to the fund, and the per-check figure
+  is **Σ(their amounts) ÷ their count** — never the fund's `received` or `fundSums()`, which
+  include transfers in and any negative adjustment on the fund. With no deposits, or a result
+  that rounds to ≤ 0, it returns false without touching the month: no dirty mark, no toast,
+  no render. `chk.count` is left alone — next month's planned is still count × the new amount,
+  which is what the toast promises. `applyActualChecks` has no unit test (it lives in app.js);
+  it is covered by Cowork's P3 script and the a-M05-close / a-M08-short walks.
+- **S9 — the variable-pay helper averaged a wrong check count.** `recentPerCheckAvg` divided
+  each prior month's received by that month's `chk.count`, so a count inherited by mistake
+  during a lapse (A-M08: "$1,102.22 per check" for $1,240 pay) or weekly checks the importer
+  had dropped (A-M17: "$462.00") poisoned the "[Use]" suggestion. It is now an exported pure
+  function in garden.js, `recentPerCheckAvg(months, fund, beforeId)`, so test-garden covers
+  it: walk prior months newest-first, take the ones with a `checks` entry for the fund (the
+  `count > 0` requirement is gone — the count is exactly what's untrustworthy), count and sum
+  their deposits by the rule above, skip months with no deposits without using up the window,
+  stop after three months that had deposits, and return one pooled **Σ deposits ÷ deposit
+  count** (not an average of three monthly averages). Still `null` with no history. The app.js
+  caller keeps its `chk.variable` gate.
+- **S10 — the wizard read weekly pay as "every two weeks".** `suggestStarterFunds` took the
+  count from the newest "full" month, which for a file that starts mid-month is partial, and
+  `wzIncomeHtml` labelled any count of 2 "every two weeks"; P8's file ($610 on Sep 18, 25,
+  Oct 2) pre-filled a weekly payer at 2. **The cadence bands** (new `payCadence(dates, gaps)`,
+  from the median gap in days between the cluster's deposits): 5–10 → `weekly`, 4 checks;
+  11–17 → 2 checks, `semimonthly` when every deposit's day-of-month sits within ±1 of one of
+  two anchor days (1 and 15, or 15 and the last day of the month), else `biweekly`; 26–35 →
+  `monthly`, 1; anything else → `cadence: null` and the last-full-month count as before. The
+  11–17 band is deliberately one band: 1st-and-15th pay has gaps 14, 17, 14, 17, so its
+  median looks biweekly and only the day-of-month test tells them apart. The wizard labels
+  from the cadence ("every week" / "every two weeks" / "twice a month" / "once a month";
+  null falls back to "N times a month") and, for weekly, adds "Use 4; a few months a year
+  bring a fifth check." The standing "Paid every two weeks? Use 2 …" note is unchanged, and
+  the biweekly ACME fixture still gives `perMonth: 2` with the same median. Not done here:
+  pre-filling a second earner from a second steady cluster (a wizard-state change, not a
+  paycheck-number fix).
+- **S17 — a closed month's shortfall read "still expected this month".** Copy only, in the
+  three income-row titles (fund panel "Left", the Standard Income total in `accordionHtml`,
+  which gains a `monthDone` option passed from `renderBudget`, and the Budget income row):
+  once `monthContext(...).monthDone`, the gap reads "$X came in under plan"; the current and
+  future months keep "still expected this month". The quiet `muted` class stays in both
+  cases — a closed month's shortfall is not turned red, since S1 (fixed in Batch 1) is in
+  that number for anyone with pre-Batch-1 history.
+- Not in this batch, by design: `compute.js` is untouched (Batch 3 and roadmap I1 own it);
+  `fundSums` is no longer used in app.js but its import line was left as is (compute import
+  line out of scope). Cowork verifies in its sandbox: P3, P8, P7 → "NOT reproduced"; walks
+  a-M05-close, a-M08-short, a-M01-wizard, a-M10-close.
+
+---
+
 ## 2026-10-06 — Importer: money stops going missing or counting twice (3-year sim S1, S2, S4, S6)
 
 Batch 1 of the three-year longevity simulation (`_cowork/3yr-sim/pass4/three-year-report.md`;

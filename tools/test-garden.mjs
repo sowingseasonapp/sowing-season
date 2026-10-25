@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
   gardenState, plantFor, speciesFor, familyOf, hashName, seasonFor, allTimeHighs,
-  stonesLaidIn, maturityFor, sownStreak, layoutBeds, incomeCheckIns, monthContext,
+  stonesLaidIn, maturityFor, sownStreak, layoutBeds, incomeCheckIns, monthContext, recentPerCheckAvg, fundDeposits,
   SPECIES, PLANT_STATES, VISIBLE_PLANT_CAP, MATURITY_MILESTONES, ACTION_LABELS,
 } from '../src/garden.js';
 import { sceneSvg, stripSvg, filterDefs, plantSprite, PALETTE_TOKENS, applyPalette, ambientPlan } from '../src/garden-scene.js';
@@ -277,6 +277,15 @@ function makeMonth(id, { categories, income, transactions = [] }) {
   check('incomeCheckIns over-received mid-month', incomeCheckIns(month, { income: [{ fund: 'Pay', group: 'standard', rule: { type: 'checks' }, received: 2150, planned: 2000 }] }, TODAY).length === 1);
   check('incomeCheckIns under-received mid-month stays quiet', incomeCheckIns(month, { income: [{ fund: 'Pay', group: 'standard', rule: { type: 'checks' }, received: 1000, planned: 2000 }] }, TODAY).length === 0);
   check('incomeCheckIns under-received once done nudges', incomeCheckIns(month, { income: [{ fund: 'Pay', group: 'standard', rule: { type: 'checks' }, received: 1000, planned: 2000 }] }, '2026-09-02').length === 1);
+
+  // 3-year sim S3: an empty month isn't evidence about pay — no "Use actual"
+  // when nothing was received, even once the month is done. A month whose
+  // checks really arrived short (A-M08: one $1,050 against 3 × $1,240) is.
+  const ci = (received, planned, today) => incomeCheckIns(month, { income: [{ fund: 'Pay', group: 'standard', rule: { type: 'checks' }, received, planned }] }, today);
+  check('S3: received 0, month done → no under-received nudge', ci(0, 2000, '2026-09-02').length === 0);
+  check('S3: received 1050 of 3 × 1240, month done → still offered', ci(1050, 3720, '2026-09-02').length === 1 && ci(1050, 3720, '2026-09-02')[0].diff === -2670);
+  check('S3: received 0 mid-month → quiet', ci(0, 2000, TODAY).length === 0);
+  check('S3: over-received mid-month still nudges', ci(2150, 2000, TODAY).length === 1);
   check('calm affirmation when all clear', (() => {
     const mm = makeMonth('2026-08', { categories: [{ name: 'C', excludeFromTotals: false, funds: [fund('F', 1000)] }] });
     const gg = gardenState({ version: 6, settings: {}, months: [mm], aum: { snapshots: [] } }, { monthId: '2026-08', todayISO: TODAY });
@@ -284,6 +293,60 @@ function makeMonth(id, { categories, income, transactions = [] }) {
   })());
   check('unknown month → null', gardenState(data2, { monthId: '2030-01', todayISO: TODAY }) === null);
   check('PLANT_STATES covers the table', PLANT_STATES.length === 7);
+}
+
+// ---- 9b. recentPerCheckAvg — pooled over the deposits that actually posted (S9) ----
+{
+  const MAYA = 'Maya Checks';
+  const inc = () => [{ fund: MAYA, carryOver: 0, planned: 0, rule: { type: 'checks' }, group: 'standard' }];
+  const cats = () => [{ name: 'C', excludeFromTotals: false, funds: [fund('F', 100)] }];
+  const payMonth = (id, count, deposits, extraTx = []) => {
+    const m = makeMonth(id, { income: inc(), categories: cats(), transactions: [
+      ...deposits.map((amt, i) => tx(MAYA, amt, `${id}-${String(5 + i * 7).padStart(2, '0')}`, { vendor: 'ACME PAYROLL' })),
+      ...extraTx,
+    ] });
+    if (count != null) m.checks = { [MAYA]: { count, amount: 1240, titheAmount: 1240, variable: true } };
+    return m;
+  };
+  const months = (...ms) => ms;
+
+  // fundDeposits: the shared rule — positive, non-transfer, assigned to the fund.
+  const dep = fundDeposits(payMonth('2027-01', 2, [1240, 1240], [
+    tx(MAYA, 500, '2027-01-20', { vendor: 'Transfer from Safety Net' }),
+    tx(MAYA, 300, '2027-01-21', { vendor: 'Move', isTransfer: true }),
+    tx(MAYA, -40, '2027-01-22', { vendor: 'Adjustment' }),
+    tx('Groceries', 75, '2027-01-23', { vendor: 'Refund' }),
+  ]), MAYA);
+  check('fundDeposits counts only positive non-transfer deposits on the fund', dep.count === 2 && dep.total === 2480, JSON.stringify(dep));
+
+  // 4. A count inherited by mistake during a lapse no longer poisons the average.
+  check('S9: inherited count 3 against two 1240 deposits → 1240 (old rule ≈ 1033.33)',
+    recentPerCheckAvg(months(payMonth('2027-01', 2, [1240, 1240]), payMonth('2027-02', 3, [1240, 1240])), MAYA, '2027-03') === 1240);
+  // 5. Empty months (checks entry, no deposits) are skipped and don't use up the window.
+  check('S9: months with checks but no deposits are skipped and do not use up the 3-month window',
+    recentPerCheckAvg(months(
+      payMonth('2026-09', 2, [1000]), payMonth('2026-10', 2, []), payMonth('2026-11', 2, []),
+      payMonth('2026-12', 2, [1240]), payMonth('2027-01', 2, [1240]),
+    ), MAYA, '2027-02') === 1160); // (1240 + 1240 + 1000) ÷ 3, not (1240 + 1240) ÷ 2
+  check('S9: a month with no checks entry for the fund is skipped',
+    recentPerCheckAvg(months(payMonth('2026-12', null, [500]), payMonth('2027-01', 2, [1240])), MAYA, '2027-02') === 1240);
+  check('S9: a count of 0 no longer disqualifies a month that had deposits',
+    recentPerCheckAvg(months(payMonth('2027-01', 0, [1240, 1240])), MAYA, '2027-02') === 1240);
+  check('S9: no prior months → null', recentPerCheckAvg(months(payMonth('2027-03', 2, [1240])), MAYA, '2027-03') === null);
+  check('S9: only the current and later months → null', recentPerCheckAvg(months(payMonth('2027-03', 2, [1240]), payMonth('2027-04', 2, [1240])), MAYA, '2027-03') === null);
+  // 6. Transfers into the fund are not deposits, and received is not the numerator.
+  check('S9: 1240 + "Transfer from Safety Net" 500 → 1240',
+    recentPerCheckAvg(months(payMonth('2027-01', 1, [1240], [tx(MAYA, 500, '2027-01-20', { vendor: 'Transfer from Safety Net' })])), MAYA, '2027-02') === 1240);
+  check('S9: a flagged isTransfer transaction is not a deposit',
+    recentPerCheckAvg(months(payMonth('2027-01', 1, [1240], [tx(MAYA, 500, '2027-01-20', { vendor: 'Move', isTransfer: true })])), MAYA, '2027-02') === 1240);
+  check('S9: a negative adjustment on the fund does not lower the per-check figure',
+    recentPerCheckAvg(months(payMonth('2027-01', 1, [1240], [tx(MAYA, -40, '2027-01-22', { vendor: 'Adjustment' })])), MAYA, '2027-02') === 1240);
+  // 7. Pooled, not an average of monthly averages.
+  check('S9: pooled — one 600 and three 1200 → 1050, not 900',
+    recentPerCheckAvg(months(payMonth('2027-01', 1, [600]), payMonth('2027-02', 3, [1200, 1200, 1200])), MAYA, '2027-03') === 1050);
+  check('S9: window is the newest three months that had deposits',
+    recentPerCheckAvg(months(payMonth('2026-10', 1, [100]), payMonth('2026-11', 1, [1200]), payMonth('2026-12', 1, [1200]), payMonth('2027-01', 1, [1200])), MAYA, '2027-02') === 1200);
+  check('S9: result is rounded to cents', recentPerCheckAvg(months(payMonth('2027-01', 3, [1000, 1000, 1001])), MAYA, '2027-02') === 1000.33);
 }
 
 // ---- 10. The scene: watercolor rules from §4 ----

@@ -5,7 +5,7 @@ import {
   migrateV6, migrateV7, resyncCarryOvers, aumTotals, upsertSnapshot, aumLastUpdated,
   MONTH_NAMES, nextMonthId,
 } from './compute.js';
-import { gardenState, incomeCheckIns, stonesLaidIn, sownStreak } from './garden.js';
+import { gardenState, incomeCheckIns, stonesLaidIn, sownStreak, monthContext, recentPerCheckAvg, fundDeposits } from './garden.js';
 import { sceneSvg, stripSvg, plantSprite, butterflySymbol, PALETTE_TOKENS, GARDEN_MILESTONE_LABELS } from './garden-scene.js';
 import {
   parseBankFile, buildVendorMap, suggestFund, matchDuplicates,
@@ -324,24 +324,6 @@ function prevMonthName(month) {
 function carryLockTitle(month) {
   const p = prevMonthName(month);
   return `Carried from ${p}'s leftover. To change it, change ${p}.`;
-}
-
-// Average per-check actual over the last (up to) 3 months before `beforeId`
-// where this fund had checks set up and actually received money. Used to
-// suggest an estimate for variable-income funds; null when no history.
-function recentPerCheckAvg(fundName, beforeId) {
-  const prior = data.months
-    .filter((m) => m.id < beforeId)
-    .sort((a, b) => b.id.localeCompare(a.id));
-  const vals = [];
-  for (const m of prior) {
-    if (vals.length >= 3) break;
-    const chk = (m.checks || {})[fundName];
-    if (!chk || !(chk.count > 0)) continue;
-    const received = fundSums(m)[normFund(fundName)] || 0;
-    if (received > 0) vals.push(received / chk.count);
-  }
-  return vals.length ? r2(vals.reduce((a, b) => a + b, 0) / vals.length) : null;
 }
 
 /* ---------------- shell ---------------- */
@@ -668,12 +650,15 @@ function renderFundPanel() {
   const live = isIncome
     ? comp.income[panelRef.idx]
     : comp.categories[panelRef.ci].funds[panelRef.fi];
+  const { monthDone } = monthContext(month.id, todayISO());
   const txs = month.transactions
     .map((t, i) => ({ t, i }))
     .filter(({ t }) => normFund(t.fund) === normFund(f.fund))
     .sort((a, b) => (b.t.date || '').localeCompare(a.t.date || ''));
   const chk = isIncome ? ((month.checks || {})[f.fund] || { count: 0, amount: 0, titheAmount: 0 }) : null;
-  const chkAvg = (chk && chk.variable) ? recentPerCheckAvg(f.fund, month.id) : null;
+  // Recent-average suggestion: garden.js owns the arithmetic (pooled over the
+  // deposits that actually posted — 3-year sim S9) so test-garden can cover it.
+  const chkAvg = (chk && chk.variable) ? recentPerCheckAvg(data.months, f.fund, month.id) : null;
   const sibCount = isIncome
     ? month.income.filter((x) => (x.group || 'bonus') === (f.group || 'bonus')).length
     : month.categories[panelRef.ci].funds.length;
@@ -710,7 +695,7 @@ function renderFundPanel() {
                 : `<b class="${live.expensed > 0.004 ? 'pos' : ''}">${live.expensed > 0.004 ? '+' + money(live.expensed) : money(Math.abs(live.expensed))}</b>`}</div>
             <div class="panel-num-ro"><span>Left</span>
               <b class="${isIncome && live.leftover < -0.004 ? 'muted' : moneyCls(live.leftover)}"${
-                isIncome && live.leftover < -0.004 ? ` title="${money(-live.leftover)} still expected this month"` : ''}>${money(live.leftover)}</b></div>
+                isIncome && live.leftover < -0.004 ? ` title="${money(-live.leftover)} ${monthDone ? 'came in under plan' : 'still expected this month'}"` : ''}>${money(live.leftover)}</b></div>
           </div>
         </section>
 
@@ -1161,7 +1146,7 @@ const FUND_COLS = `<colgroup>
 // One collapsible section. Its header is a row on the same grid as the funds
 // beneath it, so the category totals line up with the fund columns — and the
 // body needs no totals row of its own.
-function accordionHtml({ key, title, note, open, totals, actions, body, activity, kind = 'expense', hint = '' }) {
+function accordionHtml({ key, title, note, open, totals, actions, body, activity, kind = 'expense', hint = '', monthDone = false }) {
   const cell = (v) => `<td class="${moneyCls(v)}">${money(v)}</td>`;
   // Spending is normal activity, not an alarm — show it as a plain positive
   // amount (like the Spent card up top) and keep red for actual problems.
@@ -1170,9 +1155,11 @@ function accordionHtml({ key, title, note, open, totals, actions, body, activity
     : v > 0.004 ? `<td class="pos" title="More came back in than went out this month">+${money(v)}</td>`
     : `<td>${money(Math.abs(v))}</td>`;
   // An income fund's negative leftover just means checks haven't arrived yet —
-  // show it quietly instead of as a red warning.
+  // show it quietly instead of as a red warning. Once the month is over it's a
+  // shortfall, not something still on its way, so the title says so (3-year
+  // sim S17) — still quiet, since pre-Batch-1 history has S1 in that number.
   const leftCell = (v) => kind === 'income' && v < -0.004
-    ? `<td class="muted" title="${money(-v)} still expected this month">${money(v)}</td>`
+    ? `<td class="muted" title="${money(-v)} ${monthDone ? 'came in under plan' : 'still expected this month'}">${money(v)}</td>`
     : cell(v);
   // Column headings sit inside the card, right under the category name and on
   // the same grid, so they label the fund rows they belong to instead of
@@ -1274,12 +1261,23 @@ function checklistNavigate(key) {
 // arrived. Never writes planned directly — recalcRules recomputes it from
 // count × amount, which keeps the checks rule alive and rolls the real number
 // into next month. Shared by the Budget review strip and the Garden's message card.
+// Per check = Σ(deposits that actually posted) ÷ how many there were
+// (garden.js fundDeposits — the same rule the recent-average helper uses), not
+// received ÷ the planned count: a lapse month with one deposit against a count
+// of 3 used to write a third of a real check, and an empty month wrote $0
+// (3-year sim S3). chk.count is left alone — next month's planned is still
+// count × the new amount, which is what the toast promises. With no deposits
+// (or a result that rounds to ≤ 0) nothing is written: incomeCheckIns no longer
+// offers the button for an empty month, and this is the backstop.
 function applyActualChecks(month, fundName) {
   const comp = computeMonth(month);
   const fInc = comp.income.find((x) => normFund(x.fund) === normFund(fundName));
   const chk = fInc && (month.checks || {})[fInc.fund];
   if (!(chk && chk.count > 0)) return false;
-  chk.amount = r2(fInc.received / chk.count);
+  const dep = fundDeposits(month, fInc.fund);
+  const perCheck = dep.count ? r2(dep.total / dep.count) : 0;
+  if (!(perCheck > 0)) return false;
+  chk.amount = perCheck;
   recalcRules(month); markDirty(`the estimate update on "${fInc.fund}"`); render();
   toast(`"${fInc.fund}" estimate updated to ${money(chk.amount)} per check.`);
   return true;
@@ -1307,6 +1305,9 @@ function renderBudget(main) {
   // Variable-income true-up nudges (garden.js owns the rule; the Garden's
   // message cards use the same call).
   const checkIns = incomeCheckIns(month, comp, todayISO());
+  // Income shortfall copy: "still expected" while the month runs, "came in
+  // under plan" once it's over (S17). A future month is not done.
+  const { monthDone } = monthContext(month.id, todayISO());
 
   const reviewCount = attList.length + offList.length + checkIns.length + (comp.unassigned.length ? 1 : 0);
 
@@ -1470,7 +1471,7 @@ function renderBudget(main) {
         <td><input class="money" data-inc="${i}" data-k="planned" value="${money(f.planned)}"></td>
         <td class="${moneyCls(f.received)}"><a href="#" class="mono" data-txfund="${esc(f.fund)}" style="color:inherit">${money(f.received)}</a></td>
         <td class="${f.leftover < -0.004 ? 'muted' : moneyCls(f.leftover)}"${
-          f.leftover < -0.004 ? ` title="${money(-f.leftover)} still expected this month"` : ''}>${money(f.leftover)}</td>
+          f.leftover < -0.004 ? ` title="${money(-f.leftover)} ${monthDone ? 'came in under plan' : 'still expected this month'}"` : ''}>${money(f.leftover)}</td>
         <td class="row-actions"><button class="btn-ghost row-more" data-inc-setup="${i}" title="Open this fund — setup, transfer, reorder, transactions">⋯</button></td></tr>`;
     }
     body += `</tbody></table>`;
@@ -1484,6 +1485,7 @@ function renderBudget(main) {
       key: accKey,
       activity: 'Received',
       kind: 'income',
+      monthDone,
       title: `<span title="${esc(g.hint)}">${g.title}</span><span class="help-bubble" title="${esc(g.hint)}">?</span>`,
       note: `${all.length} fund${all.length === 1 ? '' : 's'}`,
       open,
@@ -3605,8 +3607,11 @@ function wzIncomeHtml() {
       Budget page, under <b>Standard Income</b>. There's an <b>Extra Income</b> spot too, for
       money that just shows up — gifts, reimbursements, a side job.</p>`;
   wizard.sources.forEach((src, i) => {
+    // Label from the detected cadence (csv.js reads it off the gaps between
+    // deposits — S10); with no cadence, fall back to the count.
+    const CADENCE_LABEL = { weekly: 'every week', biweekly: 'every two weeks', semimonthly: 'twice a month', monthly: 'once a month' };
     const cadence = det && src.detected
-      ? (det.perMonth === 2 ? 'every two weeks' : `${det.perMonth} time${det.perMonth === 1 ? '' : 's'} a month`)
+      ? (CADENCE_LABEL[det.cadence] || `${det.perMonth} time${det.perMonth === 1 ? '' : 's'} a month`)
       : '';
     html += `<div class="wz-card">
       ${wizard.sources.length > 1 ? `<button class="btn-ghost wz-remove" data-wz-del-src="${i}" title="Remove this paycheck">✕</button>` : ''}
@@ -3624,7 +3629,8 @@ function wzIncomeHtml() {
         third check, and you can bump this number in those months.</p>
       <div class="modal-row"><label class="wz-label">How much is one check, after taxes?</label>
         <input class="search" style="width:130px;flex:none" data-wz-src="${i}" data-k="amount" value="${src.amount != null ? money(src.amount) : ''}" placeholder="$0.00" inputmode="decimal"></div>
-      ${src.detected && det ? `<p class="fund-note" style="margin:-4px 0 0">Looks like about ${money(det.amount)} lands ${cadence} — sound right?</p>` : ''}
+      ${src.detected && det ? `<p class="fund-note" style="margin:-4px 0 0">Looks like about ${money(det.amount)} lands ${cadence} — sound right?${
+        det.cadence === 'weekly' ? ' Use 4; a few months a year bring a fifth check.' : ''}</p>` : ''}
     </div>`;
   });
   html += `<button class="btn btn-sm" data-wz-add-src>+ Add another paycheck</button>

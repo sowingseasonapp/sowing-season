@@ -23,7 +23,7 @@
 //    the real tool it opens (Transfer…, Open Budget, Review N unassigned), and
 //    `phrase` is the one-line plain state for tooltips. Garden phrasing
 //    survives only in status-only text (season note, the calm affirmation).
-import { computeMonth, fundFlags, normFund, r2 } from './compute.js';
+import { computeMonth, fundFlags, normFund, r2, isTransferTx } from './compute.js';
 
 // ---- tunables (first guesses — revisit after a month of living with it) ----
 export const SEASON_WINDOW_DAYS = 90;   // compare the latest AUM snapshot to ~this far back
@@ -184,9 +184,14 @@ export function plantFor(f, category, flag, ctx, txCount) {
   };
 }
 
-// Variable-income true-up nudges (shared with the Budget page's review strip).
-// Over-received nudges any time; under-received only once the month is done —
-// mid-month a low number just means checks haven't landed yet.
+// Variable-income true-up nudges (shared with the Budget page's review strip
+// and the Garden's message card — both build their "Use actual" buttons from
+// this list, so the rule lives here and only here).
+// Over-received nudges any time. Under-received nudges only once the month is
+// done AND something was actually received: mid-month a low number just means
+// checks haven't landed yet, and an empty month (received 0 because nothing
+// was logged) isn't evidence about pay — offering "Use actual" there would set
+// the estimate to $0 and every later month would inherit it (3-year sim S3).
 export function incomeCheckIns(month, comp, todayISO) {
   const { monthDone } = monthContext(month.id, todayISO);
   const out = [];
@@ -196,9 +201,48 @@ export function incomeCheckIns(month, comp, todayISO) {
     const chk = (month.checks || {})[f.fund];
     if (!chk || !chk.variable || !(chk.count > 0)) continue;
     const diff = r2(f.received - f.planned);
-    if (diff > 1 || (diff < -1 && monthDone)) out.push({ fund: f.fund, diff });
+    if (diff > 1 || (diff < -1 && monthDone && f.received > 0.004)) out.push({ fund: f.fund, diff });
   }
   return out;
+}
+
+// The paychecks that actually posted to an income fund this month: positive,
+// non-transfer transactions assigned to it. Returns { count, total } where
+// total is the sum of those deposits' amounts. This is the one deposit rule
+// shared by "Use actual" (app.js applyActualChecks) and recentPerCheckAvg —
+// never substitute the fund's `received` / fundSums() for `total`: those
+// include transfers in and any negative adjustment on the fund.
+export function fundDeposits(month, fundName) {
+  const key = normFund(fundName);
+  let count = 0, total = 0;
+  for (const t of month.transactions || []) {
+    if (!(t.amount > 0) || isTransferTx(t) || normFund(t.fund) !== key) continue;
+    count++; total += t.amount;
+  }
+  return { count, total: r2(total) };
+}
+
+// Suggested per-check estimate for a variable-income fund: one pooled average
+// over the deposits that actually posted in the last (up to) three months
+// before `beforeId` that had any — Σ deposit amounts ÷ deposit count, not an
+// average of monthly averages and never received ÷ that month's planned count
+// (a count inherited by mistake during a lapse, or weekly checks that were
+// dropped, made the old number wildly wrong — 3-year sim S9). Months with a
+// checks entry but no deposits are skipped and don't use up the window; months
+// with no checks entry for the fund are skipped too. null when no history.
+export function recentPerCheckAvg(months, fundName, beforeId) {
+  const prior = months
+    .filter((m) => m.id < beforeId)
+    .sort((a, b) => b.id.localeCompare(a.id));
+  let used = 0, count = 0, total = 0;
+  for (const m of prior) {
+    if (used >= 3) break;
+    if (!(m.checks || {})[fundName]) continue;
+    const dep = fundDeposits(m, fundName);
+    if (!dep.count) continue;
+    used++; count += dep.count; total += dep.total;
+  }
+  return count ? r2(total / count) : null;
 }
 
 // ---- season (the AUM linkage: light and colour only) ----
