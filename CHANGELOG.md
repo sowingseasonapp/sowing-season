@@ -9,6 +9,13 @@ so entries before that are dated by when the work happened, not by commit.
 
 ---
 
+## 1.1.1 — 2026-10-25 — three-year simulation, batches 1–3
+
+Three fix batches from the three-year longevity simulation, shipped together as one patch:
+the importer (S1, S2, S4, S6, 2026-10-06), paycheck numbers (S3, S9, S10, S17) and money in
+the right month (S5, S8, S7), both 2026-10-25. No data.version bump; no migration. Details in
+the three dated entries below.
+
 ## 2026-10-25 — Money in the right month: dated transfers, import landing, auto-planned follows a resync (3-year sim S5, S8, S7)
 
 Batch 3 of the three-year longevity simulation (`_cowork/3yr-sim/pass4/three-year-report.md`
