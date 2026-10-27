@@ -230,47 +230,82 @@ function afterMemo(vendor) {
 }
 
 // Learn vendor → fund from all existing transactions. Most frequent fund wins.
+// Returns Map<normVendor, {fund, n}>; S11 (1.2.0) hangs a second map on it as
+// `byAccount`, keyed `${account}\0${normVendor}` for rows that carry an account,
+// so the same vendor string can mean different funds on different cards
+// ("CAPITAL ONE MEMBER FEE" is Venture X on one, Quicksilver on the other).
+// The property keeps suggestFund's first two arguments as they were.
+const ACCT_SEP = '\u0000';
 export function buildVendorMap(months) {
-  const counts = new Map(); // normVendor -> Map(normFund -> {n, fund})
-  const bump = (vendor, fund) => {
-    const v = normVendor(vendor);
-    if (!v) return;
-    if (!counts.has(v)) counts.set(v, new Map());
-    const per = counts.get(v);
+  const counts = new Map(); // key -> Map(normFund -> {n, fund})
+  const bump = (key, fund) => {
+    if (!counts.has(key)) counts.set(key, new Map());
+    const per = counts.get(key);
     const k = normFund(fund);
     const e = per.get(k) || { n: 0, fund };
     e.n++;
     per.set(k, e);
   };
+  const learn = (vendor, fund, account) => {
+    const v = normVendor(vendor);
+    if (!v) return;
+    bump(v, fund);
+    if (account) bump(account + ACCT_SEP + v, fund);
+  };
   for (const m of months) {
     for (const t of m.transactions) {
       if (!t.vendor || !t.fund) continue;
-      bump(t.vendor, t.fund);
+      const account = String(t.account || '').trim();
+      learn(t.vendor, t.fund, account);
       const rest = afterMemo(t.vendor);
-      if (rest) bump(rest, t.fund); // index the memo-stripped form too
+      if (rest) learn(rest, t.fund, account); // index the memo-stripped form too
     }
   }
   const map = new Map();
-  for (const [v, per] of counts) {
+  const byAccount = new Map();
+  for (const [key, per] of counts) {
     let best = null;
     for (const e of per.values()) if (!best || e.n > best.n) best = e;
-    if (best) map.set(v, { fund: best.fund, n: best.n });
+    if (best) (key.includes(ACCT_SEP) ? byAccount : map).set(key, { fund: best.fund, n: best.n });
   }
+  map.byAccount = byAccount;
   return map;
 }
 
-export function suggestFund(vendorMap, vendor) {
-  const candidates = [vendor, afterMemo(vendor)].filter(Boolean);
-  for (const cand of candidates) {
-    const v = normVendor(cand);
-    if (v && vendorMap.has(v)) return vendorMap.get(v);
+// Prefix fallback guard (S11): "AMAZON RETA" ↔ "AMAZON RETAIL" should match,
+// "BO" ↔ "BOWLERO" must not — a vendor that normalises to two letters used to
+// prefix-match every vendor starting with them (BOCA RATON REGIONAL HOSP became
+// Restaurants). Either both keys are six or more characters, or the shorter is
+// a whole first word of the longer ("WALMART" ↔ "WALMART COM").
+function prefixMatch(a, b) {
+  if (a === b) return true;
+  const [s, l] = a.length <= b.length ? [a, b] : [b, a];
+  if (!l.startsWith(s)) return false;
+  if (s.length >= 6 && l.length >= 6) return true;
+  return l.startsWith(s + ' ');
+}
+
+// Best fund for a bank row's vendor string (or memo — the importer tries both).
+// Exact match first: the record's own account, then all accounts. Then the
+// guarded prefix fallback, account first. An account with no history for the
+// vendor falls through to the all-accounts answer, so a new card isn't blind.
+export function suggestFund(vendorMap, vendor, account = '') {
+  const candidates = [vendor, afterMemo(vendor)].filter(Boolean).map(normVendor).filter(Boolean);
+  const acct = String(account || '').trim();
+  const byAccount = acct && vendorMap.byAccount ? vendorMap.byAccount : null;
+  for (const v of candidates) {
+    if (byAccount && byAccount.has(acct + ACCT_SEP + v)) return byAccount.get(acct + ACCT_SEP + v);
+    if (vendorMap.has(v)) return vendorMap.get(v);
   }
-  // Fallback: prefix match (e.g. "AMAZON RETA" vs "AMAZON RETAIL")
-  for (const cand of candidates) {
-    const v = normVendor(cand);
-    if (!v) continue;
+  for (const v of candidates) {
+    if (byAccount) {
+      const pre = acct + ACCT_SEP;
+      for (const [key, val] of byAccount) {
+        if (key.startsWith(pre) && prefixMatch(key.slice(pre.length), v)) return val;
+      }
+    }
     for (const [key, val] of vendorMap) {
-      if (key.startsWith(v) || v.startsWith(key)) return val;
+      if (prefixMatch(key, v)) return val;
     }
   }
   return null;

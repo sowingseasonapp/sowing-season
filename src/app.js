@@ -257,22 +257,47 @@ function fmtDate(iso) {
 }
 // Every fund of a month, grouped for <select>. Pass leftMap (normFund → leftover)
 // to append each fund's current monthly leftover to its label.
-function fundOptions(month, selected, leftMap) {
+// S13 (1.2.0): a fund removed while it had transactions this month is retiring
+// (f.retireAtClose) — it's left out of pickers for new rows and the transfer
+// dialog unless it's the row's current value. opts.retiring lists it anyway,
+// marked "(removing)": the import preview, where a late bank row for it can be
+// placed by hand (auto-match never suggests it). opts.exclude drops one fund
+// (the remove dialog's receiver list — a fund can't receive its own balance).
+function fundOptions(month, selected, leftMap, opts = {}) {
   const sel = normFund(selected);
-  const label = (name) => {
+  const excl = normFund(opts.exclude || '');
+  const label = (name, retiring) => {
     const l = leftMap ? leftMap[normFund(name)] : undefined;
-    return esc(name) + (l !== undefined ? ` — ${money(l)} left` : '');
+    return esc(name) + (l !== undefined ? ` — ${money(l)} left` : '') + (retiring ? ' (removing)' : '');
   };
   let html = `<option value="" ${sel ? '' : 'selected'}>— pick fund —</option>`;
   html += `<optgroup label="Income">`;
-  for (const f of month.income) html += `<option value="${esc(f.fund)}" ${normFund(f.fund) === sel ? 'selected' : ''}>${label(f.fund)}</option>`;
+  for (const f of month.income) {
+    if (excl && normFund(f.fund) === excl) continue;
+    html += `<option value="${esc(f.fund)}" ${normFund(f.fund) === sel ? 'selected' : ''}>${label(f.fund, false)}</option>`;
+  }
   html += `</optgroup>`;
   for (const c of month.categories) {
     html += `<optgroup label="${esc(c.name)}">`;
-    for (const f of c.funds) html += `<option value="${esc(f.fund)}" ${normFund(f.fund) === sel ? 'selected' : ''}>${label(f.fund)}</option>`;
+    for (const f of c.funds) {
+      const isSel = normFund(f.fund) === sel;
+      if (excl && normFund(f.fund) === excl) continue;
+      if (f.retireAtClose && !isSel && !opts.retiring) continue;
+      html += `<option value="${esc(f.fund)}" ${isSel ? 'selected' : ''}>${label(f.fund, !!f.retireAtClose)}</option>`;
+    }
     html += `</optgroup>`;
   }
   return html;
+}
+
+// The expense fund matching `name` when it's retiring (S13), else null.
+// canonicalFund still resolves a retiring fund — existing rows and history must
+// keep rendering under its name; only new placements avoid it.
+function retiringFund(month, name) {
+  const n = normFund(name);
+  if (!n) return null;
+  for (const c of month.categories) for (const f of c.funds) if (f.retireAtClose && normFund(f.fund) === n) return f;
+  return null;
 }
 
 // normFund → leftover for a month (income funds included).
@@ -418,6 +443,17 @@ function parseUserDate(s) {
   let y = Number(m[3]); if (y < 100) y += 2000;
   return `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
 }
+// The matched pair every transfer is made of — the one place the vendor strings
+// and isTransfer are written (Invariant 11; S4's typed-twin dedupe keys on them).
+// Used by the Transfer dialog and the Remove-fund dialog (S13). No markDirty
+// here: the caller files one step for whatever the pair is part of.
+function pushTransferPair(target, from, to, amt, date, note) {
+  target.transactions.push(
+    { id: newTxId(), date, vendor: `Transfer to ${to}`, amount: -amt, fund: from, description: note, account: '', isTransfer: true },
+    { id: newTxId(), date, vendor: `Transfer from ${from}`, amount: amt, fund: to, description: note, account: '', isTransfer: true },
+  );
+}
+
 function showTransferModal(presetFrom = '', onDone = null, presetTo = '') {
   const month = curMonth();
   const iso = defaultDateFor(month);
@@ -476,10 +512,7 @@ function showTransferModal(presetFrom = '', onDone = null, presetTo = '') {
       }
       if (!confirm(`This transfer is dated ${$('#tDate', overlay).value.trim()} — post it to ${monthLabel(targetId)}?`)) return;
     }
-    target.transactions.push(
-      { id: newTxId(), date, vendor: `Transfer to ${to}`, amount: -amt, fund: from, description: note, account: '', isTransfer: true },
-      { id: newTxId(), date, vendor: `Transfer from ${from}`, amount: amt, fund: to, description: note, account: '', isTransfer: true },
-    );
+    pushTransferPair(target, from, to, amt, date, note);
     // One markDirty after both pushes: Ctrl+Z removes the pair as one step, and
     // the resync carries a cross-month pair forward from the month it landed in.
     markDirty(`the ${money(amt)} transfer`); close();
@@ -770,8 +803,11 @@ function renderFundPanel() {
             <button class="btn btn-sm" id="pnlRename" title="Rename this fund in every month and all its transactions">Rename</button>
             <button class="btn btn-sm" id="pnlUp" ${pos <= 0 ? 'disabled' : ''}>↑ Move up</button>
             <button class="btn btn-sm" id="pnlDown" ${pos >= sibCount - 1 ? 'disabled' : ''}>↓ Move down</button>
-            <button class="btn btn-sm btn-danger" id="pnlDel">✕ Remove fund</button>
+            ${f.retireAtClose
+              ? `<button class="btn btn-sm" id="pnlKeep" title="Cancel the removal — the fund stays in ${esc(monthLabel(nextMonthId(month.id)))} too">Keep it after all</button>`
+              : `<button class="btn btn-sm btn-danger" id="pnlDel">✕ Remove fund</button>`}
           </div>
+          ${f.retireAtClose ? `<p class="muted" style="margin:8px 0 0">Removed — it has transactions this month, so it stays until you start ${esc(monthLabel(nextMonthId(month.id)))}. Then it's gone, and past months keep it.</p>` : ''}
           ${!isIncome ? `<div class="modal-row" style="margin-top:10px"><label>Category</label>
             <select class="inline" id="pnlCat">
               ${month.categories.map((c, i) => `<option value="${i}" ${i === panelRef.ci ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
@@ -922,10 +958,18 @@ function renderFundPanel() {
   };
   $('#pnlUp', wrap).onclick = () => movePanelFund(-1);
   $('#pnlDown', wrap).onclick = () => movePanelFund(1);
-  $('#pnlDel', wrap).onclick = () => {
-    const arr = isIncome ? month.income : month.categories[panelRef.ci].funds;
-    const idx = isIncome ? panelRef.idx : panelRef.fi;
-    if (removeFundGuarded(month, arr, idx)) closeFundPanel();
+  // Income keeps the guard (S13 is about expense funds); an expense fund gets
+  // the one-step dialog — move what's left, then remove now or at month start.
+  const del = $('#pnlDel', wrap);
+  if (del) del.onclick = () => {
+    if (isIncome) { if (removeFundGuarded(month, month.income, panelRef.idx)) closeFundPanel(); return; }
+    showRemoveFundDialog(month, panelRef.ci, panelRef.fi);
+  };
+  const keep = $('#pnlKeep', wrap);
+  if (keep) keep.onclick = () => {
+    delete f.retireAtClose;
+    markDirty(`keeping "${f.fund}"`); render();
+    toast(`"${f.fund}" stays.`);
   };
   const allTx = $('#pnlAllTx', wrap);
   if (allTx) allTx.onclick = () => {
@@ -1085,8 +1129,9 @@ function removeCategoryGuarded(month, ci) {
   return true;
 }
 
-// Shared by the panel and (previously) the grid: a fund may only be removed when
-// it is balanced and has no transactions this month.
+// Income funds (and nothing else since S13, 1.2.0 — expense funds go through
+// showRemoveFundDialog): a fund may only be removed when it is balanced and has
+// no transactions this month.
 function removeFundGuarded(month, arr, idx) {
   const f = arr[idx];
   const used = month.transactions.some((t) => normFund(t.fund) === normFund(f.fund));
@@ -1102,6 +1147,77 @@ function removeFundGuarded(month, arr, idx) {
   if (isIncome && month.checks[f.fund]) delete month.checks[f.fund];
   recalcRules(month); markDirty(`removing "${f.fund}"`); render();
   return true;
+}
+
+/* ---------------- Remove fund dialog (S13, 1.2.0) ----------------
+ * One dialog for an expense fund: move what's left to another fund (a transfer
+ * pair, the same shape the Transfer dialog posts), then remove. A fund with
+ * transactions this month — always true once the pair posts — can't leave the
+ * structure yet: compute.js treats a transaction whose fund isn't in the month
+ * as unassigned and drops it from every total, so the −$9.99 leg would vanish
+ * and the hero's Spent would move. It stays with retireAtClose set, out of the
+ * pickers and the importer's auto-match, and createNextMonth leaves it out of
+ * the new month if it closed at $0.00. Past months never change; this month's
+ * rows keep its name. No compute.js change.
+ */
+function showRemoveFundDialog(month, ci, fi) {
+  const f = month.categories[ci].funds[fi];
+  const comp = computeMonth(month);
+  const left = r2(comp.categories[ci].funds[fi].leftover);
+  const hasLeft = Math.abs(left) > 0.004;
+  const lmap = leftoverMap(month);
+  const nextLabel = monthLabel(nextMonthId(month.id));
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal" style="width:430px">
+      <h2>Remove "${esc(f.fund)}"</h2>
+      ${hasLeft ? `<div class="modal-row" style="flex-wrap:wrap;gap:6px 8px;align-items:center">
+        <span>${left > 0 ? `It has ${money(left)} left. Move it to` : `It's ${money(-left)} over. Cover it from`}</span>
+        <select id="rfTo" class="inline" style="flex:1;min-width:160px">${fundOptions(month, '', lmap, { exclude: f.fund })}</select>
+        <span>so nothing is lost.</span></div>` : ''}
+      <p class="muted">Past months keep it. This month's transactions keep its name.</p>
+      <div class="modal-err" id="rfErr"></div>
+      <div class="modal-actions">
+        <button class="btn" id="rfCancel">Cancel</button>
+        <button class="btn btn-danger" id="rfGo">${hasLeft ? `${left > 0 ? 'Move' : 'Cover'} ${money(Math.abs(left))} and remove` : 'Remove'}</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  overlay.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') close();
+    if (e.key === 'Enter' && e.target.tagName !== 'BUTTON') $('#rfGo', overlay).click();
+  });
+  $('#rfCancel', overlay).onclick = close;
+  (hasLeft ? $('#rfTo', overlay) : $('#rfGo', overlay)).focus();
+  $('#rfGo', overlay).onclick = () => {
+    const err = $('#rfErr', overlay);
+    err.textContent = '';
+    if (hasLeft) {
+      const to = $('#rfTo', overlay).value;
+      if (!to) { err.textContent = left > 0 ? 'Pick a fund to move it to.' : 'Pick a fund to cover it from.'; return; }
+      // Dated like the Transfer dialog's default — today inside this month,
+      // else the 1st — so the pair always lands in the month that holds the fund.
+      const date = defaultDateFor(month);
+      if (left > 0) pushTransferPair(month, f.fund, to, left, date, '');
+      else pushTransferPair(month, to, f.fund, -left, date, '');
+    }
+    const used = month.transactions.some((t) => normFund(t.fund) === normFund(f.fund));
+    close(); closeFundPanel();
+    if (!used) {
+      // A $0.00 fund with no rows: gone now, today's path.
+      month.categories[ci].funds.splice(fi, 1);
+      recalcRules(month); markDirty(`removing "${f.fund}"`); render();
+      toast(`"${f.fund}" removed.`);
+      return;
+    }
+    f.retireAtClose = true;
+    // One markDirty for the pair and the flag: Ctrl+Z undoes the removal whole.
+    recalcRules(month); markDirty(`removing "${f.fund}"`); render();
+    toast(`"${f.fund}" goes away when you start ${nextLabel}.`);
+  };
 }
 
 /* ---------------- Add fund dialog (income or expense) ---------------- */
@@ -1268,6 +1384,18 @@ function fundStatusChip(f, flag, monthId) {
 
 function fundChips(f, flag, monthId) {
   return ruleChip(f) + fundTypeMark(f, monthId) + fundStatusChip(f, flag, monthId);
+}
+
+// S13: a fund removed while it had transactions this month waits for month
+// start. Once a later month exists the chip speaks in the past tense — the
+// flag stays on the closed month as the record of what happened.
+function retireChip(f, month) {
+  if (!f.retireAtClose) return '';
+  const next = monthLabel(nextMonthId(month.id));
+  const started = data.months.some((m) => m.id > month.id);
+  return started
+    ? `<span class="rule-chip chip-muted" title="Removed when ${esc(next)} started. This month keeps it and its transactions.">removed at ${esc(next)}</span>`
+    : `<span class="rule-chip chip-muted" title="It has transactions this month, so it stays until you start ${esc(next)}. Then it's gone, and past months keep it.">removing at ${esc(next)}</span>`;
 }
 
 /* ---- Section open/closed state (device UI state — kept out of the data file) ---- */
@@ -1667,7 +1795,7 @@ function renderBudget(main) {
     let body = `<table class="grid tbl-fixed">${FUND_COLS}<tbody>`;
     rows.forEach(({ f, fi }) => {
       body += `<tr>
-        <td><a href="#" class="fund-name" data-fund-setup="${ci}:${fi}" title="Open this fund — type, schedule, goal, actions">${esc(f.fund)}</a>${fundChips(f, flagMap[normFund(f.fund)], month.id)}${txChip(f)}</td>
+        <td><a href="#" class="fund-name" data-fund-setup="${ci}:${fi}" title="Open this fund — type, schedule, goal, actions">${esc(f.fund)}</a>${fundChips(f, flagMap[normFund(f.fund)], month.id)}${retireChip(f, month)}${txChip(f)}</td>
         <td>${carryEditable(month, f.fund, false)
           ? `<input class="money" data-cat="${ci}" data-fund="${fi}" data-k="carryOver" value="${money(f.carryOver)}" title="Opening balance — what's in this fund today. There's no earlier month to carry from."><div class="fund-note">opening</div>`
           : `<span class="mono" title="${esc(carryLockTitle(month))}">${money(f.carryOver)}</span>`}</td>
@@ -1913,7 +2041,7 @@ function renderTransactions(main) {
   const sum = r2(list.reduce((a, { t }) => a + t.amount, 0));
   const lmap = leftoverMap(month);
 
-  let html = `<h1 class="view-title">Transactions — ${monthLabel(month.id)}</h1>
+  let html = `<h1 class="view-title">Transactions</h1>
     <p class="sub">Expenses are negative, income positive. Type <span class="mono">-12.34</span> or <span class="mono">(12.34)</span> for an expense, or bring them in from your bank with Import CSV.</p>
     <div class="toolbar">
       <button class="btn btn-accent" id="addTx">+ Add transaction</button>
@@ -1957,7 +2085,7 @@ function renderTransactions(main) {
         ${bad && t.fund ? `<div class="fund-note">was: ${esc(t.fund)}</div>` : ''}</td>
       <td><input class="inline-text" data-tx="${i}" data-k="description" value="${esc(t.description || '')}"></td>
       <td><input class="inline-text" data-tx="${i}" data-k="account" value="${esc(t.account || '')}" placeholder="account" title="${esc(accountLabel(t.account || ''))}"></td>
-      <td><button class="btn-ghost" data-del-tx="${i}" title="Delete">🗑</button></td></tr>`;
+      <td><button class="btn-ghost" data-del-tx="${i}" title="Delete">${icon('trash', 'Delete')}</button></td></tr>`;
   }
   if (!list.length) {
     // A filtered-empty list keeps the plain text; the true "nothing yet" state
@@ -2252,11 +2380,13 @@ async function loadCsvForImport(fileName, fileData, answers) {
     if (month) {
       // The memo often holds the real merchant string (credit-union exports
       // put a type code in Description) — try it when the vendor is unknown.
-      const sug = suggestFund(vendorMap, rec.vendor)
-        || (rec.memo ? suggestFund(vendorMap, rec.memo) : null);
+      const sug = suggestFund(vendorMap, rec.vendor, rec.account)
+        || (rec.memo ? suggestFund(vendorMap, rec.memo, rec.account) : null);
       if (sug) {
         const canon = canonicalFund(month, sug.fund);
-        if (canon) { fund = canon; suggestNote = `auto-matched (seen ${sug.n}×)`; }
+        // S13: a retiring fund is never suggested — the row lands on "pick a
+        // fund" instead, so nothing new quietly accrues to a fund on its way out.
+        if (canon && !retiringFund(month, canon)) { fund = canon; suggestNote = `auto-matched (seen ${sug.n}×)`; }
       }
     }
     return {
@@ -2412,7 +2542,7 @@ function renderImport(main) {
           ${rec.memo ? `<div class="fund-note">${esc(rec.memo.length > 44 ? rec.memo.slice(0, 44) + '…' : rec.memo)}</div>` : ''}</td>
         <td class="${moneyCls(rec.amount)}">${money(rec.amount)}</td>
         <td>${monthLabel(row.monthId)}${row.earlierMonth ? ' <span class="muted">(closed)</span>' : ''}</td>
-        <td>${month ? `<select class="inline ${row.include && !row.fund ? 'missing' : ''}" data-imp-fund="${i}">${fundOptions(month, row.fund)}</select>` : '<span class="muted">—</span>'}
+        <td>${month ? `<select class="inline ${row.include && !row.fund ? 'missing' : ''}" data-imp-fund="${i}">${fundOptions(month, row.fund, undefined, { retiring: true })}</select>` : '<span class="muted">—</span>'}
           ${row.suggestNote ? `<div class="fund-note">${esc(row.suggestNote)}</div>` : ''}</td>
         <td>${badges.join(' ')}</td></tr>`;
     });
@@ -2845,6 +2975,26 @@ function aumMutate(action, kind, item, { from = null, to = null } = {}) {
   markDirty(`the AUM change to "${item.name}"`); render();
 }
 
+// S18 (1.2.0): "the value hasn't changed" is information too. Checking an item
+// stamps updatedAt (the stale chip reads it) and logs `checked` with from = to,
+// through aumMutate so today's snapshot is upserted like any other edit —
+// same-day snapshots replace each other, so checking 16 items adds one.
+function aumCheck(item, kind) {
+  item.updatedAt = todayISO();
+  aumMutate('checked', kind, item, { from: item.value, to: item.value });
+}
+// Whole list at once: one log line, one snapshot, one undo step.
+function aumCheckAll(kind) {
+  const list = kind === 'asset' ? data.aum.assets : data.aum.debts;
+  if (!list.length) return;
+  for (const it of list) it.updatedAt = todayISO();
+  data.aum.log.push({ date: todayISO(), kind, name: '', from: null, to: null, action: 'checked-all', count: list.length });
+  if (data.aum.log.length > 200) data.aum.log.splice(0, data.aum.log.length - 200);
+  upsertSnapshot(data.aum, todayISO());
+  markDirty(`checking every ${kind}`); render();
+  toast(`All ${list.length} ${kind === 'asset' ? 'assets' : 'debts'} marked checked today.`);
+}
+
 function renderAum(main) {
   const aum = data.aum;
   const t = aumTotals(aum);
@@ -2878,17 +3028,18 @@ function renderAum(main) {
         <td><a href="#" class="fund-name" data-aum-name="${it.id}" title="Rename">${esc(it.name)}</a></td>
         <td><input class="money" data-aum-item="${it.id}" value="${money(it.value)}"></td>
         <td class="muted">${fmtShortDate(it.updatedAt)}${stale}</td>
-        <td class="row-actions"><button class="btn-ghost" data-aum-del="${it.id}" title="Remove">✕</button></td></tr>`;
+        <td class="row-actions"><button class="btn-ghost" data-aum-check="${it.id}" title="The value hasn't changed — mark it checked today">✓</button><button class="btn-ghost" data-aum-del="${it.id}" title="Remove">✕</button></td></tr>`;
     }
     if (!sorted.length) rows = `<tr><td colspan="4" class="muted" style="padding:12px">Nothing here yet — use “+ Add”.</td></tr>`;
     return `<div class="section aum-section">
       <div class="section-head"><h2>${title} <span class="${kind === 'asset' ? 'pos' : ''}" style="font-weight:600">· ${money(total)}</span></h2>
         <div class="actions">
           ${lu ? `<span class="muted" style="font-size:.8rem;align-self:center">last updated ${fmtShortDate(lu)}</span>` : ''}
+          ${sorted.length ? `<button class="btn btn-sm" data-aum-check-all="${kind}" title="Every value here is still right — mark them all checked today">Mark all checked</button>` : ''}
           <button class="btn btn-sm" data-aum-add="${kind}">+ Add</button>
         </div></div>
       <table class="grid compact tbl-fixed"><colgroup>
-        <col style="width:44%"><col style="width:24%"><col style="width:24%"><col style="width:8%"></colgroup>
+        <col style="width:44%"><col style="width:22%"><col style="width:22%"><col style="width:12%"></colgroup>
         <thead><tr><th>${kind === 'asset' ? 'Asset' : 'Debt'}</th><th>${kind === 'asset' ? 'Value' : 'Owed'}</th><th>Updated</th><th></th></tr></thead>
         <tbody>${rows}</tbody></table>
     </div>`;
@@ -2917,6 +3068,11 @@ function renderAum(main) {
       if (e.action === 'add') return `added at ${money(e.to || 0)}`;
       if (e.action === 'remove') return `removed (was ${money(e.from || 0)})`;
       if (e.action === 'rename') return `renamed “${esc(e.from)}” → “${esc(e.to)}”`;
+      if (e.action === 'checked') return `checked, unchanged (${money(e.to || 0)})`;
+      if (e.action === 'checked-all') {
+        const n = e.count || 0;
+        return `all ${n} ${e.kind === 'asset' ? (n === 1 ? 'asset' : 'assets') : (n === 1 ? 'debt' : 'debts')} checked`;
+      }
       return `${money(e.from || 0)} → ${money(e.to || 0)}`;
     };
     let rows = '';
@@ -3014,6 +3170,14 @@ function renderAum(main) {
       }, { okLabel: 'Rename', initial: item.name });
       return;
     }
+    const chk = e.target.closest('[data-aum-check]');
+    if (chk) {
+      const found = findAumItem(chk.dataset.aumCheck);
+      if (found) aumCheck(found.item, found.kind);
+      return;
+    }
+    const all = e.target.closest('[data-aum-check-all]');
+    if (all) { aumCheckAll(all.dataset.aumCheckAll); return; }
     const del = e.target.closest('[data-aum-del]');
     if (del) {
       const found = findAumItem(del.dataset.aumDel);
@@ -3041,7 +3205,9 @@ function renderAum(main) {
     const v = parseMoney(el.value);
     if (isNaN(v)) { render(); return; }
     const nv = Math.abs(v); // both sides store positive numbers; AUM math subtracts
-    if (Math.abs(nv - (item.value || 0)) < 0.005) { render(); return; }
+    // S18: typing the same value back counts as checking it — updatedAt moves
+    // to today (clears "stale"), today's snapshot is upserted, the log shows it.
+    if (Math.abs(nv - (item.value || 0)) < 0.005) { aumCheck(item, kind); return; }
     const from = item.value;
     item.value = nv;
     item.updatedAt = todayISO();
@@ -3165,7 +3331,11 @@ function renderGarden(main) {
     : g.sown ? 'fully allocated ✓'
     : g.leftToAllocate > 0 ? `${money(g.leftToAllocate)} still to allocate`
     : `${money(-g.leftToAllocate)} more planned than income`;
-  const status = [monthLabel(month.id), allocBit, `${onPlan} on plan`, `${attention} need${attention === 1 ? 's' : ''} attention`, `${c.harvest} with money to move`];
+  // Q5: a calm month says what's true, not what's zero — "0 need attention"
+  // is noise on the one line that should read as a sigh of relief.
+  const status = [monthLabel(month.id), allocBit, `${onPlan} on plan`];
+  if (attention) status.push(`${attention} need${attention === 1 ? 's' : ''} attention`);
+  if (c.harvest) status.push(`${c.harvest} with money to move`);
   const mat = g.maturity;
   const fixtureNames = mat.fixtures.map((id) => GARDEN_MILESTONE_LABELS[id]);
   const matBits = [`Tended ${mat.monthsTended} month${mat.monthsTended === 1 ? '' : 's'}`];
@@ -3647,12 +3817,36 @@ function exportNudgeHtml() {
 // now say "hasn't started yet" about a month that has.
 function createNextMonth(last, onCreated) {
   const next = buildNextMonth(last, data.settings.tithePercent ?? 0.15);
+  // S13: funds removed while they had transactions (retireAtClose) leave now —
+  // if they closed at $0.00. buildNextMonth builds fresh fund objects, so the
+  // flag never carries forward on its own; resyncCarryOvers only walks funds
+  // the new month has, so a dropped fund is simply absent (Invariant 6). One
+  // that ended off zero (a late row landed on it) stays, flag cleared, and the
+  // toast says why — silently dropping a balance is the one thing this must
+  // never do.
+  const comp = computeMonth(last);
+  const survived = [];
+  last.categories.forEach((lc, ci) => {
+    lc.funds.forEach((lf, fi) => {
+      if (!lf.retireAtClose) return;
+      const left = r2(comp.categories[ci].funds[fi].leftover);
+      if (Math.abs(left) <= 0.004) {
+        for (const nc of next.categories) {
+          const k = nc.funds.findIndex((nf) => normFund(nf.fund) === normFund(lf.fund));
+          if (k >= 0) nc.funds.splice(k, 1);
+        }
+      } else {
+        delete lf.retireAtClose;
+        survived.push(`"${lf.fund}" had activity after you removed it, so it's still here — ${money(left)} left.`);
+      }
+    });
+  });
   data.months.push(next);
   currentMonthId = next.id;
   view = 'budget'; flagPanel = null;
   if (!onCreated) importHold = null;
   markDirty(`starting ${monthLabel(next.id)}`); render();
-  toast(`${monthLabel(next.id)} created — review planned amounts.`);
+  toast(survived.length ? `${monthLabel(next.id)} created. ${survived.join(' ')}` : `${monthLabel(next.id)} created — review planned amounts.`);
   if (onCreated) onCreated();
 }
 

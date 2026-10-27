@@ -11,6 +11,62 @@ so entries before that are dated by when the work happened, not by commit.
 
 ## Unreleased — 1.2.0
 
+### 2026-10-26 — Move and remove, AUM still right, six-letter vendor keys, UI fixes (sitting C: W9–W12)
+
+Sitting C of the 1.2.0 work order (`_cowork/work-order-1.2.0.md`, items W9–W12; three-year report S13,
+S18, S11 and roadmap Q5). `src/app.js`, `src/csv.js`, `tools/test-csv.mjs`, `src/index.html`,
+`src/dev.html`. **No `compute.js` change, no data.version bump, no migration.** One optional field added,
+`fund.retireAtClose` on an expense fund inside one month, ignored by every migration and by
+`buildNextMonth`. Suites: csv **606** (599 + S11's seven) · garden 156 · migrate 17 · compute 1060
+(1091 with the real-export sections), 0 failed.
+
+- **W9 — remove a fund in one step (S13; friction A-31, B-15; Call 3 decided as option a).** Fund
+  panel → Remove on an expense fund opens one dialog: `Remove "Discovery +"` · `It has $9.99 left. Move
+  it to [Extra ▾] so nothing is lost.` · `Past months keep it. This month's transactions keep its name.`
+  · `[Cancel] [Move $9.99 and remove]`. The move is a transfer pair — `pushTransferPair()` is now the one
+  place the `Transfer to X` / `Transfer from Y` rows and `isTransfer` are written, shared with the
+  Transfer dialog (Invariant 11; S4's typed-twin dedupe keys on those strings) — dated like the Transfer
+  dialog's default (today inside the month, else the 1st). An overspent fund reads `It's $5.00 over.
+  Cover it from [Extra ▾]` / `Cover $5.00 and remove` (the pair runs the other way). A $0.00 fund with no
+  rows reads `Remove` and goes now. **A fund with transactions this month — always true once the pair
+  posts — stays until the next month starts:** `compute.js` treats a row whose fund isn't in the month
+  as unassigned and drops it from every total, so removing the fund outright would orphan the −$9.99 leg
+  and move the hero's Spent. Instead `f.retireAtClose = true`; the Budget row shows a `removing at
+  September 2026` chip (`removed at …` once that month exists), the panel's Remove becomes `Keep it
+  after all`, the fund is left out of `fundOptions` (new Transactions rows, the Transfer dialog) unless
+  it's the row's current value, and the importer's auto-match never suggests it. The import preview's
+  per-row picker lists it as `Discovery + (removing)` so a late bank row can still be placed on it by
+  hand — the work order's acceptance asks for exactly that and the spec's "left out of pickers for new
+  rows" was read as *never suggested, never the default*. Toast: `"Discovery +" goes away when you start
+  September 2026.` **At month start** (`createNextMonth`) every retiring fund that closed at $0.00
+  (±0.004) is dropped from the new month; one that closed off zero stays, flag cleared, and the toast
+  says why: `September 2026 created. "Discovery +" had activity after you removed it, so it's still here
+  — ($4.99) left.` The closed month keeps the flag as its record. Income funds keep the old guard. One
+  `markDirty` per removal: Ctrl+Z undoes pair and flag together.
+- **W10 — confirming an unchanged AUM value clears "stale" (S18; P2, B-11; wish #22).** Typing the same
+  value back used to return before `updatedAt` was set, so the only way to clear a 510-day chip was to
+  change the number by a cent. Now it counts as checking: `updatedAt` = today, today's snapshot upserted
+  (same-day snapshots replace each other — confirming 16 items adds one), log line `checked, unchanged
+  ($300,000.00)`. Each row has a `✓` (`The value hasn't changed — mark it checked today`) and each list a
+  `Mark all checked` button: one log line (`all 3 assets checked`), one snapshot, one undo step.
+- **W11 — vendor learning: six-letter prefix keys, account-aware (S11; R5, B-M07, F5).**
+  `suggestFund`'s prefix fallback had no minimum length — a vendor normalising to `BO` matched every
+  vendor starting with BO (BOCA RATON REGIONAL HOSP → Restaurants). Now a prefix match needs both keys
+  ≥ 6 characters *or* the shorter to be a whole first word of the longer (`AMAZON RETA` ↔ `AMAZON RETAIL`
+  and `WALMART` ↔ `WALMART COM` match; `BO` ↔ `BOWLERO` doesn't). `buildVendorMap` keeps its Map shape
+  and hangs `byAccount` on it (`${account}\0${normVendor}`); `suggestFund(vendorMap, vendor, account)`
+  tries the record's account exact → all accounts exact → guarded prefix, account first — so `CAPITAL
+  ONE MEMBER FEE` is Venture X on one card and Quicksilver on the other, and a card with no history for
+  a vendor falls through to the all-accounts answer. Both importer call sites pass `rec.account`.
+  `normVendor` untouched. Seven `test-csv` cases added (599 → 606). **Trade noted:** a short vendor that
+  used to prefix-match will show "pick a fund" once and learn from there — a missed suggestion costs one
+  click, a wrong one silently miscategorises.
+- **W12 — small UI fixes (Q5).** Garden status omits zero segments (`October 2026 · fully allocated ✓ ·
+  14 on plan`, no `0 need attention · 0 with money to move`). The Transactions delete button is a
+  20px `si-trash` watercolor glyph (compost pail — fills carry the straight edges, every stroke is
+  curved, per the si-* rule) in both `index.html` and `dev.html`, with `aria-label="Delete"`. The
+  Transactions title is `Transactions` (the sidebar's month picker names the month).
+
 ### 2026-10-26 — Category panel, Settings cleanup, wizard restore door, export nudge (sitting B: W5–W8)
 
 Sitting B of the 1.2.0 work order (`_cowork/work-order-1.2.0.md`, items W5–W8; roadmap Q2 and Q3,

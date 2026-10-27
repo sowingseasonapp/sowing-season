@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 import {
   parseCsv, parseBankCsv, parseBankFile, scoreDuplicate, findDuplicateScored,
   findDuplicate, matchDuplicates, suggestStarterFunds, starterFundFor,
+  buildVendorMap, suggestFund,
 } from '../src/csv.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -669,6 +670,43 @@ for (const [file, expected] of Object.entries(baseline)) {
     check(`S2 [not a card payment via import.js: ${v}]`, viaImport(v) === false);
     check(`S2 [not a card payment via legacy csv.js: ${v}]`, viaLegacy(v) === false);
   }
+}
+
+// ---- S11 (1.2.0): vendor learning — six-letter prefix keys, account-aware ----
+{
+  const tx = (vendor, fund, account = '') => ({ id: vendor, date: '2028-01-05', vendor, amount: -10, fund, description: '', account });
+  const months = [{ id: '2028-01', transactions: [
+    tx('BOWLERO BOCA', 'Fun Money'),
+    tx('AMAZON RETAIL', 'Household'),
+    tx('WALMART', 'Groceries'),
+    tx('BO', 'Restaurants'),                       // a two-letter vendor key
+    tx('CAPITAL ONE MEMBER FEE', 'Venture X', '1872'),
+    tx('CAPITAL ONE MEMBER FEE', 'Venture X', '1872'),
+    tx('CAPITAL ONE MEMBER FEE', 'Quicksilver', '6620'),
+    tx('PUBLIX SUPER MARKET', 'Groceries', '1872'),
+  ] }];
+  const map = buildVendorMap(months);
+  // (1) exact match wins over any prefix neighbour.
+  check('S11 [exact: WALMART → Groceries]', suggestFund(map, 'WALMART')?.fund === 'Groceries');
+  // (2) a two-letter key no longer prefix-matches a long vendor (R5: the hospital became Restaurants).
+  check('S11 [BO ↔ BOCA RATON REGIONAL HOSP → null]', suggestFund(map, 'BOCA RATON REGIONAL HOSP') === null,
+    JSON.stringify(suggestFund(map, 'BOCA RATON REGIONAL HOSP')));
+  // (3) six-letter prefixes still match.
+  check('S11 [AMAZON RETA ↔ AMAZON RETAIL → Household]', suggestFund(map, 'AMAZON RETA')?.fund === 'Household');
+  // (4) a short key matches as a whole first word, not as a prefix.
+  check('S11 [whole first word: WALMART ↔ WALMART COM → Groceries; BOWLE ↔ BOWLERO → null]',
+    suggestFund(map, 'WALMART COM 12345')?.fund === 'Groceries' && suggestFund(map, 'BOWLE') === null
+    && suggestFund(map, 'BOWLERO BOCA 55')?.fund === 'Fun Money');
+  // (5) same vendor, two accounts, two funds → the account's own fund, even when the other account has more history.
+  check('S11 [CAPITAL ONE MEMBER FEE: 6620 → Quicksilver, 1872 → Venture X]',
+    suggestFund(map, 'CAPITAL ONE MEMBER FEE', '6620')?.fund === 'Quicksilver'
+    && suggestFund(map, 'CAPITAL ONE MEMBER FEE', '1872')?.fund === 'Venture X');
+  // (6) an account with no history for the vendor → the all-accounts best (Venture X, 2 vs 1).
+  check('S11 [CAPITAL ONE MEMBER FEE on 9999 → all-accounts best]', suggestFund(map, 'CAPITAL ONE MEMBER FEE', '9999')?.fund === 'Venture X');
+  // (7) the importer's memo fallback: vendor unknown, memo known — same chain as app.js.
+  const viaImporter = (rec) => suggestFund(map, rec.vendor, rec.account) || (rec.memo ? suggestFund(map, rec.memo, rec.account) : null);
+  check('S11 [memo fallback: vendor "POS DEBIT", memo "PUBLIX SUPER MARKET" → Groceries]',
+    viaImporter({ vendor: 'POS DEBIT', memo: 'PUBLIX SUPER MARKET 0412', account: '1872' })?.fund === 'Groceries');
 }
 
 console.log(`\nCSV importer: ${pass} passed, ${fail} failed`);
