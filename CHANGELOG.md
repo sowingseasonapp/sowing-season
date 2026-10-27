@@ -11,6 +11,52 @@ so entries before that are dated by when the work happened, not by commit.
 
 ## Unreleased — 1.2.0
 
+### 2026-10-26 — Category panel, Settings cleanup, wizard restore door, export nudge (sitting B: W5–W8)
+
+Sitting B of the 1.2.0 work order (`_cowork/work-order-1.2.0.md`, items W5–W8; roadmap Q2 and Q3,
+three-year report wishes #20 and #21). `src/app.js`, `src/styles.css`, `README.md`. **No `compute.js`
+change, no data.version bump, no migration.** One optional field added, `settings.lastExportAt`, ignored
+by every migration and by `buildNextMonth`. Suites 599 / 1060 (1091 with the real-export sections) / 156 /
+17, unchanged.
+
+- **W5 — category ⋯ panel (Q2; roadmap asks 5 and 6).** Every category header carries a `⋯`, expanded
+  *or collapsed* (the header's `+` and `✕` only rendered on an open card, so a collapsed 12-category page
+  had no way to reach them). It opens a side panel in the fund panel's frame — `4 funds · planned
+  $1,240.00 · spent $980.00`, then `+ Add fund · Rename · ↑ Up · ↓ Down · ✕ Remove category`, then the
+  fund names. **Rename applies to every month** (Call 2, decided: a category name is a label, not money,
+  and Year Overview merges by exact name — a forward-only rename would show two rows with a seam), refuses
+  a name any month already uses (case-insensitive, `"X" already exists in December 2025.`), and files one
+  undo step (`Renamed in 9 months.`). Up/Down reorder this month forward, like the fund panel's move; the
+  accordion open-state (keyed by category index) swaps along so the open card stays open. Remove and
+  + Add fund dispatch to the same guard and dialog the header buttons used (`removeCategoryGuarded`,
+  `showAddFund({ side: 'expense', ci })`); the `data-del-cat` / `data-add-fund` handlers stay. The
+  `accordionHtml` helper gained a `more` slot rendered in both states; the income groups' `+` still
+  renders only when open. **Stacking fix:** `.modal-overlay` moves from z-index 40 to 46 — it sat *under*
+  the side panel (45), so the Rename dialog opened from the fund panel (1.0.1 W7) or this one had its
+  buttons covered by the panel's scrim; Enter worked, clicking didn't. No modal is ever opened under a
+  panel, so nothing else changes.
+- **W6 — Settings cleanup (Q3).** The "Rename a fund" section (a duplicate of the fund panel's Rename) and
+  the "Categories" section (replaced by W5 and the Budget page's `+ Add category`) are gone. Settings is
+  Budget rules · Fund types adjusted (only while the retype notice exists) · Data.
+- **W7 — "I already have a budget" on the wizard's welcome step (#20; friction A-33).** Under "Let's go":
+  `Already have a budget file from another computer? Bring it in — pick the file you exported from
+  Settings, and the app opens on it.` The link runs the same `importDataFile` as Settings → Restore…; main
+  validates the file and the app reloads into it (no wizard — `data.months` isn't empty any more). A bad
+  file shows main.js's own message under the link (`Couldn't open it: …`), set as text, and the wizard
+  stays. Nothing is written for the wizard before Finish, so there is no in-memory state to lose. Restores
+  onto a non-empty install still go through Settings → Restore… with the pre-restore backup; untouched.
+- **W8 — an occasional "save a copy somewhere safe" nudge (#21; report "Backups" health check).**
+  `exportCopy()` is the one export path (Settings and the recap); on success it stamps
+  `settings.lastExportAt = today` via `silentDirty` (a stamp, not an edit — no undo step). The month-close
+  recap shows one line above its buttons when it's been **90+ days** since the last export, or there has
+  never been one and the data holds **3+ months**: `It's been 3 months since you saved a copy of your
+  budget somewhere safe. [Export a copy…]` / `You've never saved a copy of your budget outside this
+  computer. [Export a copy…]`. Exporting from it removes the line and leaves the workflow open. Settings →
+  Data shows `Last exported Oct 26, 2026` / `Never exported` under the Export row. No pop-ups, no launch
+  toasts, nothing on the Garden. **The exported file carries the *previous* `lastExportAt`** (or none) —
+  the stamp is set after the write returns. By design; don't "fix" it.
+- **README:** category panel, Settings contents, and the wizard's restore door.
+
 ### 2026-10-26 — Importer summary, Import into Transactions, import starts the month, named accounts (sitting A: W1–W4)
 
 Sitting A of the 1.2.0 work order (`_cowork/work-order-1.2.0.md`, items W1–W4; roadmap Q1 and Q4,

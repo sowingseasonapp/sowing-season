@@ -625,7 +625,7 @@ function wireSetupForm(root, { monthId, carryOver = 0, onChange = null }) {
  * that used to be four buttons on every row, and its transactions this month.
  * Edits apply immediately, like the rest of the app.
  */
-let panelRef = null; // {kind:'expense', ci, fi} | {kind:'income', idx}
+let panelRef = null; // {kind:'expense', ci, fi} | {kind:'income', idx} | {kind:'category', ci} (1.2.0, Q2)
 
 // Escape closes the panel from anywhere — the listener lives on the document
 // because the panel itself rarely holds focus (it re-renders with the app).
@@ -640,7 +640,7 @@ function closeFundPanel() {
 
 // Locate the fund a panel ref points at; returns null if it no longer exists.
 function panelFund(month) {
-  if (!panelRef) return null;
+  if (!panelRef || panelRef.kind === 'category') return null;
   if (panelRef.kind === 'income') return month.income[panelRef.idx] || null;
   const cat = month.categories[panelRef.ci];
   return cat ? (cat.funds[panelRef.fi] || null) : null;
@@ -659,6 +659,9 @@ function showFundPanel(ref) {
 }
 
 function renderFundPanel() {
+  // The category panel (1.2.0, Q2) shares the frame, the ref and the Escape
+  // handler, but none of the fund-only code below — branch before panelFund.
+  if (panelRef && panelRef.kind === 'category') { renderCategoryPanel(); return; }
   const existing = $('#fundPanel');
   // Keep where the reader was scrolled to when the panel refreshes with the app.
   const keepScroll = existing ? existing.querySelector('.panel-body').scrollTop : 0;
@@ -954,6 +957,134 @@ function movePanelFund(dir) {
   markDirty(`moving "${f.fund}" ${dir < 0 ? 'up' : 'down'}`); render();
 }
 
+/* ---------------- Category panel (1.2.0, Q2) ----------------
+ * The ⋯ on every category header — expanded or collapsed — opens this. Same
+ * frame as the fund panel (and the same #fundPanel id, so closeFundPanel and
+ * the Escape handler cover both). Rename applies to every month (a category
+ * name is a label, not money — past numbers never move; Year Overview merges
+ * categories by exact name, so a forward-only rename would show a seam).
+ * Up/Down reorder this month only, like movePanelFund — buildNextMonth copies
+ * the order forward at close. Remove keeps the header ✕'s guard and confirm.
+ */
+function showCategoryPanel(ci) { showFundPanel({ kind: 'category', ci }); }
+
+function renderCategoryPanel() {
+  const existing = $('#fundPanel');
+  if (existing) existing.remove();
+  if (!panelRef || panelRef.kind !== 'category') return;
+  const month = curMonth();
+  const ci = panelRef.ci;
+  const c = month.categories[ci];
+  if (!c) { panelRef = null; return; }
+  const t = computeMonth(month).categories[ci].totals;
+  const n = c.funds.length;
+  const spent = t.expensed > 0.004 ? `+${money(t.expensed)}` : money(Math.abs(t.expensed));
+
+  const wrap = document.createElement('div');
+  wrap.id = 'fundPanel';
+  wrap.className = 'panel-wrap';
+  wrap.innerHTML = `
+    <div class="panel-scrim"></div>
+    <aside class="side-panel" role="dialog" aria-label="Category settings">
+      <header class="panel-head">
+        <div>
+          <div class="panel-title">${esc(c.name)}</div>
+          <div class="panel-sub muted">${n} fund${n === 1 ? '' : 's'} · planned ${money(t.planned)} · spent ${spent}${
+            c.excludeFromTotals ? ' · not counted in totals' : ''}</div>
+        </div>
+        <button class="btn-ghost panel-close" id="cpClose" title="Close">✕</button>
+      </header>
+      <div class="panel-body">
+        <section class="panel-sec">
+          <h3>Actions</h3>
+          <div class="panel-actions">
+            <button class="btn btn-sm" id="cpAdd" title="Add a fund to ${esc(c.name)}">+ Add fund</button>
+            <button class="btn btn-sm" id="cpRename" title="Rename this category in every month">Rename</button>
+            <button class="btn btn-sm" id="cpUp" ${ci <= 0 ? 'disabled' : ''} title="Move this category up — from ${monthLabel(month.id)} forward">↑ Up</button>
+            <button class="btn btn-sm" id="cpDown" ${ci >= month.categories.length - 1 ? 'disabled' : ''} title="Move this category down — from ${monthLabel(month.id)} forward">↓ Down</button>
+            <button class="btn btn-sm btn-danger" id="cpDel" title="Remove “${esc(c.name)}” (must be empty first; past months keep it)">✕ Remove category</button>
+          </div>
+        </section>
+        <section class="panel-sec">
+          <h3>Funds</h3>
+          <p class="panel-funds muted">${n ? c.funds.map((f) => esc(f.fund)).join(' · ') : 'No funds yet — use + Add fund.'}</p>
+        </section>
+      </div>
+    </aside>`;
+  document.body.appendChild(wrap);
+  $('.panel-scrim', wrap).onclick = closeFundPanel;
+  $('#cpClose', wrap).onclick = closeFundPanel;
+  // The dialogs below sit over the panel; their render() refreshes it in place.
+  $('#cpAdd', wrap).onclick = () => showAddFund({ side: 'expense', ci });
+  $('#cpRename', wrap).onclick = () => {
+    promptName('Rename category', 'New name', (nm) => {
+      if (nm === c.name) return null; // nothing to do
+      const err = renameCategoryEverywhere(c.name, nm);
+      if (err) return err;
+      render(); // panelRef is index-based, so the panel stays on this category
+      return null;
+    }, { okLabel: 'Rename', initial: c.name });
+  };
+  $('#cpUp', wrap).onclick = () => movePanelCategory(-1);
+  $('#cpDown', wrap).onclick = () => movePanelCategory(1);
+  $('#cpDel', wrap).onclick = () => { if (removeCategoryGuarded(month, ci)) closeFundPanel(); };
+}
+
+// Reorder this month's categories (future months copy the order at close; past
+// months are untouched). The accordion open-state is keyed by category index,
+// so the two entries swap along with the categories — the card the reader had
+// open stays open.
+function movePanelCategory(dir) {
+  const month = curMonth();
+  if (!panelRef || panelRef.kind !== 'category') return;
+  const cats = month.categories;
+  const from = panelRef.ci, to = from + dir;
+  if (to < 0 || to >= cats.length) return;
+  const c = cats[from];
+  [cats[from], cats[to]] = [cats[to], cats[from]];
+  const openSet = loadOpenState(month.id);
+  if (openSet) {
+    const a = openSet.has(`cat:${from}`), b = openSet.has(`cat:${to}`);
+    if (a) openSet.add(`cat:${to}`); else openSet.delete(`cat:${to}`);
+    if (b) openSet.add(`cat:${from}`); else openSet.delete(`cat:${from}`);
+    saveOpenState(month.id, openSet);
+  }
+  panelRef = { kind: 'category', ci: to };
+  markDirty(`moving "${c.name}" ${dir < 0 ? 'up' : 'down'}`); render();
+}
+
+// Rename a category in every month. Matches the exact name (Year Overview
+// merges by exact name, 1.2.0 Call 2) and refuses a name any month already uses
+// (case-insensitive). Returns an error string (nothing changed) or null
+// (renamed, markDirty filed the one undo step, toast shown). Callers re-render.
+function renameCategoryEverywhere(from, to) {
+  if (!from || !to) return 'Type a new name.';
+  const lo = to.toLowerCase();
+  for (const m of data.months) {
+    if (m.categories.some((c) => c.name !== from && c.name.toLowerCase() === lo)) return `"${to}" already exists in ${monthLabel(m.id)}.`;
+  }
+  let n = 0;
+  for (const m of data.months) {
+    let hit = false;
+    for (const c of m.categories) if (c.name === from) { c.name = to; hit = true; }
+    if (hit) n++;
+  }
+  markDirty(`the rename to "${to}"`); toast(`Renamed in ${n} month${n === 1 ? '' : 's'}.`);
+  return null;
+}
+
+// The header ✕'s guard, shared with the category panel: a category may only be
+// removed once it holds no funds; past months keep it. Returns true if removed.
+function removeCategoryGuarded(month, ci) {
+  const c = month.categories[ci];
+  if (!c) return false;
+  if (c.funds.length) { toast(`"${c.name}" still has ${c.funds.length} fund${c.funds.length === 1 ? '' : 's'} — remove or empty them first.`); return false; }
+  if (!confirm(`Remove category "${c.name}" from ${monthLabel(month.id)}? Past months keep it.`)) return false;
+  month.categories.splice(ci, 1);
+  markDirty(`removing "${c.name}"`); render();
+  return true;
+}
+
 // Shared by the panel and (previously) the grid: a fund may only be removed when
 // it is balanced and has no transactions this month.
 function removeFundGuarded(month, arr, idx) {
@@ -1169,7 +1300,10 @@ const FUND_COLS = `<colgroup>
 // One collapsible section. Its header is a row on the same grid as the funds
 // beneath it, so the category totals line up with the fund columns — and the
 // body needs no totals row of its own.
-function accordionHtml({ key, title, note, open, totals, actions, body, activity, kind = 'expense', hint = '', monthDone = false }) {
+// `actions` render only on an open header (the income groups' +); `more` renders
+// in both states — the category ⋯ (1.2.0, Q2), which has to be findable on a
+// collapsed page.
+function accordionHtml({ key, title, note, open, totals, actions = '', more = '', body, activity, kind = 'expense', hint = '', monthDone = false }) {
   const cell = (v) => `<td class="${moneyCls(v)}">${money(v)}</td>`;
   // Spending is normal activity, not an alarm — show it as a plain positive
   // amount (like the Spent card up top) and keep red for actual problems.
@@ -1208,7 +1342,7 @@ function accordionHtml({ key, title, note, open, totals, actions, body, activity
         </div>
       </td>
       ${open ? '' : totalCells}
-      <td class="acc-actions">${open ? actions : ''}</td>
+      <td class="acc-actions">${more}${open ? actions : ''}</td>
     </tr></tbody></table>
     <div class="acc-body">${open ? (hint ? `<p class="muted" style="font-size:.82rem;margin:0;padding:8px 14px 0">${hint}</p>` : '') + colHead + body + totalRow : ''}</div>
   </div>`;
@@ -1561,8 +1695,7 @@ function renderBudget(main) {
       note: `${c.funds.length} fund${c.funds.length === 1 ? '' : 's'}${c.excludeFromTotals ? ' · not counted in totals' : ''}`,
       open,
       totals: { carryOver: t.carryOver, planned: t.planned, spent: t.expensed, leftover: t.leftover },
-      actions: `<button class="btn-ghost" data-add-fund="${ci}" title="Add a fund to ${esc(c.name)}">+</button>
-        <button class="btn-ghost" data-del-cat="${ci}" title="Remove “${esc(c.name)}” (must be empty first; past months keep it)">✕</button>`,
+      more: `<button class="btn-ghost row-more" data-cat-more="${ci}" title="Rename, reorder, add a fund or remove">⋯</button>`,
       body,
     });
   });
@@ -1695,15 +1828,9 @@ function renderBudget(main) {
       return;
     }
     const delCat = e.target.closest('[data-del-cat]');
-    if (delCat) {
-      const ci = Number(delCat.dataset.delCat);
-      const c = month.categories[ci];
-      if (c.funds.length) return toast(`"${c.name}" still has ${c.funds.length} fund(s) — remove or empty them first.`);
-      if (!confirm(`Remove category "${c.name}" from ${monthLabel(month.id)}? Past months keep it.`)) return;
-      month.categories.splice(ci, 1);
-      markDirty(`removing "${c.name}"`); render();
-      return;
-    }
+    if (delCat) { removeCategoryGuarded(month, Number(delCat.dataset.delCat)); return; }
+    const catMore = e.target.closest('[data-cat-more]');
+    if (catMore) { showCategoryPanel(Number(catMore.dataset.catMore)); return; }
     const addF = e.target.closest('[data-add-fund]');
     if (addF) {
       showAddFund({ side: 'expense', ci: Number(addF.dataset.addFund) });
@@ -3176,7 +3303,7 @@ function renderGarden(main) {
   if (!data.settings.gardenIntroSeen) showGardenIntro();
 }
 
-/* ---------------- Rename a fund (shared by Settings and the fund panel) ----------------
+/* ---------------- Rename a fund (used by the fund panel) ----------------
  * Renames in every month — structure, transactions, and the checks key move
  * together. Returns an error string (nothing changed) or null (renamed,
  * markDirty done, toast shown). Callers re-render themselves.
@@ -3393,7 +3520,6 @@ function wireUpdateButton() {
 
 /* ---------------- Settings view ---------------- */
 function renderSettings(main) {
-  const month = curMonth();
   main.innerHTML = `
     <h1 class="view-title">Settings</h1>
     <div class="settings-grid">
@@ -3406,20 +3532,6 @@ function renderSettings(main) {
           <div class="field-row"><label title="Fund-to-fund transfers stay visible inside each fund, but stop counting toward actual income and spending in the summary cards, Year Overview, and month recap.">Exclude transfers from income &amp; spending reporting</label>
             <input type="checkbox" id="exTransfers" ${data.settings.excludeTransfers ? 'checked' : ''}></div>
           <p class="muted" style="font-size:.85rem">Moving money between funds isn't real income or spending — this keeps the totals honest.</p>
-        </div></div>
-      <div class="section"><div class="section-head"><h2>Rename a fund</h2></div>
-        <div style="padding:12px 16px">
-          <div class="field-row"><select class="inline" id="renFund">${fundOptions(month, '')}</select>
-            <input class="inline-text" id="renTo" placeholder="New name" style="border:1px solid var(--line);max-width:170px">
-            <button class="btn btn-sm" id="renBtn">Rename</button></div>
-          <p class="muted" style="font-size:.85rem">Renames the fund in <b>every month</b> and updates all its transactions.</p>
-        </div></div>
-      <div class="section"><div class="section-head"><h2>Categories</h2></div>
-        <div style="padding:12px 16px">
-          <div class="field-row"><input class="inline-text" id="newCat" placeholder="New category name" style="border:1px solid var(--line)">
-            <button class="btn btn-sm" id="addCatBtn">Add to ${monthLabel(month.id)}</button></div>
-          <p class="muted" style="font-size:.85rem">New categories start empty — add funds from the Budget page. They roll into future months automatically.
-            To remove a category, empty its funds and click the ✕ on its header on the Budget page; past months are never affected.</p>
         </div></div>
       ${(data.settings.lastRetype || []).length ? `
       <div class="section"><div class="section-head"><h2>Fund types adjusted</h2></div>
@@ -3440,6 +3552,8 @@ function renderSettings(main) {
             <button class="btn btn-sm" id="revealBtn">Show in folder</button></div>
           <div class="field-row"><label>Export a copy of all data</label>
             <button class="btn btn-sm" id="exportBtn">Export JSON…</button></div>
+          <p class="muted" style="font-size:.8rem;margin:-6px 0 8px">${data.settings.lastExportAt
+            ? `Last exported ${fmtDateWords(data.settings.lastExportAt)}` : 'Never exported'}</p>
           <div class="field-row"><label>Restore from a backup</label>
             <button class="btn btn-sm" id="restoreBtn">Restore…</button></div>
           <div class="field-row"><label>Sowing Season v${esc(appVersion || 'dev')}</label>
@@ -3476,32 +3590,54 @@ function renderSettings(main) {
     }
     renderSettings(main);
   };
-  $('#renBtn').onclick = () => {
-    const err = renameFundEverywhere($('#renFund').value, $('#renTo').value.trim());
-    if (err) return toast(err);
-    renderSettings(main);
-  };
-  $('#addCatBtn').onclick = () => {
-    const name = $('#newCat').value.trim();
-    if (!name) return;
-    if (month.categories.some((c) => c.name.toLowerCase() === name.toLowerCase())) return toast('That category already exists.');
-    month.categories.push({ name, excludeFromTotals: false, funds: [] });
-    markDirty(`adding "${name}"`); toast(`Added "${name}" to ${monthLabel(month.id)}.`);
-    view = 'budget'; render();
-  };
   const dr = $('#dismissRetype');
   if (dr) dr.onclick = () => { delete data.settings.lastRetype; markDirty('dismissing the adjusted-funds notice'); renderSettings(main); };
   $('#revealBtn').onclick = () => window.budgetAPI.revealData();
   $('#restoreBtn').onclick = () => showRestoreModal();
   wireUpdateButton();
-  $('#exportBtn').onclick = async () => {
-    try {
-      const res = await window.budgetAPI.exportData(data);
-      if (res === true) toast('Exported.');
-      else if (typeof res === 'string') toast(`Couldn't export: ${res}`);
-      // false = the user cancelled the dialog — nothing to say
-    } catch (err) { toast(`Couldn't export: ${err.message}`); }
-  };
+  $('#exportBtn').onclick = async () => { if (await exportCopy()) renderSettings(main); };
+}
+
+/* ---------------- Export a copy (1.2.0, #21) ----------------
+ * Settings and the month-close recap share this. On success the app stamps
+ * settings.lastExportAt = today — a stamp, not an edit (silentDirty: no undo
+ * step, no toast beyond 'Exported.'). The stamp is set AFTER the write returns,
+ * so the exported file itself carries the previous value (or none). That is by
+ * design: the stamp records that this data left the computer, and the next
+ * export carries it.
+ */
+async function exportCopy() {
+  try {
+    const res = await window.budgetAPI.exportData(data);
+    if (res === true) {
+      data.settings.lastExportAt = todayISO();
+      silentDirty();
+      toast('Exported.');
+      return true;
+    }
+    if (typeof res === 'string') toast(`Couldn't export: ${res}`);
+    // false = the user cancelled the dialog — nothing to say
+  } catch (err) { toast(`Couldn't export: ${err.message}`); }
+  return false;
+}
+
+// Is a "save a copy somewhere safe" nudge due? 'never' once the data holds 3+
+// months and has never been exported; a day count once it's been 90+ days;
+// null otherwise. Shown in one place only — the month-close recap.
+function exportDue() {
+  const last = data.settings.lastExportAt;
+  if (!last) return data.months.length >= 3 ? 'never' : null;
+  const days = Math.round((new Date(`${todayISO()}T00:00:00`) - new Date(`${last}T00:00:00`)) / 86400000);
+  return days >= 90 ? days : null;
+}
+function exportNudgeHtml() {
+  const due = exportDue();
+  if (!due) return '';
+  const text = due === 'never'
+    ? `You've never saved a copy of your budget outside this computer.`
+    : `It's been ${Math.floor(due / 30)} months since you saved a copy of your budget somewhere safe.`;
+  return `<p class="muted" id="wfExportLine" style="font-size:.85rem;margin:12px 0 0">${text}
+    <button class="btn btn-sm" id="wfExport" style="margin-left:6px" title="The same export as Settings → Data — a JSON file you can keep on a drive or in the cloud">Export a copy…</button></p>`;
 }
 
 /* ---------------- New month ---------------- */
@@ -3627,6 +3763,7 @@ function showMonthCloseWorkflow(last, nid, onCreated) {
         ${offList.map((x, i) => li(x, `<span class="pos">${money(x.leftover)}</span> free — <a href="#" data-wf-xfer="${esc(x.fund)}">transfer it</a>`)).join('')}</ul>` : ''}
       ${isFutureClose ? `<p class="modal-warn">${monthLabel(last.id)} hasn't started yet —
         creating ${monthLabel(nid)} now is probably not what you want.</p>` : ''}
+      ${exportNudgeHtml()}
       <div class="modal-actions">
         <button class="btn" id="wfCancel">Cancel</button>
         <button class="btn btn-accent" id="wfGo">${isFutureClose ? `Create ${monthLabel(nid)} anyway`
@@ -3649,6 +3786,11 @@ function showMonthCloseWorkflow(last, nid, onCreated) {
   });
   $('#wfCancel', overlay).onclick = close;
   $('#wfGo', overlay).onclick = () => { close(); createNextMonth(last, onCreated); };
+  // Export nudge (#21): the workflow stays open; the line goes once the stamp is in.
+  const wfExport = $('#wfExport', overlay);
+  if (wfExport) wfExport.onclick = () => exportCopy().then(() => {
+    if (!exportDue()) { const line = $('#wfExportLine', overlay); if (line) line.remove(); }
+  });
 }
 
 /* ---------------- Onboarding wizard ----------------
@@ -3736,7 +3878,9 @@ function wzWelcomeHtml() {
     <p class="wz-body">This takes about five minutes, and you can change everything later.</p>
     <p class="wz-body">The idea is simple: split your money into envelopes — one for groceries,
       one for rent, one for fun — so every dollar has a job. Here we call them <b>funds</b>.</p>
-    <div class="wz-actions"><button class="btn btn-accent" data-wz-next>Let's go</button></div>`;
+    <div class="wz-actions"><button class="btn btn-accent" data-wz-next>Let's go</button></div>
+    <p class="muted wz-restore">Already have a budget file from another computer? <a href="#" data-wz-restore>Bring it in</a> — pick the file you exported from Settings, and the app opens on it.</p>
+    <div class="modal-err" id="wzRestoreErr"></div>`;
 }
 
 function wzCsvHtml() {
@@ -3980,6 +4124,18 @@ function wzReadSources(main) {
 function wireWizard(main) {
   wizard.error = '';
   main.onclick = async (e) => {
+    // The restore door (1.2.0, #20): a file exported on another computer opens
+    // straight into its data — main validates it and the app reloads, so the
+    // wizard never runs (data.months isn't empty any more). Nothing has been
+    // saved during the wizard, so there is no in-memory state to lose. The
+    // error text is main.js's own message, set as text (never markup).
+    if (e.target.closest('[data-wz-restore]')) {
+      e.preventDefault();
+      const res = await window.budgetAPI.importDataFile();
+      if (res === true) reloadIntoRestoredData();
+      else if (typeof res === 'string') $('#wzRestoreErr').textContent = `Couldn't open it: ${res}`;
+      return;
+    }
     if (e.target.closest('[data-wz-back]')) { wizard.step = Math.max(0, wizard.step - 1); paintWizard(); return; }
     if (e.target.closest('[data-wz-next]')) {
       if (wizard.step === 2) {

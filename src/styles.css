@@ -394,6 +394,7 @@ input.inline-date { width: 120px; }
   color: var(--ink-soft); font-weight: 600;
 }
 .panel-sec h3 .muted { text-transform: none; letter-spacing: 0; font-weight: 400; }
+.panel-funds { margin: 0; font-size: .85rem; line-height: 1.5; }
 .panel-nums { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .panel-nums label { display: flex; flex-direction: column; gap: 3px; font-size: .76rem; color: var(--ink-soft); }
 .panel-nums input.money {
@@ -510,7 +511,9 @@ span.neg { color: var(--red); }
 
 /* Modal */
 .modal-overlay {
-  position: fixed; inset: 0; background: rgba(20,28,16,.45); z-index: 40;
+  /* Above the side panel (45): the fund and category panels open name dialogs
+     over themselves, and a dialog under the panel's scrim can't be clicked. */
+  position: fixed; inset: 0; background: rgba(20,28,16,.45); z-index: 46;
   display: flex; align-items: center; justify-content: center;
 }
 .modal {

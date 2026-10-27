@@ -40,7 +40,8 @@ that suggests envelopes and paycheck numbers (the file never leaves the computer
 paychecks, giving, and a curated starter set of envelopes. Finishing builds the current
 month, imports the current month's bank rows, and leaves a quiet "Finish setting up"
 checklist on the Budget page. Quitting mid-wizard saves nothing — it simply runs again
-next launch. Existing installs (a data file already present) never see any of this.
+next launch, or bring in a file exported from another computer from the welcome step and the
+app opens straight on it. Existing installs (a data file already present) never see any of this.
 
 ## Views
 
@@ -120,8 +121,9 @@ next launch. Existing installs (a data file already present) never see any of th
   *available to move* (transactions in, money left, none expected), and *unassigned
   transactions* — each with an inline ⇄ to move money.
 
-  Categories are added with **+ Add category** and removed with the ✕ on their header;
-  removal needs the category or fund balanced first and never touches past months.
+  Categories are added with **+ Add category**; the ⋯ on every category header (expanded or
+  collapsed) opens a panel to rename it in every month, move it up or down, add a fund, or remove
+  it — removal needs the category emptied first and never touches past months.
 - **Exclude transfers from reporting** (Settings) — fund-to-fund transfers stay visible
   inside each fund, but stop counting toward actual income/spending in the summary,
   Year Overview and month recap. Income funds named "Transfer …" count wholly as transfers.
@@ -161,9 +163,11 @@ next launch. Existing installs (a data file already present) never see any of th
   Stored in the data file's `aum` block (data version 6). A 5-slide walkthrough opens on
   the first visit (and any time via the `?` button next to the title), ending with a link
   to the SeedTime podcast episode the concept comes from (opens in the system browser).
-- **Settings** — tithe %, fund rename (updates all months + transactions, also available in
-  the fund panel), new categories, data export, and restore — pick any rolling backup or a
-  previously exported file; the current data is backed up first and the app reloads.
+- **Settings** — tithe %, transfer reporting, data export (with a "Last exported" date — the
+  month-close recap nudges for a fresh copy after 90 days, or once three months exist and there
+  has never been one), and restore — pick any rolling backup or a previously exported file; the
+  current data is backed up first and the app reloads. Fund rename and categories live on the
+  Budget page (the fund panel and the category ⋯ panel).
 
 **Starting the next month** rolls every expense fund's leftover into the new month's carry-over,
 resets income carry-overs to zero, and re-applies planned rules — exactly like copying the
