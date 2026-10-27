@@ -20,3 +20,6 @@ desktop.ini
 
 # the owner's real financial history (the old first-run seed) — must never reach a repo.
 data/seed.json
+
+# Pre-sitting src snapshots (decision D-P4) - local only
+src-backup-*/

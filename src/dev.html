@@ -310,7 +310,6 @@
         <button data-view="garden" class="nav-btn active"><svg class="ni" viewBox="0 0 120 120" aria-hidden="true"><use href="#ni-sunflower"/></svg><span>Garden</span></button>
         <button data-view="budget" class="nav-btn"><svg class="ni" viewBox="0 0 120 120" aria-hidden="true"><use href="#ni-clipboard"/></svg><span>Budget</span></button>
         <button data-view="transactions" class="nav-btn"><svg class="ni" viewBox="0 0 120 120" aria-hidden="true"><use href="#ni-receipt"/></svg><span>Transactions</span></button>
-        <button data-view="import" class="nav-btn" title="Bring in transactions from a bank CSV export"><svg class="ni" viewBox="0 0 120 120" aria-hidden="true"><use href="#ni-import"/></svg><span>Import</span></button>
         <button data-view="reports" class="nav-btn"><svg class="ni" viewBox="0 0 120 120" aria-hidden="true"><use href="#ni-chart"/></svg><span>Year Overview</span></button>
         <button data-view="aum" class="nav-btn" title="Assets Under Management — everything you manage minus what you owe"><svg class="ni" viewBox="0 0 120 120" aria-hidden="true"><use href="#ni-tree"/></svg><span>AUM</span></button>
         <button data-view="settings" class="nav-btn"><svg class="ni" viewBox="0 0 120 120" aria-hidden="true"><use href="#ni-gear"/></svg><span>Settings</span></button>
@@ -338,6 +337,7 @@
     // ?blank=1 boots the empty state (onboarding wizard). ?csv=/path1,/path2
     // makes each "Choose file" serve the next listed path (fixtures work:
     // /tools/fixtures/10-capitalone-card-us.csv); default is /sample.csv.
+    // ?data=/path.json boots from that exported/state file instead of the seed.
     const devParams = new URLSearchParams(location.search);
     const devCsvQueue = (devParams.get('csv') || '/sample.csv').split(',');
     let devCsvIdx = 0;
@@ -349,7 +349,7 @@
             months: [],
             aum: { assets: [], debts: [], snapshots: [], log: [] },
           })
-        : fetch('/data/seed.json').then((r) => r.json()),
+        : fetch(devParams.get('data') || '/data/seed.json').then((r) => r.json()),
       saveData: async (d) => { window.__devSaved = d; return true; },
       openCsv: async () => {
         const p = devCsvQueue[Math.min(devCsvIdx++, devCsvQueue.length - 1)];

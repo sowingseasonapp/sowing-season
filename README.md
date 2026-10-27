@@ -135,7 +135,7 @@ next launch. Existing installs (a data file already present) never see any of th
   Budget and Transactions pages, or the ⇄ in a fund's panel or the Review strip to prefill "From"). A transfer is
   stored as a matched pair of transactions ("Transfer to X" / "Transfer from Y"), so the
   audit trail is kept and income/expense totals are unaffected.
-- **Import** — pick any US bank's CSV export. The importer works the format out itself
+- **Import** — from the Transactions page, pick any US bank's CSV export. The importer works the format out itself
   (delimiter, header row, column roles, date order, sign convention), proves amounts against
   a running-balance column whenever one exists, and **refuses or asks a plain-language
   question instead of guessing** — day-first dates, comma decimals, semicolon files and

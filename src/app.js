@@ -12,7 +12,7 @@ import {
   suggestStarterFunds, starterFundFor, normVendor,
 } from './csv.js';
 import { groupedBars, barList, lineArea } from './charts.js';
-import { spotTx, spotBudget, spotImport, spotAum } from './spots.js';
+import { spotTx, spotBudget, spotAum } from './spots.js';
 
 // Chart series: garden pigments, same CVD-safe blue↔orange axis (see --viz-s1/s2
 // in styles.css for the contrast numbers). Data itself stays crisp vector.
@@ -35,6 +35,10 @@ let txFundFilter = '';
 let txAccountFilter = '';
 let fundSearch = '';
 let importState = null;
+// 1.2.0 (#7): after an import, rows the file held that are dated in the month
+// right after the newest one — { fileName, fileData, answers, nid, count }.
+// Drives the "Start {month} and bring them in" banner on Transactions.
+let importHold = null;
 let flagPanel = null; // 'att' | 'off' | null — which flag list is expanded on the Budget page
 let aumLogOpen = false; // AUM change-log section, collapsed by default
 let budgetFocus = null; // { fund } — arriving from the Garden: open its category, highlight the row
@@ -346,7 +350,9 @@ function render() {
   if (view === 'garden') renderGarden(main);
   else if (view === 'budget') renderBudget(main);
   else if (view === 'transactions') renderTransactions(main);
-  else if (view === 'import') renderImport(main);
+  // 1.2.0 (Q4): Import lives on Transactions. 'import' is kept as an alias for
+  // one release so stale saved state is harmless — remove in 1.3.0.
+  else if (view === 'import') { view = 'transactions'; renderTransactions(main); }
   else if (view === 'reports') renderReports(main);
   else if (view === 'aum') renderAum(main);
   else if (view === 'settings') renderSettings(main);
@@ -1268,7 +1274,7 @@ function checklistNavigate(key) {
     const idx = month.income.findIndex((f) => (f.group || 'bonus') === 'standard');
     if (idx >= 0) showFundPanel({ kind: 'income', idx });
   } else if (key === 'import') {
-    view = 'import'; render();
+    openImportFromTransactions();
   } else if (key === 'unassigned') {
     txFundFilter = '__unassigned__'; txSearch = ''; view = 'transactions'; render();
   }
@@ -1419,7 +1425,7 @@ function renderBudget(main) {
       <td style="width:40px"><button class="btn-ghost" data-xfer="${esc(x.fund)}" title="Transfer this money to another fund">⇄</button></td></tr>`);
 
     const unRows = comp.unassigned.length ? [`<tr>
-      <td colspan="3">${comp.unassigned.length} transaction(s) aren't assigned to a fund this month</td>
+      <td colspan="3">${comp.unassigned.length} transaction${comp.unassigned.length === 1 ? " isn't" : "s aren't"} assigned to a fund this month</td>
       <td style="width:40px"><button class="btn-ghost" data-act="show-unassigned" title="Review them">→</button></td></tr>`] : [];
 
     // Income estimates aren't problems, so they get their own group rather than
@@ -1756,6 +1762,9 @@ function renderBudget(main) {
 
 /* ---------------- Transactions view ---------------- */
 function renderTransactions(main) {
+  // 1.2.0 (Q4): the importer lives here. With a file open, the preview takes
+  // the body; Cancel, ← Back and a finished import return to the list.
+  if (importState) { renderImport(main); return; }
   const month = curMonth();
   const known = new Set();
   for (const f of month.income) known.add(normFund(f.fund));
@@ -1778,20 +1787,31 @@ function renderTransactions(main) {
   const lmap = leftoverMap(month);
 
   let html = `<h1 class="view-title">Transactions — ${monthLabel(month.id)}</h1>
-    <p class="sub">Expenses are negative, income positive. Type <span class="mono">-12.34</span> or <span class="mono">(12.34)</span> for an expense.</p>
+    <p class="sub">Expenses are negative, income positive. Type <span class="mono">-12.34</span> or <span class="mono">(12.34)</span> for an expense, or bring them in from your bank with Import CSV.</p>
     <div class="toolbar">
       <button class="btn btn-accent" id="addTx">+ Add transaction</button>
       <button class="btn" id="txTransferBtn" title="Move money from one fund to another">⇄ Transfer</button>
+      <button class="btn" id="txImportBtn" title="Bring in transactions from a bank CSV export">${icon('file')} Import CSV…</button>
       <input class="search" id="txSearch" placeholder="Search vendor, fund, amount…" value="${esc(txSearch)}">
       ${accounts.length ? `<select class="inline" id="txAccount" title="Filter by account">
         <option value="">All accounts</option>
-        ${accounts.map((a) => `<option value="${esc(a)}" ${a === txAccountFilter ? 'selected' : ''}>${esc(a)}</option>`).join('')}
+        ${accounts.map((a) => `<option value="${esc(a)}" ${a === txAccountFilter ? 'selected' : ''}>${esc(accountLabel(a))}</option>`).join('')}
+        <option value="__name__">Name these accounts…</option>
       </select>` : ''}
       ${txFundFilter ? `<button class="btn btn-sm" id="clearFilter">Fund: ${esc(txFundFilter === '__unassigned__' ? 'unassigned' : txFundFilter)} ✕</button>` : ''}
       <div class="spacer"></div>
       <span class="muted">${list.length} shown · net ${money(sum)}</span>
-    </div>
-    <div class="section"><table class="grid"><thead><tr>
+    </div>`;
+  // #7 banner: the last import left rows dated in the month that comes next.
+  if (importHold) {
+    const n = importHold.count;
+    html += `<div class="section import-summary import-hold">
+      <span><b>${n} row${n === 1 ? '' : 's'} from ${esc(importHold.fileName)} ${n === 1 ? 'is' : 'are'} dated in ${monthLabel(importHold.nid)}, which hasn't started yet.</b></span>
+      <button class="btn btn-accent btn-sm" id="holdGo">Start ${monthLabel(importHold.nid)} and bring ${n === 1 ? 'it' : 'them'} in</button>
+      <button class="btn btn-sm" id="holdDismiss">Not now</button>
+    </div>`;
+  }
+  html += `<div class="section"><table class="grid"><thead><tr>
       <th style="width:110px;text-align:left">Date</th><th style="text-align:left">Vendor</th><th>Amount</th>
       <th style="text-align:left">Fund</th><th style="text-align:left">Description</th><th style="width:120px;text-align:left">Account</th><th style="width:34px"></th>
     </tr></thead><tbody>`;
@@ -1809,7 +1829,7 @@ function renderTransactions(main) {
       <td><select class="inline ${bad ? 'missing' : ''}" data-tx="${i}" data-k="fund">${fundOptions(month, t.fund, lmap)}</select>
         ${bad && t.fund ? `<div class="fund-note">was: ${esc(t.fund)}</div>` : ''}</td>
       <td><input class="inline-text" data-tx="${i}" data-k="description" value="${esc(t.description || '')}"></td>
-      <td><input class="inline-text" data-tx="${i}" data-k="account" value="${esc(t.account || '')}"></td>
+      <td><input class="inline-text" data-tx="${i}" data-k="account" value="${esc(t.account || '')}" placeholder="account" title="${esc(accountLabel(t.account || ''))}"></td>
       <td><button class="btn-ghost" data-del-tx="${i}" title="Delete">🗑</button></td></tr>`;
   }
   if (!list.length) {
@@ -1832,8 +1852,33 @@ function renderTransactions(main) {
     if (nv) nv.focus();
   };
   $('#txTransferBtn').onclick = () => showTransferModal();
+  // One click opens the OS file dialog — no landing page in between.
+  $('#txImportBtn').onclick = async () => {
+    const file = await window.budgetAPI.openCsv();
+    if (!file) return;
+    // Raw bytes when the IPC provides them (encoding detection); text otherwise.
+    loadCsvForImport(file.path.split(/[\\/]/).pop(), file.bytes ?? file.text, {});
+  };
+  const holdGo = $('#holdGo');
+  if (holdGo) holdGo.onclick = () => {
+    const hold = importHold;
+    const last = data.months[data.months.length - 1];
+    // The normal month-close workflow for the closing month; once the new month
+    // exists, the same file is re-read with no dialog. Everything already
+    // imported dedupes exactly (S1), so only the held rows come up ticked.
+    showMonthCloseWorkflow(last, hold.nid, () => {
+      importHold = null;
+      loadCsvForImport(hold.fileName, hold.fileData, hold.answers);
+    });
+  };
+  const holdDismiss = $('#holdDismiss');
+  if (holdDismiss) holdDismiss.onclick = () => { importHold = null; render(); };
   const acctSel = $('#txAccount');
-  if (acctSel) acctSel.onchange = (e) => { txAccountFilter = e.target.value; render(); };
+  if (acctSel) acctSel.onchange = (e) => {
+    // #26: the last option opens the naming dialog and leaves the filter alone.
+    if (e.target.value === '__name__') { e.target.value = txAccountFilter; showAccountNamesDialog(); return; }
+    txAccountFilter = e.target.value; render();
+  };
   $('#txSearch').oninput = (e) => { txSearch = e.target.value; render(); $('#txSearch').focus(); const v = $('#txSearch').value; $('#txSearch').setSelectionRange(v.length, v.length); };
   const cf = $('#clearFilter');
   if (cf) cf.onclick = () => { txFundFilter = ''; render(); };
@@ -2040,14 +2085,85 @@ function persistResolvedProfile(report, answers) {
   }).catch(() => { /* profiles are a convenience — never block an import on them */ });
 }
 
-function renderImport(main) {
-  let html = `<h1 class="view-title">Import bank CSV</h1>
-    <p class="sub">Pick the CSV you export from your bank. The app works out the file's format, matches each row to a fund based on your history, flags duplicates and card payments, and nothing is saved until you click Import. If something about the file is unclear, it asks instead of guessing.</p>
-    <div class="toolbar"><button class="btn btn-accent" id="pickCsv">${icon('file')} Choose CSV file…</button></div>`;
+// Parse (or re-parse, once questions are answered) and build the preview.
+// Refusals and blocking questions come from the importer — the UI only renders.
+// Module-level (1.2.0): called from the Transactions toolbar, the preview's
+// re-parse paths (Not this bank?, blocking questions) and the held-rows re-read.
+async function loadCsvForImport(fileName, fileData, answers) {
+  let store = null;
+  try { store = await window.budgetAPI.loadBankProfiles(); } catch { /* first run / dev */ }
+  let result;
+  try { result = parseBankFile(fileData, { answers, profiles: store?.profiles || [] }); }
+  catch (err) { toast(err.message); return; }
+  if (result.error) {
+    importState = { fileName, fileData, rows: [], refusal: result.error, answers };
+    view = 'transactions';
+    render();
+    return;
+  }
+  const { records, report } = result;
+  if (!records.length && !report.questions.length) {
+    toast('No transactions found in that file.');
+    return;
+  }
+  const vendorMap = buildVendorMap(data.months);
+  const claimed = new Set();
+  const blocked = report.questions.length > 0;
+  // Scored matching (§8) over the whole file at once, best match first (S1):
+  // ≥0.9 auto-marks as a duplicate; 0.6–0.9 is a "possible duplicate" —
+  // still selected, badged for the user to review. Rows dated in a month
+  // that doesn't exist yet can't import, so they don't take part.
+  const dups = matchDuplicates(data.months,
+    records.map((rec) => (data.months.some((m) => m.id === rec.date.slice(0, 7)) ? rec : null)),
+    claimed, { idTrusted: report.externalIdTrusted });
+  const rows = records.map((rec, i) => {
+    const monthId = rec.date.slice(0, 7);
+    const month = data.months.find((m) => m.id === monthId);
+    const dup = month ? dups[i] : null;
+    const duplicate = !!dup && dup.score >= 0.9;
+    let fund = '', suggestNote = '';
+    if (month) {
+      // The memo often holds the real merchant string (credit-union exports
+      // put a type code in Description) — try it when the vendor is unknown.
+      const sug = suggestFund(vendorMap, rec.vendor)
+        || (rec.memo ? suggestFund(vendorMap, rec.memo) : null);
+      if (sug) {
+        const canon = canonicalFund(month, sug.fund);
+        if (canon) { fund = canon; suggestNote = `auto-matched (seen ${sug.n}×)`; }
+      }
+    }
+    return {
+      rec, monthId, monthExists: !!month, duplicate,
+      // Dated before the newest month — the app's "closed" months (C3). The
+      // row still posts where its date says; the badge and notice just make
+      // the consequence visible. Carry-overs follow automatically (v7).
+      earlierMonth: !!month && monthId < data.months[data.months.length - 1].id,
+      possibleDup: !!dup && dup.score < 0.9, dup, fund, suggestNote,
+      include: !blocked && !!month && !duplicate && !rec.isCardPayment,
+    };
+  });
+  importState = { fileName, fileData, rows, report, answers };
+  view = 'transactions';
+  render();
+}
 
-  // Landing state only: once a file is open the view fills with live data,
-  // and paintings never stand beside live data.
-  if (!importState) html += `<div class="spot-empty spot-import">${spotImport()}</div>`;
+// Every door into the importer (Transactions toolbar, the Garden's "Open Import",
+// the finish-setting-up checklist) lands on Transactions and opens the file
+// dialog straight away.
+function openImportFromTransactions() {
+  view = 'transactions'; importState = null; txSearch = ''; txFundFilter = ''; txAccountFilter = '';
+  render();
+  const btn = $('#txImportBtn');
+  if (btn) btn.click();
+}
+
+// The import preview. Reached only through renderTransactions once a file is
+// open (1.2.0, Q4) — there is no landing page any more.
+function renderImport(main) {
+  if (!importState) { renderTransactions(main); return; }
+  let html = `<h1 class="view-title">Import bank CSV</h1>
+    <p class="sub">The app works out the file's format, matches each row to a fund based on your history, flags duplicates and card payments, and nothing is saved until you click Import. If something about the file is unclear, it asks instead of guessing.
+      <a href="#" id="importBack">← Back to transactions</a></p>`;
 
   if (importState && importState.refusal) {
     html += `<div class="section import-refusal">
@@ -2059,18 +2175,43 @@ function renderImport(main) {
     const questions = report?.questions || [];
     const inc = importState.rows.filter((r) => r.include);
     html += `<div class="toolbar">
-      <span><b>${esc(importState.fileName)}</b> — ${importState.rows.length} rows, <b>${inc.length}</b> selected to import</span>
+      <span><b>${esc(importState.fileName)}</b> — Importing <b>${inc.length}</b> of ${importState.rows.length} row${importState.rows.length === 1 ? '' : 's'}</span>
       <div class="spacer"></div>
       <button class="btn" id="cancelImport">Cancel</button>
-      <button class="btn btn-accent" id="doImport" ${inc.length && !questions.length ? '' : 'disabled'}>Import ${inc.length} transaction(s)</button>
+      <button class="btn btn-accent" id="doImport" ${inc.length && !questions.length ? '' : 'disabled'}>Import ${inc.length} transaction${inc.length === 1 ? '' : 's'}</button>
     </div>`;
 
-    // Summary band: the aggregates are what make a misread file obvious —
-    // an inverted sign shows up as impossible income, a date bug as a wrong year.
+    // Summary band (Q1, 1.2.0): the headline is what the Import button will do —
+    // the ticked rows only — so an auto-unticked duplicate or card payment never
+    // inflates "Money out". The whole file keeps a second, quieter line: its
+    // aggregates are what make a misread file obvious (an inverted sign shows
+    // up as impossible income, a date bug as a wrong year).
     const recs = importState.rows.map((r) => r.rec);
-    const inTotal = recs.reduce((a, r) => a + (r.amount > 0 ? r.amount : 0), 0);
-    const outTotal = recs.reduce((a, r) => a + (r.amount < 0 ? r.amount : 0), 0);
-    const dates = recs.map((r) => r.date).sort();
+    const sel = inc.map((r) => r.rec);
+    const sumIn = (rs) => rs.reduce((a, r) => a + (r.amount > 0 ? r.amount : 0), 0);
+    const sumOut = (rs) => rs.reduce((a, r) => a + (r.amount < 0 ? r.amount : 0), 0);
+    const inTotal = sumIn(sel), outTotal = sumOut(sel);
+    const allIn = sumIn(recs), allOut = sumOut(recs);
+    // Date range of the selection; with nothing ticked, the file's — the line
+    // never reads "Importing 0 of 60 rows · —".
+    const dates = (sel.length ? sel : recs).map((r) => r.date).sort();
+    const unticked = importState.rows.filter((r) => !r.include);
+    const untickDup = unticked.filter((r) => r.duplicate).length;
+    const untickCard = unticked.filter((r) => !r.duplicate && r.rec.isCardPayment).length;
+    const untickHeld = unticked.filter((r) => !r.monthExists && !r.duplicate && !r.rec.isCardPayment).length;
+    const untickManual = unticked.length - untickDup - untickCard - untickHeld;
+    // "— 20 duplicates and 5 card payments are unticked", "— 2 you unticked",
+    // or nothing. Built from the non-zero parts only.
+    const autoParts = [
+      untickDup ? `${untickDup} duplicate${untickDup === 1 ? '' : 's'}` : '',
+      untickCard ? `${untickCard} card payment${untickCard === 1 ? '' : 's'}` : '',
+      untickHeld ? `${untickHeld} in a month that hasn't started` : '',
+    ].filter(Boolean);
+    const autoClause = autoParts.length
+      ? `${autoParts.join(' and ')} ${untickDup + untickCard + untickHeld === 1 ? 'is' : 'are'} unticked` : '';
+    const manualClause = untickManual ? `${untickManual} you unticked` : '';
+    const untickClause = autoClause || manualClause
+      ? ` — ${[autoClause, manualClause].filter(Boolean).join(', and ')}` : '';
     const anomalies = report?.anomalies || [];
     const pending = report?.counts?.pending || 0;
     let balanceLine = '';
@@ -2081,9 +2222,10 @@ function renderImport(main) {
     }
     html += `<div class="section import-summary">
       ${report?.profile ? `<span><b>${esc(report.profile.name || "A format you've confirmed before")}</b> · recognised automatically <button class="btn btn-sm" id="notThisBank">Not this bank?</button></span>` : ''}
-      <span><b>${recs.length}</b> row${recs.length === 1 ? '' : 's'} · ${fmtDateRange(dates[0], dates[dates.length - 1])}</span>
+      <span>Importing <b>${sel.length}</b> of ${recs.length} row${recs.length === 1 ? '' : 's'} · ${fmtDateRange(dates[0], dates[dates.length - 1])}</span>
       <span>Money in <b class="pos">${money(inTotal)}</b></span>
       <span>Money out <b class="neg">${money(Math.abs(outTotal))}</b></span>
+      <span class="muted import-file-line">In this file: ${recs.length} row${recs.length === 1 ? '' : 's'} · in ${money(allIn)} · out ${money(Math.abs(allOut))}${untickClause}</span>
       ${balanceLine}
       ${pending ? `<span class="muted">${pending} pending row${pending === 1 ? '' : 's'} skipped (they'll re-appear as posted in a later export)</span>` : ''}
       ${(() => { const n = importState.rows.filter((r) => r.possibleDup).length;
@@ -2139,7 +2281,7 @@ function renderImport(main) {
         <td><input type="checkbox" data-imp-inc="${i}" ${row.include ? 'checked' : ''} ${row.monthExists ? '' : 'disabled'}></td>
         <td>${fmtDate(rec.date)}</td>
         <td title="${esc(rec.vendor)}${rec.memo ? ' — ' + esc(rec.memo) : ''}">${esc(rec.vendor.length > 38 ? rec.vendor.slice(0, 38) + '…' : rec.vendor)}
-          ${rec.account ? `<span class="fund-note"> · ${esc(rec.account)}</span>` : ''}
+          ${rec.account ? `<span class="fund-note"> · ${esc(accountLabel(rec.account))}</span>` : ''}
           ${rec.memo ? `<div class="fund-note">${esc(rec.memo.length > 44 ? rec.memo.slice(0, 44) + '…' : rec.memo)}</div>` : ''}</td>
         <td class="${moneyCls(rec.amount)}">${money(rec.amount)}</td>
         <td>${monthLabel(row.monthId)}${row.earlierMonth ? ' <span class="muted">(closed)</span>' : ''}</td>
@@ -2152,70 +2294,7 @@ function renderImport(main) {
   }
   main.innerHTML = html;
 
-  // Parse (or re-parse, once questions are answered) and build the preview.
-  // Refusals and blocking questions come from the importer — the UI only renders.
-  const loadCsvForImport = async (fileName, fileData, answers) => {
-    let store = null;
-    try { store = await window.budgetAPI.loadBankProfiles(); } catch { /* first run / dev */ }
-    let result;
-    try { result = parseBankFile(fileData, { answers, profiles: store?.profiles || [] }); }
-    catch (err) { toast(err.message); return; }
-    if (result.error) {
-      importState = { fileName, fileData, rows: [], refusal: result.error, answers };
-      render();
-      return;
-    }
-    const { records, report } = result;
-    if (!records.length && !report.questions.length) {
-      toast('No transactions found in that file.');
-      return;
-    }
-    const vendorMap = buildVendorMap(data.months);
-    const claimed = new Set();
-    const blocked = report.questions.length > 0;
-    // Scored matching (§8) over the whole file at once, best match first (S1):
-    // ≥0.9 auto-marks as a duplicate; 0.6–0.9 is a "possible duplicate" —
-    // still selected, badged for the user to review. Rows dated in a month
-    // that doesn't exist yet can't import, so they don't take part.
-    const dups = matchDuplicates(data.months,
-      records.map((rec) => (data.months.some((m) => m.id === rec.date.slice(0, 7)) ? rec : null)),
-      claimed, { idTrusted: report.externalIdTrusted });
-    const rows = records.map((rec, i) => {
-      const monthId = rec.date.slice(0, 7);
-      const month = data.months.find((m) => m.id === monthId);
-      const dup = month ? dups[i] : null;
-      const duplicate = !!dup && dup.score >= 0.9;
-      let fund = '', suggestNote = '';
-      if (month) {
-        // The memo often holds the real merchant string (credit-union exports
-        // put a type code in Description) — try it when the vendor is unknown.
-        const sug = suggestFund(vendorMap, rec.vendor)
-          || (rec.memo ? suggestFund(vendorMap, rec.memo) : null);
-        if (sug) {
-          const canon = canonicalFund(month, sug.fund);
-          if (canon) { fund = canon; suggestNote = `auto-matched (seen ${sug.n}×)`; }
-        }
-      }
-      return {
-        rec, monthId, monthExists: !!month, duplicate,
-        // Dated before the newest month — the app's "closed" months (C3). The
-        // row still posts where its date says; the badge and notice just make
-        // the consequence visible. Carry-overs follow automatically (v7).
-        earlierMonth: !!month && monthId < data.months[data.months.length - 1].id,
-        possibleDup: !!dup && dup.score < 0.9, dup, fund, suggestNote,
-        include: !blocked && !!month && !duplicate && !rec.isCardPayment,
-      };
-    });
-    importState = { fileName, fileData, rows, report, answers };
-    render();
-  };
-
-  $('#pickCsv').onclick = async () => {
-    const file = await window.budgetAPI.openCsv();
-    if (!file) return;
-    // Raw bytes when the IPC provides them (encoding detection); text otherwise.
-    loadCsvForImport(file.path.split(/[\\/]/).pop(), file.bytes ?? file.text, {});
-  };
+  $('#importBack').onclick = (e) => { e.preventDefault(); importState = null; render(); };
 
   const notThis = $('#notThisBank');
   if (notThis) {
@@ -2233,7 +2312,7 @@ function renderImport(main) {
     $('#doImport').onclick = () => {
       const chosen = importState.rows.filter((r) => r.include);
       const missing = chosen.filter((r) => !r.fund);
-      if (missing.length && !confirm(`${missing.length} selected row(s) have no fund picked — they'll show as "unassigned" until you fix them. Import anyway?`)) return;
+      if (missing.length && !confirm(`${missing.length} selected row${missing.length === 1 ? ' has' : 's have'} no fund picked — ${missing.length === 1 ? "it'll" : "they'll"} show as "unassigned" until you fix ${missing.length === 1 ? 'it' : 'them'}. Import anyway?`)) return;
       // S8: bank files list newest first, so the LAST row pushed is the oldest
       // month the file touched. Track the newest month that received a row.
       let n = 0, newest = null;
@@ -2245,11 +2324,20 @@ function renderImport(main) {
       }
       persistResolvedProfile(importState.report, importState.answers);
       const early = chosen.filter((r) => r.earlierMonth);
+      // #7: rows dated in the month right after the newest one couldn't come in.
+      // Hold the file (the same bytes "Not this bank?" re-reads) so the banner
+      // on Transactions can start that month and re-read it — no second dialog.
+      // Two or more months ahead would need two closes; those stay badged only.
+      const nidAfterNewest = nextMonthId(data.months[data.months.length - 1].id);
+      const held = importState.rows.filter((r) => !r.monthExists && r.monthId === nidAfterNewest);
+      importHold = held.length
+        ? { fileName: importState.fileName, fileData: importState.fileData, answers: importState.answers, nid: nidAfterNewest, count: held.length }
+        : null;
       importState = null;
       // markDirty runs the carry-over resync and reports what it corrected —
       // the toast's "updated" clause is that report, not a guess (C3/Option A).
-      const carryChanges = markDirty(`the import of ${n} transaction(s)`);
-      let msg = `Imported ${n} transaction(s)`;
+      const carryChanges = markDirty(`the import of ${n} transaction${n === 1 ? '' : 's'}`);
+      let msg = `Imported ${n} transaction${n === 1 ? '' : 's'}`;
       if (early.length) {
         const where = [...new Set(early.map((r) => r.monthId))].sort().map(monthName).join(', ');
         const fixed = [...new Set(carryChanges.map((c) => c.month))].sort().map(monthName);
@@ -2888,7 +2976,7 @@ function runGardenAction(a) {
   if (a.kind === 'transfer') showTransferModal(a.from || '', null, a.to || '');
   else if (a.kind === 'budget') { budgetFocus = a.fund ? { fund: a.fund } : null; fundSearch = ''; view = 'budget'; render(); }
   else if (a.kind === 'unassigned') { txFundFilter = '__unassigned__'; txSearch = ''; view = 'transactions'; render(); }
-  else if (a.kind === 'import') { view = 'import'; render(); }
+  else if (a.kind === 'import') openImportFromTransactions();
   else if (a.kind === 'useActual') applyActualChecks(curMonth(), a.fund);
 }
 
@@ -3105,7 +3193,7 @@ function renameFundEverywhere(from, to) {
     for (const t of m.transactions) if (normFund(t.fund) === normFund(from)) { t.fund = to; nTx++; }
     if (m.checks && m.checks[from]) { m.checks[to] = m.checks[from]; delete m.checks[from]; }
   }
-  markDirty(`the rename to "${to}"`); toast(`Renamed in ${nStruct} month table(s) and ${nTx} transaction(s).`);
+  markDirty(`the rename to "${to}"`); toast(`Renamed in ${nStruct} month table${nStruct === 1 ? '' : 's'} and ${nTx} transaction${nTx === 1 ? '' : 's'}.`);
   return null;
 }
 
@@ -3151,6 +3239,65 @@ function fmtBytes(n) {
 function reloadIntoRestoredData() {
   clearTimeout(saveTimer); saveTimer = null;
   location.reload();
+}
+
+/* ---------------- Named accounts (1.2.0, #26) ----------------
+ * The bank puts "7741" in the file; the user calls it "Chase checking". Names
+ * live in data.settings.accountNames = { "7741": "Chase checking" } and are
+ * display only: a transaction's account field is never rewritten, so the
+ * CSV dedupe and the vendor map keep working on the bank's raw string. The
+ * field is optional and ignored by every migration (no data.version change). */
+function accountLabel(acct) {
+  const nm = data.settings.accountNames?.[acct];
+  return nm ? `${nm} · ${acct}` : acct;
+}
+
+// Every distinct account string seen in any month, so a card the current
+// month hasn't touched can still be named.
+function allAccountStrings() {
+  return [...new Set(data.months.flatMap((m) => m.transactions.map((t) => (t.account || '').trim())).filter(Boolean))].sort();
+}
+
+function showAccountNamesDialog() {
+  const accounts = allAccountStrings();
+  const names = data.settings.accountNames || {};
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal" style="width:440px">
+      <h2>Name these accounts</h2>
+      <p class="muted">The number is what your bank puts in its file. Give it a name you'd use —
+        it shows next to the number wherever an account appears. Leave a name blank to clear it.</p>
+      ${accounts.map((a, i) => `<div class="modal-row">
+        <label title="${esc(a)}">${esc(a)}</label>
+        <input class="search" data-acct-name="${i}" maxlength="40" placeholder="e.g. Chase checking" value="${esc(names[a] || '')}">
+      </div>`).join('')}
+      <div class="modal-actions">
+        <button class="btn" id="anCancel">Cancel</button>
+        <button class="btn btn-accent" id="anSave">Save</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  overlay.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') close();
+    if (e.key === 'Enter' && e.target.matches('[data-acct-name]')) $('#anSave', overlay).click();
+  });
+  $('#anCancel', overlay).onclick = close;
+  $('#anSave', overlay).onclick = () => {
+    const next = { ...names };
+    accounts.forEach((a, i) => {
+      const v = $(`[data-acct-name="${i}"]`, overlay).value.trim();
+      if (v) next[a] = v; else delete next[a];
+    });
+    if (Object.keys(next).length) data.settings.accountNames = next;
+    else delete data.settings.accountNames;
+    close();
+    markDirty('naming accounts'); render();
+  };
+  const first = $('[data-acct-name]', overlay);
+  if (first) first.focus();
 }
 
 async function showRestoreModal() {
@@ -3358,13 +3505,19 @@ function renderSettings(main) {
 }
 
 /* ---------------- New month ---------------- */
-function createNextMonth(last) {
+// onCreated (1.2.0, #7): runs after the month exists, the page has rendered and
+// the toast is up — the import banner uses it to re-read its file. A month
+// started any other way (the sidebar) drops a pending hold: its banner would
+// now say "hasn't started yet" about a month that has.
+function createNextMonth(last, onCreated) {
   const next = buildNextMonth(last, data.settings.tithePercent ?? 0.15);
   data.months.push(next);
   currentMonthId = next.id;
   view = 'budget'; flagPanel = null;
+  if (!onCreated) importHold = null;
   markDirty(`starting ${monthLabel(next.id)}`); render();
   toast(`${monthLabel(next.id)} created — review planned amounts.`);
+  if (onCreated) onCreated();
 }
 
 // End-of-month workflow: a short recap of the closing month (stats, pacing wins,
@@ -3372,11 +3525,10 @@ function createNextMonth(last) {
 // then month creation. Fully skippable.
 function startNextMonth() {
   const last = data.months[data.months.length - 1];
-  const nid = (() => { const [y, m] = last.id.split('-').map(Number); return m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, '0')}`; })();
-  showMonthCloseWorkflow(last, nid);
+  showMonthCloseWorkflow(last, nextMonthId(last.id));
 }
 
-function showMonthCloseWorkflow(last, nid) {
+function showMonthCloseWorkflow(last, nid, onCreated) {
   const comp = computeMonth(last);
   const s = comp.summary;
   // Guard (W4): "closing" a month that hasn't even started is almost always a
@@ -3491,11 +3643,12 @@ function showMonthCloseWorkflow(last, nid) {
       const from = x.dataset.wfXfer;
       currentMonthId = last.id;
       close();
-      showTransferModal(from, () => showMonthCloseWorkflow(last, nid));
+      // Re-entry after an inline transfer keeps the onCreated hook (#7).
+      showTransferModal(from, () => showMonthCloseWorkflow(last, nid, onCreated));
     }
   });
   $('#wfCancel', overlay).onclick = close;
-  $('#wfGo', overlay).onclick = () => { close(); createNextMonth(last); };
+  $('#wfGo', overlay).onclick = () => { close(); createNextMonth(last, onCreated); };
 }
 
 /* ---------------- Onboarding wizard ----------------
@@ -4077,7 +4230,9 @@ function enterApp() {
 
   $('#monthSelect').onchange = (e) => { currentMonthId = e.target.value; txSearch = ''; txFundFilter = ''; txAccountFilter = ''; fundSearch = ''; flagPanel = null; render(); };
   $('#newMonthBtn').onclick = startNextMonth;
-  $$('.nav-btn').forEach((b) => b.onclick = () => { view = b.dataset.view; txSearch = ''; txFundFilter = ''; txAccountFilter = ''; render(); });
+  // Leaving Transactions mid-preview drops the preview (and any held rows from
+  // the last import) so nothing strands behind the next view.
+  $$('.nav-btn').forEach((b) => b.onclick = () => { view = b.dataset.view; txSearch = ''; txFundFilter = ''; txAccountFilter = ''; importState = null; importHold = null; render(); });
   $('#supportLink').onclick = () => window.budgetAPI.openExternal(KOFI_URL);
   // The draft carries the build version (U3) — composed at click time so a
   // mid-session update (future) can't stamp a stale number.

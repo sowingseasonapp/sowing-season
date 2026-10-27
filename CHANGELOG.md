@@ -9,6 +9,58 @@ so entries before that are dated by when the work happened, not by commit.
 
 ---
 
+## Unreleased — 1.2.0
+
+### 2026-10-26 — Importer summary, Import into Transactions, import starts the month, named accounts (sitting A: W1–W4)
+
+Sitting A of the 1.2.0 work order (`_cowork/work-order-1.2.0.md`, items W1–W4; roadmap Q1 and Q4,
+three-year report wishes #7 and #26). `src/app.js`, `src/index.html`, `src/dev.html`, `src/styles.css`,
+`README.md`. **No `compute.js` change, no data.version bump, no migration.** One optional field added,
+`settings.accountNames`, ignored by every migration and by `buildNextMonth`. Suites 599 / 1060 (1091 with
+the real-export sections) / 156 / 17, unchanged from 1.1.1.
+
+- **W1 — the importer summary reports what's being imported (Q1).** The band's headline — `Importing 35 of
+  60 rows · Jan 3 – Jan 31, 2026`, Money in, Money out — is now summed over the *ticked* rows only, so an
+  auto-unticked duplicate or card payment never inflates the number the Import button is about to act on.
+  The whole file keeps a second, quieter line (`In this file: 60 rows · in $3,120.00 · out $4,210.55 — 20
+  duplicates and 5 card payments are unticked`): that line is the misread-file tripwire (an inverted sign
+  shows up as impossible income) and never moves with a checkbox. The clause names the non-zero reasons
+  only (duplicates, card payments, rows in a month that hasn't started, rows you unticked). With
+  everything unticked the headline reads `$0.00 / $0.00` and the date range falls back to the file's.
+  The toolbar count uses the same phrasing. The `transaction(s)` / `row(s)` / `table(s)` plurals in the
+  importer, the review strip and the rename toast are now real plurals.
+- **W2 — Import leaves the sidebar and lives on Transactions (Q4, D3).** The sidebar is six items. The
+  Transactions toolbar gains `Import CSV…` after ⇄ Transfer; one click opens the OS file dialog, and once a
+  file is open the preview replaces the list, with `← Back to transactions` and Cancel both returning to it.
+  `loadCsvForImport` was a closure inside `renderImport`; it is now module-level so the toolbar, the
+  preview's re-parse paths (Not this bank?, blocking questions) and W3's re-read all share it. Every old
+  door still works: the Garden's `Open Import` action and the finish-setting-up checklist's import item
+  both land on Transactions and open the dialog (`openImportFromTransactions`). **`view === 'import'` is
+  aliased to Transactions for this release and removed in 1.3.0.** Leaving Transactions mid-preview drops
+  the preview. The landing-page painting (`spotImport`) is no longer rendered; the export stays in
+  `spots.js`, unreferenced.
+- **W3 — an import starts the month it needs (#7; friction A-15, A-26, B-07).** The import happens first,
+  exactly as before. When the file also held rows dated in the month right after the newest one, the
+  Transactions page shows one banner: `3 rows from chase-feb.csv are dated in March 2027, which hasn't
+  started yet. [Start March 2027 and bring them in] [Not now]`. The button opens the normal month-close
+  workflow for the closing month; when the month is created the **same file is re-read automatically** —
+  no file dialog — and the preview opens with the held rows ticked and everything already imported
+  badged `duplicate` (Batch 1's exact-match dedupe). Plumbing: `createNextMonth(last, onCreated)` and
+  `showMonthCloseWorkflow(last, nid, onCreated)`; the inline-transfer re-entry passes the hook along.
+  "Not now", leaving Transactions, or starting a month from the sidebar clears the banner. Rows two or
+  more months ahead don't trigger it (badge and tooltip still explain them). Nothing is written to disk —
+  the hold keeps the bytes the preview already held for "Not this bank?". `startNextMonth` now uses the
+  `nextMonthId` already imported from `compute.js` instead of an inline copy.
+- **W4 — name the accounts (#26; A-23, B-13).** The account filter's last option is `Name these accounts…`,
+  which opens a dialog listing every distinct account string seen in **any** month, one text field each
+  (40 chars). Names live in `data.settings.accountNames = { "7741": "Chase checking" }` and are display
+  only: the filter, the import preview's `· 7741` note and the Account cell's hover title show
+  `Chase checking · 7741`; the transaction's `account` field is never rewritten, so the CSV dedupe and the
+  vendor map keep working on the bank's raw string. Clearing a name removes the key; the last cleared name
+  removes the object. Every render of a name goes through `esc()`.
+- **Dev harness:** `dev.html` accepts `?data=/path.json` to boot from an exported or sim-state file instead
+  of the seed (used to walk W3 against the A-M06 state).
+
 ## 1.1.1 — 2026-10-25 — three-year simulation, batches 1–3
 
 Three fix batches from the three-year longevity simulation, shipped together as one patch:
