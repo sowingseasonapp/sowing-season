@@ -9,7 +9,9 @@ so entries before that are dated by when the work happened, not by commit.
 
 ---
 
-## Unreleased — 1.2.1
+## 1.2.1 — 2026-10-31 — carried-in split, Batches 4 + 4b
+
+Two sittings from the 1.2.1 work order: the three-year simulation's Batches 4 and 4b — red is split into "over" (this month) and "carrying" (inherited), with no change to the numbers — plus wishes #12, #13, #17, #23, #24 and the B-16 chip. First `compute.js` change since 1.1.1, additive only (`fundSplit`, three `fundFlags` fields, S12 offsets, one `buildNextMonth` line); no data.version bump; one optional field added (`fund.pausedPlanned`). `computeMonth` verified byte-identical on 82 simulated months.
 
 ### 2026-10-31 — Bill went up, goal arithmetic in words, tithe preview, overdraw warning (sitting B: W7–W11)
 
