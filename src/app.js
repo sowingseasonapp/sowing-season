@@ -3,7 +3,7 @@ import {
   monthLabel, normFund, r2, migrateV2, migrateV3, migrateV4,
   autoPlanned, isOverridden, fundFlags, savingsMonthly, migrateV5,
   migrateV6, migrateV7, resyncCarryOvers, aumTotals, upsertSnapshot, aumLastUpdated,
-  MONTH_NAMES, nextMonthId,
+  MONTH_NAMES, nextMonthId, monthDiff,
 } from './compute.js';
 import { gardenState, incomeCheckIns, stonesLaidIn, sownStreak, monthContext, recentPerCheckAvg, fundDeposits } from './garden.js';
 import { sceneSvg, stripSvg, plantSprite, butterflySymbol, PALETTE_TOKENS, GARDEN_MILESTONE_LABELS } from './garden-scene.js';
@@ -329,6 +329,22 @@ function recalcRules(month) {
   applyTitheRules(month, data.settings.tithePercent ?? 0.15);
 }
 
+// #24 (W10): the tithe moves when income planned, an exemption or a per-check
+// titheable amount changes — in a section that may be off screen. Callers
+// capture titheSum before and after recalcRules and toast titheMovedNote.
+// A month with no tithe-rule fund (the wizard's "Not right now") says nothing.
+function titheSum(month) {
+  let s = 0;
+  for (const c of month.categories) for (const f of c.funds) if (f.rule && f.rule.type === 'tithe') s = r2(s + (f.planned || 0));
+  return s;
+}
+function hasTitheFund(month) {
+  return month.categories.some((c) => c.funds.some((f) => f.rule && f.rule.type === 'tithe'));
+}
+function titheMovedNote(before, after) {
+  return Math.abs(after - before) > 0.004 ? `Tithe moved ${money(before)} → ${money(after)} with that change. Ctrl+Z undoes both.` : '';
+}
+
 // C2 (v7): a fund's carry-over is derived from last month's leftover and can't
 // be typed — except where there is no last month to derive from: the budget's
 // first month, or a fund added mid-year. There it's the opening balance and
@@ -487,17 +503,45 @@ function showTransferModal(presetFrom = '', onDone = null, presetTo = '') {
   });
   $('#tCancel', overlay).onclick = close;
   (!$('#tFrom', overlay).value ? $('#tFrom', overlay) : !$('#tTo', overlay).value ? $('#tTo', overlay) : $('#tAmt', overlay)).focus();
-  $('#tGo', overlay).onclick = () => {
+  // #23 (W11): a transfer that leaves the "from" fund below zero warns once —
+  // the button becomes "Transfer anyway" and a second click with the same fund
+  // and amount goes through (Default 3: warn and ask, don't block). Changing
+  // either resets it. A transfer that doesn't overdraw is one click, as before.
+  let warned = null;
+  const go = $('#tGo', overlay);
+  const resetWarn = () => {
+    if (warned === null) return;
+    warned = null; go.textContent = 'Transfer';
+    const err = $('#tErr', overlay);
+    if (err.classList.contains('modal-warn')) { err.textContent = ''; err.className = 'modal-err'; }
+  };
+  $('#tFrom', overlay).addEventListener('change', resetWarn);
+  $('#tAmt', overlay).addEventListener('input', resetWarn);
+  go.onclick = () => {
     const from = $('#tFrom', overlay).value, to = $('#tTo', overlay).value;
     const amt = Math.abs(parseMoney($('#tAmt', overlay).value));
     const date = parseUserDate($('#tDate', overlay).value);
     const note = $('#tNote', overlay).value.trim();
     const err = $('#tErr', overlay);
-    err.textContent = ''; // a refusal from the last attempt shouldn't outlive the fix
+    err.textContent = ''; err.className = 'modal-err'; // a refusal from the last attempt shouldn't outlive the fix
     if (!from || !to) { err.textContent = 'Pick both funds.'; return; }
     if (normFund(from) === normFund(to)) { err.textContent = 'Pick two different funds.'; return; }
     if (isNaN(amt) || amt <= 0) { err.textContent = 'Enter an amount greater than zero.'; return; }
     if (!date) { err.textContent = 'Enter the date as m/d/yy.'; return; }
+    const left = lmap[normFund(from)];
+    if (left !== undefined) {
+      const after = r2(left - amt);
+      const key = `${normFund(from)}|${amt}`;
+      if (after < -0.004 && warned !== key) {
+        err.className = 'modal-warn';
+        err.textContent = left < -0.004
+          ? `"${from}" is already ${money(-left)} short. Taking ${money(amt)} out leaves it ${money(-after)} short.`
+          : `"${from}" has ${money(left)} left. Taking ${money(amt)} out leaves it ${money(-after)} short — the money has to come from somewhere later.`;
+        go.textContent = 'Transfer anyway';
+        warned = key;
+        return;
+      }
+    }
     // S5: the pair posts to the month its date names, or is refused — the same
     // W6 rule the Transactions date edit follows. compute.js counts a row by the
     // month that holds it, so a pair dated elsewhere would move money between
@@ -624,7 +668,9 @@ function setupFormHtml(setup, monthId) {
 }
 
 // Show/hide the fields belonging to the selected behaviour and keep the result line live.
-function wireSetupForm(root, { monthId, carryOver = 0, onChange = null }) {
+// `fund` is the panel's live fund (absent in the add dialog): with it, the
+// result line can lead with the user's own planned when it overrides the setup.
+function wireSetupForm(root, { monthId, carryOver = 0, onChange = null, fund = null }) {
   // `commit` separates "show me what this would do" (every keystroke) from
   // "save it" (blur / enter / picking a behaviour), so typing 2400 doesn't
   // briefly save 2, then 24, then 240.
@@ -636,11 +682,26 @@ function wireSetupForm(root, { monthId, carryOver = 0, onChange = null }) {
     const calc = $('#fsCalc', root);
     if (res.error) calc.innerHTML = `<span class="muted">${esc(res.error)}</span>`;
     else {
-      const auto = autoPlanned({ carryOver, setup: res.setup }, monthId);
-      calc.innerHTML = auto == null
-        ? `Planned this month: <b>you set it</b> <span class="muted">— this type doesn't calculate an amount.</span>`
-        : `Planned this month: <b>${money(auto)}</b>${b === 'build' && res.setup.buildGoal > 0
-            ? ` <span class="muted">— ${money(carryOver)} saved of ${money(res.setup.buildGoal)}</span>` : ''}`;
+      const probe = { carryOver, setup: res.setup };
+      const auto = autoPlanned(probe, monthId);
+      // W9 (A-20): when the fund's planned overrides the setup, lead with the
+      // user's number, not the setup's. Only while the form still shows the
+      // saved setup (same ask) — mid-edit the ask is the thing moving. A paused
+      // fund is an override too, but W6's button already says so.
+      const overridden = fund && auto != null && fund.pausedPlanned == null
+        && autoPlanned(fund, monthId) === auto && isOverridden(fund, monthId);
+      if (auto == null) {
+        calc.innerHTML = `Planned this month: <b>you set it</b> <span class="muted">— this type doesn't calculate an amount.</span>`;
+      } else if (overridden) {
+        const proj = b === 'goal' ? goalProjection(fund, monthId) : '';
+        calc.innerHTML = `Planned this month: <b>${money(fund.planned)}</b> <span class="muted">— you set it; the ${b === 'goal' ? 'goal' : 'setup'} asks ${money(auto)}.${proj ? ` ${esc(proj)}` : ''}</span>`;
+      } else {
+        // #13 (W8): a goal's ask in words — what's for the goal, what's catch-up.
+        const words = b === 'goal' ? goalAskWords(probe, monthId) : '';
+        calc.innerHTML = `Planned this month: <b>${money(auto)}</b>${b === 'build' && res.setup.buildGoal > 0
+            ? ` <span class="muted">— ${money(carryOver)} saved of ${money(res.setup.buildGoal)}</span>`
+            : words ? ` <span class="muted">— ${esc(words)}</span>` : ''}`;
+      }
     }
     if (commit && onChange) onChange(res);
   };
@@ -724,6 +785,21 @@ function renderFundPanel() {
   const pos = isIncome
     ? month.income.filter((x) => (x.group || 'bonus') === (f.group || 'bonus')).findIndex((x) => x === f)
     : panelRef.fi;
+  // S14 (W7): a fixed fund that's red because its charge came in above the
+  // total — offer to update the total and top up the shortfall from the first
+  // expense fund that can cover it outright (so the direct transfer never
+  // overdraws; the dialog's W11 warning isn't on this path). No such fund →
+  // update the total only, and say the shortfall carries.
+  const bill = isIncome ? null : billWentUp(f, live, month);
+  const billTopUp = bill ? r2(-live.leftover) : 0;
+  const billLmap = bill ? leftoverMap(month) : null;
+  let billFrom = '';
+  if (bill) {
+    for (const c of month.categories) for (const x of c.funds) {
+      if (billFrom || x === f || x.retireAtClose) continue;
+      if ((billLmap[normFund(x.fund)] || 0) >= billTopUp - 0.004) billFrom = x.fund;
+    }
+  }
 
   const wrap = document.createElement('div');
   wrap.id = 'fundPanel';
@@ -756,6 +832,12 @@ function renderFundPanel() {
               <b class="${isIncome && live.leftover < -0.004 ? 'muted' : moneyCls(live.leftover)}"${
                 isIncome && live.leftover < -0.004 ? ` title="${money(-live.leftover)} ${monthDone ? 'came in under plan' : 'still expected this month'}"` : ''}>${money(live.leftover)}</b></div>
           </div>
+          ${bill ? `<p class="muted" id="pnlBillNote" style="margin:10px 0 0">The bill came to ${money(bill.charge)} — ${money(r2(bill.charge - bill.total))} more than the ${money(bill.total)} this fund was set up for${
+              billFrom ? '.' : ` — the ${money(billTopUp)} shortfall carries to next month.`}</p>
+          <div class="modal-row" style="margin-top:8px;flex-wrap:wrap;gap:6px">${billFrom
+            ? `<button class="btn btn-sm" id="pnlBillFix" style="flex:none">Update the total to ${money(bill.charge)} and top up ${money(billTopUp)} from… ▾</button>
+               <select class="inline" id="pnlBillFrom" style="flex:1 1 100%" title="Where the top-up comes from">${fundOptions(month, billFrom, billLmap, { exclude: f.fund })}</select>`
+            : `<button class="btn btn-sm" id="pnlBillFix">Update the total to ${money(bill.charge)}</button>`}</div>` : ''}
         </section>
 
         <section class="panel-sec">
@@ -839,23 +921,48 @@ function renderFundPanel() {
     el.onchange = () => {
       const v = parseMoney(el.value);
       if (isNaN(v)) return;
+      const notes = []; // one toast per commit — both notes ride in it
       if (key === 'planned' && f.rule) {
         const wasChecks = isIncome && f.rule.type === 'checks' && (f.group || 'bonus') === 'standard';
         f.rule = null;
-        if (wasChecks) toast(`"${f.fund}" planned is now set by hand — Reconnect below puts it back on checks × amount.`);
+        if (wasChecks) notes.push(`"${f.fund}" planned is now set by hand — Reconnect below puts it back on checks × amount.`);
       }
       // Typing a planned amount into a paused fund unpauses it (W6): the typed value wins.
       if (key === 'planned' && f.pausedPlanned != null && Math.abs(v) > 0.004) delete f.pausedPlanned;
+      const titheBefore = titheSum(month);
       f[key] = v;
       recalcRules(month); markDirty(`the ${key === 'carryOver' ? 'carry-over' : 'planned'} change on "${f.fund}"`); render();
+      const moved = titheMovedNote(titheBefore, titheSum(month)); // W10
+      if (moved) notes.push(moved);
+      if (notes.length) toast(notes.join(' '));
     };
   };
   const pnlCarry = $('#pnlCarry', wrap); // absent when carry-over is derived (C2)
   if (pnlCarry) applyNum(pnlCarry, 'carryOver');
   applyNum($('#pnlPlanned', wrap), 'planned');
 
+  // S14 (W7): one click — the total becomes this cycle's charge on THIS month's
+  // setup object (buildNextMonth copies it forward, Invariant 8), and the
+  // shortfall is topped up as a matched pair (Invariant 11). One markDirty, so
+  // Ctrl+Z reverts both. Planned stays: this cycle's bill has posted; the new
+  // total drives next cycle's planned.
+  const billFix = $('#pnlBillFix', wrap);
+  if (billFix) billFix.onclick = () => {
+    const from = billFrom ? $('#pnlBillFrom', wrap).value : '';
+    if (billFrom && !from) { toast('Pick the fund to top up from.'); return; }
+    f.setup.totalAmount = bill.charge;
+    if (from) pushTransferPair(month, from, f.fund, billTopUp, defaultDateFor(month), 'top-up');
+    markDirty(from ? `updating "${f.fund}" to ${money(bill.charge)} and topping it up` : `updating "${f.fund}" to ${money(bill.charge)}`);
+    render();
+    toast(from
+      ? `"${f.fund}" is set up for ${money(bill.charge)} now — ${money(billTopUp)} moved from ${from}.`
+      : `"${f.fund}" is set up for ${money(bill.charge)} now — the ${money(billTopUp)} shortfall carries to ${monthLabel(nextMonthId(month.id))}.`);
+  };
+
   if (isIncome) {
-    const incRefresh = () => {
+    // `previewTithe` (W10): where the tithe lands with the planned being typed,
+    // shown only while it differs from today's tithe.
+    const incRefresh = (previewTithe = null) => {
       const t = wrap.querySelector('input[name="pnlIncType"]:checked').value;
       $$('.behavior', wrap).forEach((el) => el.classList.toggle('sel', el.querySelector('input').checked));
       $('#pnlChecks', wrap).style.display = t === 'standard' ? '' : 'none';
@@ -877,7 +984,23 @@ function renderFundPanel() {
           ? `Planned this month: <b>${money(r2((c.count || 0) * (c.amount || 0)))}</b> <span class="muted">· tithed on ${money(r2((c.count || 0) * (c.titheAmount || 0)))}</span>`
           : `Planned this month: <b>you set it</b> <span class="muted">— enter the amount you expect.</span>`;
       }
+      if (previewTithe != null && Math.abs(previewTithe - titheSum(month)) > 0.004) {
+        $('#pnlIncCalc', wrap).insertAdjacentHTML('beforeend', ` <span class="muted" id="pnlTithePreview">· tithe becomes ${money(previewTithe)}</span>`);
+      }
     };
+    // #24 (W10): preview on every keystroke in Planned, on a scratch copy of the
+    // month with the typed amount applied the way onchange will apply it.
+    if (hasTitheFund(month)) {
+      $('#pnlPlanned', wrap).oninput = (e) => {
+        const v = parseMoney(e.target.value);
+        if (isNaN(v)) { incRefresh(); return; }
+        const probe = structuredClone(month);
+        const pf = probe.income[panelRef.idx];
+        pf.rule = null; pf.planned = v;
+        applyTitheRules(probe, data.settings.tithePercent ?? 0.15);
+        incRefresh(titheSum(probe));
+      };
+    }
     $$('input[name="pnlIncType"]', wrap).forEach((r) => r.onchange = () => {
       const t = wrap.querySelector('input[name="pnlIncType"]:checked').value;
       if (t !== f.group) {
@@ -901,8 +1024,11 @@ function renderFundPanel() {
         const v = isCount ? parseFloat(el.value) : parseMoney(el.value);
         if (isNaN(v)) return;
         if (!month.checks[f.fund]) month.checks[f.fund] = { count: 0, amount: 0, titheAmount: 0 };
+        const titheBefore = titheSum(month);
         month.checks[f.fund][key] = v;
         recalcRules(month); markDirty(`the paycheck ${key === 'count' ? 'count' : key === 'amount' ? 'amount' : 'titheable amount'} change on "${f.fund}"`); render();
+        const moved = titheMovedNote(titheBefore, titheSum(month)); // W10
+        if (moved) toast(moved);
       };
     };
     chkApply($('#pnlChkCount', wrap), 'count', true);
@@ -921,13 +1047,19 @@ function renderFundPanel() {
       recalcRules(month); markDirty(`the estimate update on "${f.fund}"`); render();
       toast(`Estimated per check set to ${money(chkAvg)}.`);
     };
-    $('#pnlExempt', wrap).onchange = (e) => { f.titheExempt = e.target.checked; recalcRules(month); markDirty(`the tithe exemption change on "${f.fund}"`); render(); };
+    $('#pnlExempt', wrap).onchange = (e) => {
+      const titheBefore = titheSum(month);
+      f.titheExempt = e.target.checked; recalcRules(month); markDirty(`the tithe exemption change on "${f.fund}"`); render();
+      const moved = titheMovedNote(titheBefore, titheSum(month)); // W10
+      if (moved) toast(moved);
+    };
     $('#pnlCarryFwd', wrap).onchange = (e) => { f.carryForward = e.target.checked; markDirty(`the carry-forward change on "${f.fund}"`); render(); };
     incRefresh();
   } else {
     wireSetupForm(wrap, {
       monthId: month.id,
       carryOver: f.carryOver,
+      fund: f, // W9: the result line leads with the user's planned when it overrides the setup
       onChange: (res) => {
         if (res.error) return; // incomplete input — leave the fund as it was
         f.setup = res.setup;
@@ -1370,7 +1502,8 @@ function fundTypeMark(f, monthId) {
     tip = `Build up — ${money(s.monthlyAmount)} set aside monthly${s.buildGoal > 0 ? `, stopping at ${money(s.buildGoal)} (resumes if it drops below)` : ', no ceiling'}.`;
   } else if (type === 'savings') {
     glyph = '◎';
-    tip = `Savings goal — ${money(s.targetAmount)} by ${ymLabel(s.targetMonth)}, so ${money(autoPlanned(f, monthId))} this month.`;
+    // #13 (W8): the ask in words — what's for the goal, what's making back a deficit.
+    tip = `Savings goal — ${money(s.targetAmount)} by ${ymLabel(s.targetMonth)}. ${goalAskWords(f, monthId)}`;
   } else if (type === 'pacing') {
     glyph = '▦';
     tip = "Pacing — many purchases a month; the app watches whether it's going too fast.";
@@ -1388,10 +1521,14 @@ function fundTypeMark(f, monthId) {
 // they do, any that apply, in order: carrying · paused · overridden · full.
 // Every number on a chip is an engine value (fundFlags / the fund itself) —
 // no arithmetic in the template.
-function fundStatusChip(flag) {
+function fundStatusChip(flag, bill = null) {
   if (!flag) return '';
   if (flag.attention === 'exceeded') {
-    const title = flag.carriedIn < 0
+    // S14 (W7): a fixed fund whose charge came in above its total isn't
+    // overspending — the bill went up. Say so instead of blaming spending.
+    const title = bill
+      ? `This cycle's charge was ${money(bill.charge)} against ${money(bill.total)} set up — the bill went up. Open the fund to update it.`
+      : flag.carriedIn < 0
       ? `Spent ${money(flag.spent)} against ${money(flag.planned)} planned this month. Another ${money(-flag.carriedIn)} is carried in from earlier months — see the chip beside it.`
       : "Spent more than this month's carry-over + planned.";
     return `<span class="rule-chip chip-danger" title="${esc(title)}">over ${money(-flag.overThisMonth)}</span>`;
@@ -1413,9 +1550,62 @@ function fundStatusChip(flag) {
   return '';
 }
 
-// Where an under- or over-funded goal lands — sitting B (W9) fills this in and
-// the overridden chip's title appends it. Empty until then.
-function goalProjection(f, monthId) { return ''; }
+// Plain words for a goal's monthly ask (#13, W8) — reads savingsMonthly's
+// inputs, never re-derives it. base + catch-up can differ from the ask by a
+// cent in general: the sentence is an explanation, the cell is the number.
+function goalAskWords(f, monthId) {
+  const s = f.setup || {}; if (s.type !== 'savings' || s.savingsMode === 'build' || !s.targetMonth || !(s.targetAmount > 0)) return '';
+  const months = Math.max(1, monthDiff(monthId, s.targetMonth) + 1);
+  const ask = autoPlanned(f, monthId);
+  if (f.carryOver >= s.targetAmount - 0.004) return `${money(s.targetAmount)} is already set aside — nothing more to plan.`;
+  if (f.carryOver < -0.004) return `${money(ask)} = ${money(r2(s.targetAmount / months))} toward the goal + ${money(r2(-f.carryOver / months))} a month to make back ${money(-f.carryOver)} from before, over ${months} month${months === 1 ? '' : 's'}.`;
+  if (f.carryOver > 0.004) return `${money(f.carryOver)} already saved, so ${money(ask)} a month covers the remaining ${money(r2(s.targetAmount - f.carryOver))} over ${months} month${months === 1 ? '' : 's'}.`;
+  return `${money(s.targetAmount)} over ${months} month${months === 1 ? '' : 's'} is ${money(ask)} a month.`;
+}
+
+// Where an under- or over-funded goal lands (#12, W9) — the overridden chip's
+// title and the panel's result line append it. Under the ask: the landing
+// counts from zero when a deficit came in (a negative carry is a debt, not
+// savings) and says so. Over the ask: how many months early the target falls,
+// or nothing when it doesn't fall early. '' for anything that isn't an
+// overridden goal.
+function goalProjection(f, monthId) {
+  const s = f.setup || {};
+  if (s.type !== 'savings' || s.savingsMode === 'build' || !s.targetMonth || !(s.targetAmount > 0)) return '';
+  if (f.pausedPlanned != null || !isOverridden(f, monthId)) return '';
+  const auto = autoPlanned(f, monthId);
+  const months = Math.max(1, monthDiff(monthId, s.targetMonth) + 1);
+  const planned = f.planned || 0, carry = f.carryOver || 0;
+  if (planned < auto - 0.004) {
+    const landing = r2(Math.max(0, carry) + planned * months);
+    const short = r2(s.targetAmount - landing);
+    return `At ${money(planned)} a month you'll have ${money(landing)} of ${money(s.targetAmount)} by ${ymLabel(s.targetMonth)} — ${money(short)} short${carry < -0.004 ? ` after making back ${money(-carry)}` : ''}.`;
+  }
+  for (let k = 1; k < months; k++) {
+    if (carry + planned * k >= s.targetAmount - 0.004) {
+      const early = months - k;
+      return `At ${money(planned)} a month you'll reach ${money(s.targetAmount)} about ${early} month${early === 1 ? '' : 's'} early.`;
+    }
+  }
+  return '';
+}
+
+// S14 (W7): a fixed fund that's red this month because its charge came in above
+// the total it was set up for. Returns { charge, total } or null. Transfers out
+// aren't the bill, so they don't count as the charge. `live` is the computed
+// fund (for its leftover); `month` is the stored month (for its transactions).
+function billWentUp(f, live, month) {
+  const s = f.setup || {};
+  if (s.type !== 'fixed' || !live || !(live.leftover < -0.004)) return null;
+  const k = normFund(f.fund);
+  let charge = 0;
+  for (const t of month.transactions) {
+    if (t.isTransfer || !(t.amount < 0) || normFund(t.fund) !== k) continue;
+    if (-t.amount > charge) charge = -t.amount;
+  }
+  const total = s.totalAmount || 0;
+  return charge > total + 0.004 ? { charge: r2(charge), total: r2(total) } : null;
+}
 
 function fundModifierChips(f, flag, monthId) {
   const s = f.setup || {};
@@ -1442,8 +1632,11 @@ function fundModifierChips(f, flag, monthId) {
   return html;
 }
 
-function fundChips(f, flag, monthId) {
-  return ruleChip(f) + fundTypeMark(f, monthId) + fundStatusChip(flag) + fundModifierChips(f, flag, monthId);
+// `month` and `live` (the computed fund) feed the W7 bill-went-up title; the
+// row is the only caller, so both are always there.
+function fundChips(f, flag, monthId, month = null, live = null) {
+  const bill = month && live ? billWentUp(f, live, month) : null;
+  return ruleChip(f) + fundTypeMark(f, monthId) + fundStatusChip(flag, bill) + fundModifierChips(f, flag, monthId);
 }
 
 // The one phrase Review and the recap share for a carried-in fund's own month.
@@ -1877,7 +2070,7 @@ function renderBudget(main) {
     let body = `<table class="grid tbl-fixed">${FUND_COLS}<tbody>`;
     rows.forEach(({ f, fi }) => {
       body += `<tr>
-        <td><a href="#" class="fund-name" data-fund-setup="${ci}:${fi}" title="Open this fund — type, schedule, goal, actions">${esc(f.fund)}</a>${fundChips(f, flagMap[normFund(f.fund)], month.id)}${retireChip(f, month)}${txChip(f)}</td>
+        <td><a href="#" class="fund-name" data-fund-setup="${ci}:${fi}" title="Open this fund — type, schedule, goal, actions">${esc(f.fund)}</a>${fundChips(f, flagMap[normFund(f.fund)], month.id, month, f)}${retireChip(f, month)}${txChip(f)}</td>
         <td>${carryEditable(month, f.fund, false)
           ? `<input class="money" data-cat="${ci}" data-fund="${fi}" data-k="carryOver" value="${money(f.carryOver)}" title="Opening balance — what's in this fund today. There's no earlier month to carry from."><div class="fund-note">opening</div>`
           : `<span class="mono" title="${esc(carryLockTitle(month))}">${money(f.carryOver)}</span>`}</td>
@@ -2066,15 +2259,21 @@ function renderBudget(main) {
       if (el.dataset.k === 'carryOver' && !carryEditable(month, f.fund, true)) { render(); return; }
       const v = parseMoney(el.value);
       if (!isNaN(v)) {
+        const notes = []; // one toast per commit — both notes ride in it
         if (el.dataset.k === 'planned' && f.rule) {
           // Disconnecting a paycheck-driven fund must be said out loud (W2d) —
           // the silent version cost real money before it was caught.
           const wasChecks = f.rule.type === 'checks' && (f.group || 'bonus') === 'standard';
           f.rule = null; // manual override clears auto rule
-          if (wasChecks) toast(`"${f.fund}" planned is now set by hand — open the fund to reconnect it to your paycheck numbers.`);
+          if (wasChecks) notes.push(`"${f.fund}" planned is now set by hand — open the fund to reconnect it to your paycheck numbers.`);
         }
+        const titheBefore = titheSum(month);
         f[el.dataset.k] = v;
         recalcRules(month); markDirty(`the ${el.dataset.k === 'carryOver' ? 'carry-over' : 'planned'} change on "${f.fund}"`);
+        // #24 (W10): the tithe fund may be off screen — say that it moved.
+        const moved = titheMovedNote(titheBefore, titheSum(month));
+        if (moved) notes.push(moved);
+        if (notes.length) toast(notes.join(' '));
       }
       render(); return;
     }

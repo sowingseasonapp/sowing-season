@@ -503,6 +503,11 @@ function makeMonth(id, { categories, income, transactions = [] }) {
   // 1.2.1 W4: the recap's S16 neutral line exists, and no surface says "over by" the whole leftover any more.
   check('recap: an overspent matured goal gets the neutral line', appSrc.includes('matured — '));
   check('Needs attention never reads over-by-leftover (split, W1/W4)', !appSrc.includes('money(-x.leftover)') && !appSrc.includes('money(-flag.leftover)'));
+  // 1.2.1 W8: a goal's ask is explained in words (type mark + panel) and reads autoPlanned — never re-derives or writes the sum back.
+  check('goal ask in words (W8): catch-up sentence, read from autoPlanned, never written back', (() => {
+    const fn = appSrc.slice(appSrc.indexOf('function goalAskWords'), appSrc.indexOf('function goalProjection'));
+    return fn.length > 0 && fn.includes(' toward the goal + ') && fn.includes(' a month to make back ') && fn.includes('const ask = autoPlanned(f, monthId)') && !fn.includes('f.planned =') && !fn.includes('planned =');
+  })());
   check('month-close: ceremony title, literal action button', appSrc.includes('harvest</h2>') && /`Start \$\{monthLabel\(nid\)\} anyway` : `Start \$\{monthLabel\(nid\)\}`/.test(appSrc));
   check('Garden view has no editing controls (only buttons that navigate)', !/<input[^>]*class="money/.test(appSrc.slice(appSrc.indexOf('function renderGarden'), appSrc.indexOf('/* ---------------- Settings view'))));
   const rm = css.slice(css.indexOf('@media (prefers-reduced-motion: reduce)'));

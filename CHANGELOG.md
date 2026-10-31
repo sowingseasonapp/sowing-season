@@ -11,6 +11,65 @@ so entries before that are dated by when the work happened, not by commit.
 
 ## Unreleased — 1.2.1
 
+### 2026-10-31 — Bill went up, goal arithmetic in words, tithe preview, overdraw warning (sitting B: W7–W11)
+
+Sitting B of the 1.2.1 work order (`_cowork/work-order-1.2.1.md`, items W7–W11; three-year report S14; pass-3
+friction A-11, A-20, A-36, A-37, B-04, B-05; wishes #12, #13, #23, #24). `src/app.js` only, plus one §11 source
+guard in `tools/test-garden.mjs`. Copy and one dialog guard — no engine change, no new data field, no
+`data.version` bump. Nothing here writes `planned` or `carryOver` except the user's own W7 click.
+Suites: csv 606 · migrate 17 · garden **176 → 177** · compute 1147, 0 failed.
+
+- **W7 — S14, the bill went up.** A fixed fund that's red because this month's largest charge came in above
+  `setup.totalAmount` no longer reads as overspending. Panel note under the numbers: `The bill came to $X — $D more
+  than the $T this fund was set up for.` and a one-click offer, `Update the total to $X and top up $S from… ▾`
+  with a fund picker (`fundOptions` with the leftover map) defaulting to the first expense fund that can cover the
+  top-up outright — so the direct `pushTransferPair` never overdraws (W11's warning lives in the dialog, not on
+  this path). The click sets `totalAmount` on *this month's* setup object (`buildNextMonth` copies it forward,
+  Invariant 8), posts the matched pair with note `top-up` (Invariant 11), one `markDirty`, one toast. No fund can
+  cover it → `Update the total to $X` alone, and the note ends `— the $S shortfall carries to next month.` The
+  row's `over` chip title becomes `This cycle's charge was $X against $T set up — the bill went up. Open the fund
+  to update it.` Planned stays as it was (this cycle's bill has posted; the new total drives next cycle), so the
+  fund shows `overridden` for the rest of the month — true, and the panel line says why (W9). Transfers out are
+  not "the charge". **No $1 rounding floor** — decided against (D-P4 "no penny floor").
+- **W8 — #13, the goal's ask in words.** New `goalAskWords(f, monthId)` reads `autoPlanned` and decomposes it
+  without re-deriving or writing anything back: `$58.33 = $50.00 toward the goal + $8.33 a month to make back
+  $100.00 from before, over 12 months.` (also the "already saved" and "already set aside" variants). Shown in the
+  ◎ type-mark tooltip (`Savings goal — $600.00 by Dec 2027. …`) and in the panel's setup result line for a goal.
+  `monthDiff` is now imported from `compute.js`. test-garden §11 guards the sentence and the no-write-back.
+- **W9 — #12, where the goal lands (and A-20).** Sitting A's `goalProjection(f, monthId)` hook is filled in: a
+  goal overridden below its ask says `At $150.00 a month you'll have $1,200.00 of $3,000.00 by Mar 2028 —
+  $1,800.00 short.` (`landing = max(0, carryOver) + planned × months`; a negative carry counts from zero and adds
+  `after making back $X`); overridden above says `…you'll reach $T about N month(s) early.` or nothing. Appended
+  to the `overridden` chip title. The panel result line now leads with the user's number when it overrides the
+  setup: `Planned this month: $150.00 — you set it; the goal asks $407.14. <projection>` (fixed/build funds get
+  the same lead with "the setup asks"; a paused fund keeps today's line — W6's button already says so). Only
+  while the form still shows the saved setup; mid-edit the ask is what's moving. Nothing in the grid cell.
+- **W10 — #24, the tithe moves in the open.** Panel, income fund, while the month has a `rule.type === 'tithe'`
+  fund: `#pnlIncCalc` gains `· tithe becomes $X` on every keystroke in Planned, computed on a `structuredClone`
+  of the month with the typed planned applied the way `onchange` will apply it and `applyTitheRules` run; shown
+  only while it differs from today's tithe. After every commit that can move the tithe — grid income planned,
+  panel planned, Exempt, the per-check fields — Σ tithe-rule planned is captured before and after `recalcRules`
+  and, if it moved by more than a cent, `Tithe moved $1,167.69 → $1,431.69 with that change. Ctrl+Z undoes both.`
+  (one `markDirty`, so one undo really does revert both — verified). Rides in the same toast as the W2d "set by
+  hand" note when both apply. A month with no tithe-rule fund says nothing.
+- **W11 — #23, the overdraw warning.** The Transfer dialog's `#tGo` checks the "from" fund's leftover (the
+  `leftoverMap` it already builds for the option labels, so income funds warn too) after the amount/date checks
+  and before the S5 month block. Overdraw → `#tErr` switches to `.modal-warn` with `"Safety Net" has $1,440.00
+  left. Taking $4,531.37 out leaves it $3,091.37 short — the money has to come from somewhere later.` (already
+  red: `"X" is already $A short. Taking $B out leaves it $C short.`), the button becomes `Transfer anyway`, and
+  the (from, amount) pair is remembered; the same pair's second click goes through, changing either resets.
+  Default 3: warn and ask, don't block. A transfer that doesn't overdraw is one click, as before.
+- **Verified in `dev.html` on copies of the persona files:** A Jan 2027 Christmas tooltip and panel line (W8);
+  A Sep 2027 Baby chip title and panel (W9, exact sentence); A Apr 2029 Safety Net $1,440.00 → $4,531.37
+  (`$3,091.37 short`, then `Transfer anyway` moves it), Everything Else already $119.80 short → `$219.80 short`,
+  a $10 transfer with money to spare → one click (W11); B Sep 2026 `Claude` ($100 charge against a $20 total,
+  carry −$80.69) → note, offer from `Extra`, click leaves it at $0.00 with the ↻ tooltip reading $100.00 (W7);
+  B Mar 2027 Bonuses: Exempt off → `$1,167.69 → $1,431.69`, panel preview `tithe becomes $1,442.69` at 2500,
+  grid 2400 → `$1,442.69 → $1,431.69`, Exempt on → `$1,431.69 → $1,167.69`, Ctrl+Z reverts both (W10).
+  **Note for Cowork:** B *Oct* 2026 `Claude` doesn't trigger W7 — its charge ($20) equals the total; the −$100
+  there is carried in from Sep's $100 charge. Likewise B Jan 2027 iDrive's −$7.61 is the $99.50 charge against a
+  $99.50 total (rounding of 12 × $8.29), not a raised bill.
+
 ### 2026-10-31 — Carried-in split, free-to-move rule, chip block, Review/recap/garden split, pause this month (sitting A: W1–W6)
 
 Sitting A of the 1.2.1 work order (`_cowork/work-order-1.2.1.md`, items W1–W6; three-year report "The bigger
