@@ -803,6 +803,9 @@ function renderFundPanel() {
             <button class="btn btn-sm" id="pnlRename" title="Rename this fund in every month and all its transactions">Rename</button>
             <button class="btn btn-sm" id="pnlUp" ${pos <= 0 ? 'disabled' : ''}>↑ Move up</button>
             <button class="btn btn-sm" id="pnlDown" ${pos >= sibCount - 1 ? 'disabled' : ''}>↓ Move down</button>
+            ${!isIncome && !f.retireAtClose ? (f.pausedPlanned != null
+              ? `<button class="btn btn-sm" id="pnlUnpause" title="Put this month's plan back">▶ Unpause — put ${money(f.pausedPlanned)} back</button>`
+              : `<button class="btn btn-sm" id="pnlPause" title="Planned becomes $0 for this month only — the plan comes back when you start ${esc(monthLabel(nextMonthId(month.id)))}">⏸ Pause this month</button>`) : ''}
             ${f.retireAtClose
               ? `<button class="btn btn-sm" id="pnlKeep" title="Cancel the removal — the fund stays in ${esc(monthLabel(nextMonthId(month.id)))} too">Keep it after all</button>`
               : `<button class="btn btn-sm btn-danger" id="pnlDel">✕ Remove fund</button>`}
@@ -841,6 +844,8 @@ function renderFundPanel() {
         f.rule = null;
         if (wasChecks) toast(`"${f.fund}" planned is now set by hand — Reconnect below puts it back on checks × amount.`);
       }
+      // Typing a planned amount into a paused fund unpauses it (W6): the typed value wins.
+      if (key === 'planned' && f.pausedPlanned != null && Math.abs(v) > 0.004) delete f.pausedPlanned;
       f[key] = v;
       recalcRules(month); markDirty(`the ${key === 'carryOver' ? 'carry-over' : 'planned'} change on "${f.fund}"`); render();
     };
@@ -970,6 +975,24 @@ function renderFundPanel() {
     delete f.retireAtClose;
     markDirty(`keeping "${f.fund}"`); render();
     toast(`"${f.fund}" stays.`);
+  };
+  // #17 Pause this month (W6): planned → $0 for this month only; buildNextMonth
+  // restores pausedPlanned. One markDirty per click, so Ctrl+Z restores both
+  // fields. A yearlyDiv/tithe rule would re-set planned in recalcRules, so the
+  // pause clears it — it's a hand override like any other.
+  const pause = $('#pnlPause', wrap);
+  if (pause) pause.onclick = () => {
+    const was = f.planned;
+    f.pausedPlanned = f.planned; f.planned = 0;
+    if (f.rule) f.rule = null;
+    recalcRules(month); markDirty(`pausing "${f.fund}" for ${monthLabel(month.id)}`); render();
+    toast(`"${f.fund}" paused — ${money(was)} comes back when you start ${monthLabel(nextMonthId(month.id))}.`);
+  };
+  const unpause = $('#pnlUnpause', wrap);
+  if (unpause) unpause.onclick = () => {
+    f.planned = f.pausedPlanned; delete f.pausedPlanned;
+    recalcRules(month); markDirty(`unpausing "${f.fund}"`); render();
+    toast(`"${f.fund}" unpaused — ${money(f.planned)} is planned again this month.`);
   };
   const allTx = $('#pnlAllTx', wrap);
   if (allTx) allTx.onclick = () => {
@@ -1359,31 +1382,74 @@ function fundTypeMark(f, monthId) {
   return html;
 }
 
-// At most one status chip per row, and only when it asks something of you.
-// Priority: over > off pace > available > overridden; on-pace is a quiet dot.
-function fundStatusChip(f, flag, monthId) {
-  if (flag) {
-    if (flag.attention === 'exceeded') {
-      return `<span class="rule-chip chip-danger" title="Spent more than carry-over + planned.">over ${money(-flag.leftover)}</span>`;
-    }
-    if (flag.pace === 'off') {
-      return `<span class="rule-chip chip-danger" title="${money(flag.spent)} of ${money(r2(flag.carryOver + flag.planned))} already spent — faster than the month is passing.">off pace</span>`;
-    }
-    if (flag.offset) {
-      return `<span class="rule-chip chip-good" title="${money(flag.leftover)} is left and no more charges are expected — safe to transfer to another fund.">${money(flag.leftover)} free</span>`;
-    }
-    if (flag.pace === 'on') {
-      return `<span class="pace-dot" title="On pace — spending is at or under the month's pace.">●</span>`;
-    }
+// Two kinds of chip per row, side by side (1.2.1 W3). First ONE status chip —
+// what the month is doing, by priority over > off pace > free; on-pace is a
+// quiet dot. Then the modifier chips that explain why the numbers look the way
+// they do, any that apply, in order: carrying · paused · overridden · full.
+// Every number on a chip is an engine value (fundFlags / the fund itself) —
+// no arithmetic in the template.
+function fundStatusChip(flag) {
+  if (!flag) return '';
+  if (flag.attention === 'exceeded') {
+    const title = flag.carriedIn < 0
+      ? `Spent ${money(flag.spent)} against ${money(flag.planned)} planned this month. Another ${money(-flag.carriedIn)} is carried in from earlier months — see the chip beside it.`
+      : "Spent more than this month's carry-over + planned.";
+    return `<span class="rule-chip chip-danger" title="${esc(title)}">over ${money(-flag.overThisMonth)}</span>`;
   }
-  if (isOverridden(f, monthId)) {
-    return `<span class="rule-chip chip-warn" title="This month's planned amount overrides the fund's setup. New months reset to the setup.">overridden</span>`;
+  if (flag.pace === 'off') {
+    return `<span class="rule-chip chip-danger" title="${money(flag.spent)} of ${money(flag.budget)} already spent — faster than the month is passing.">off pace</span>`;
+  }
+  if (flag.offset) {
+    // S12 rule (a): when a fund is "free" depends on its type (W2).
+    const left = money(flag.leftover);
+    const title = flag.type === 'fixed' ? `${left} is left and this month's charge has posted — safe to transfer to another fund.`
+      : flag.type === 'savings' ? `${left} is left and the target month is over — what's left is yours to move.`
+      : `${left} is left and the month is over — safe to transfer to another fund.`;
+    return `<span class="rule-chip chip-good" title="${esc(title)}">${left} free</span>`;
+  }
+  if (flag.pace === 'on') {
+    return `<span class="pace-dot" title="On pace — spending is at or under the month's pace.">●</span>`;
   }
   return '';
 }
 
+// Where an under- or over-funded goal lands — sitting B (W9) fills this in and
+// the overridden chip's title appends it. Empty until then.
+function goalProjection(f, monthId) { return ''; }
+
+function fundModifierChips(f, flag, monthId) {
+  const s = f.setup || {};
+  let html = '';
+  // Carrying: a deficit that entered the month from earlier months and is still
+  // on the books. Paid back this month → no chip (the W1 table's last row).
+  if (flag && flag.carriedIn < 0 && flag.leftover < -0.004) {
+    const title = flag.carriedOnly
+      ? `Carried in from earlier months. This month on its own is ${flag.own >= 0.004 ? `${money(flag.own)} under plan` : 'exactly on plan'}. Covering it is a transfer — or leave it and it carries on.`
+      : `Carried in from earlier months, on top of this month's ${money(-flag.overThisMonth)} over.`;
+    html += `<span class="rule-chip chip-muted" title="${esc(title)}">carrying ${money(flag.carriedIn)}</span>`;
+  }
+  // Paused (W6) is an override too, but say the useful word.
+  if (f.pausedPlanned != null) {
+    html += `<span class="rule-chip chip-warn" title="Planned is $0 this month only — ${money(f.pausedPlanned)} comes back when you start the next month. Open the fund to unpause.">paused</span>`;
+  } else if (isOverridden(f, monthId)) {
+    const proj = goalProjection(f, monthId);
+    html += `<span class="rule-chip chip-warn" title="This month's planned amount overrides the fund's setup. New months reset to the setup.${proj ? ` ${esc(proj)}` : ''}">overridden</span>`;
+  }
+  // Full (B-16): a build-up pot at its cap plans $0 by design, not by accident.
+  if (s.type === 'savings' && s.savingsMode === 'build' && s.buildGoal > 0 && f.carryOver >= s.buildGoal - 0.004 && Math.abs(f.planned) <= 0.004) {
+    html += `<span class="rule-chip chip-muted" title="Build up — ${money(s.buildGoal)} set aside and nothing more planned until it dips below.">full</span>`;
+  }
+  return html;
+}
+
 function fundChips(f, flag, monthId) {
-  return ruleChip(f) + fundTypeMark(f, monthId) + fundStatusChip(f, flag, monthId);
+  return ruleChip(f) + fundTypeMark(f, monthId) + fundStatusChip(flag) + fundModifierChips(f, flag, monthId);
+}
+
+// The one phrase Review and the recap share for a carried-in fund's own month.
+function carriedThisMonthWords(x) {
+  return x.overThisMonth < -0.004 ? `${money(-x.overThisMonth)} over`
+    : x.own >= 0.004 ? `${money(x.own)} under plan` : 'on plan';
 }
 
 // S13: a fund removed while it had transactions this month waits for month
@@ -1584,6 +1650,9 @@ function renderBudget(main) {
   const flags = fundFlags(month, comp, todayISO());
   const attList = flags.filter((x) => x.attention);
   const offList = flags.filter((x) => x.offset);
+  // 1.2.1 (W4): red that came in from earlier months and is still on the books.
+  const carryList = flags.filter((x) => x.carriedIn < 0 && x.leftover < -0.004);
+  const carryTotal = r2(carryList.reduce((a, x) => a + x.carriedIn, 0));
   const flagMap = {};
   for (const x of flags) flagMap[normFund(x.fund)] = x;
 
@@ -1594,7 +1663,9 @@ function renderBudget(main) {
   // under plan" once it's over (S17). A future month is not done.
   const { monthDone } = monthContext(month.id, todayISO());
 
-  const reviewCount = attList.length + offList.length + checkIns.length + (comp.unassigned.length ? 1 : 0);
+  // The carried group counts as ONE item, like unassigned — per fund it would
+  // put "Review · 12" back for every month that inherits a deficit.
+  const reviewCount = attList.length + offList.length + checkIns.length + (comp.unassigned.length ? 1 : 0) + (carryList.length ? 1 : 0);
 
   // Which sections are expanded: search overrides, else remembered, else smart default.
   const q = fundSearch.trim().toLowerCase();
@@ -1644,6 +1715,7 @@ function renderBudget(main) {
         <div><span class="k">Net</span><span class="v ${actDiff(comp) >= 0 ? 'pos' : 'neg'}">${money(actDiff(comp))}</span></div>
       </div>
       ${exT() ? '<p class="muted month-head-note">Income, spent and net exclude fund-to-fund transfers.</p>' : ''}
+      ${carryList.length ? `<p class="muted month-head-note">${money(carryTotal)} of earlier overspending is still on the books across ${carryList.length} fund${carryList.length === 1 ? '' : 's'} · <a href="#" data-act="open-review">Review</a></p>` : ''}
     </div>
     ${(month === data.months[data.months.length - 1] && month.id > todayISO().slice(0, 7)
       && month.transactions.length === 0 && data.months.length > 1)
@@ -1674,15 +1746,24 @@ function renderBudget(main) {
       <td><a href="#" class="fund-name" data-review-fund="${esc(x.fund)}">${esc(x.fund)}</a>
         <span class="muted">· ${esc(x.category)}</span></td>
       <td>${x.attention === 'exceeded'
-        ? `Over by ${money(-x.leftover)}`
-        : `Off pace — ${money(x.spent)} of ${money(r2(x.carryOver + x.planned))} spent`}</td>
+        ? `Over by ${money(-x.overThisMonth)}`
+        : `Off pace — ${money(x.spent)} of ${money(x.budget)} spent`}</td>
+      <td class="${moneyCls(x.leftover)}">${money(x.leftover)}</td>
+      <td style="width:40px"><button class="btn-ghost" data-xfer="${esc(x.fund)}" title="Move money into this fund">⇄</button></td></tr>`);
+
+    // Carried in (W4): not this month's doing, so not "Needs attention" — but
+    // never hidden either. Same row shape; ⇄ moves money in to cover it.
+    const carryRows = carryList.map((x) => `<tr>
+      <td><a href="#" class="fund-name" data-review-fund="${esc(x.fund)}">${esc(x.fund)}</a>
+        <span class="muted">· ${esc(x.category)}</span></td>
+      <td>Carrying ${money(x.carriedIn)} · this month ${carriedThisMonthWords(x)}</td>
       <td class="${moneyCls(x.leftover)}">${money(x.leftover)}</td>
       <td style="width:40px"><button class="btn-ghost" data-xfer="${esc(x.fund)}" title="Move money into this fund">⇄</button></td></tr>`);
 
     const offRows = offList.map((x) => `<tr>
       <td><a href="#" class="fund-name" data-review-fund="${esc(x.fund)}">${esc(x.fund)}</a>
         <span class="muted">· ${esc(x.category)}</span></td>
-      <td>Its transactions are in; no more expected</td>
+      <td>${x.type === 'fixed' ? 'Its transactions are in; no more expected' : `The month is over — ${money(x.leftover)} wasn't needed`}</td>
       <td class="pos">${money(x.leftover)}</td>
       <td style="width:40px"><button class="btn-ghost" data-xfer="${esc(x.fund)}" title="Transfer this money to another fund">⇄</button></td></tr>`);
 
@@ -1702,6 +1783,7 @@ function renderBudget(main) {
 
     html += `<div class="review-strip">
       ${group(`${icon('warn', 'needs attention')} Needs attention`, 'over budget or spending too fast', attRows)}
+      ${group(`${icon('ledger')} Carried in from earlier months`, "still on the books — not this month's doing", carryRows)}
       ${group(`${icon('move')} Available to move`, 'safe to transfer elsewhere', offRows)}
       ${group(`${icon('unassigned')} Unassigned transactions`, 'not counted in any fund', unRows)}
       ${group(`${icon('paycheck')} Paycheck check-in`, 'update the estimate to what actually arrived', chkInRows)}
@@ -1935,6 +2017,9 @@ function renderBudget(main) {
     if (a) { e.preventDefault(); txFundFilter = a.dataset.txfund; txSearch = ''; view = 'transactions'; render(); return; }
     const showU = e.target.closest('[data-act="show-unassigned"]');
     if (showU) { txFundFilter = '__unassigned__'; txSearch = ''; view = 'transactions'; render(); return; }
+    // The month-head's carried-in total line (W4) opens the Review strip.
+    const openRv = e.target.closest('[data-act="open-review"]');
+    if (openRv) { e.preventDefault(); flagPanel = 'review'; render(); return; }
     const addInc = e.target.closest('[data-add-inc]');
     if (addInc) {
       showAddFund({ side: 'income', group: addInc.dataset.addInc });
@@ -2000,6 +2085,8 @@ function renderBudget(main) {
       const v = parseMoney(el.value);
       if (!isNaN(v)) {
         if (k === 'planned' && f.rule) f.rule = null; // manual override clears auto rule
+        // Typing a planned amount into a paused fund unpauses it (W6): the typed value wins.
+        if (k === 'planned' && f.pausedPlanned != null && Math.abs(v) > 0.004) delete f.pausedPlanned;
         f[k] = v;
         // Editing planned on a fixed-recurring fund is just a per-month override —
         // the setup stays, the "overridden" chip appears, and new months reset.
@@ -3335,6 +3422,9 @@ function renderGarden(main) {
   // is noise on the one line that should read as a sigh of relief.
   const status = [monthLabel(month.id), allocBit, `${onPlan} on plan`];
   if (attention) status.push(`${attention} need${attention === 1 ? 's' : ''} attention`);
+  // 1.2.1 (W5): carried-in red is counted, not hidden — and not "attention".
+  const carrying = g.plants.filter((p) => p.carriedIn < 0 && p.leftover < -0.004).length;
+  if (carrying) status.push(`${carrying} carrying from before`);
   if (c.harvest) status.push(`${c.harvest} with money to move`);
   const mat = g.maturity;
   const fixtureNames = mat.fixtures.map((id) => GARDEN_MILESTONE_LABELS[id]);
@@ -3867,6 +3957,9 @@ function showMonthCloseWorkflow(last, nid, onCreated) {
   const flags = fundFlags(last, comp, todayISO());
   const attList = flags.filter((x) => x.attention);
   const offList = flags.filter((x) => x.offset);
+  // 1.2.1 (W4): the recap splits the same way the Budget page does.
+  const carryList = flags.filter((x) => x.carriedIn < 0 && x.leftover < -0.004);
+  const carryTotal = r2(carryList.reduce((a, x) => a + x.carriedIn, 0));
 
   // Category breakdown (planned vs spent), skipping empty ones.
   const catRows = comp.categories
@@ -3902,7 +3995,12 @@ function showMonthCloseWorkflow(last, nid, onCreated) {
   if (actDiff(comp) > 0.004) wins.push(`${icon('ni-chart')} You ended ${money(actDiff(comp))} ahead — income beat spending`);
   for (const f of matured) {
     const set = r2(f.carryOver + f.planned);
-    wins.push(set >= f.setup.targetAmount - 0.004
+    // S16 (1.2.1): a goal that was spent past what it saved is not a win to
+    // celebrate — say what happened, neutrally. Met and unspent still cheers.
+    const spentHere = f.expensed < -0.004 ? -f.expensed : 0;
+    wins.push(f.leftover < -0.004
+      ? `${icon('target')} "${esc(f.fund)}" matured — ${money(spentHere)} spent against ${money(set)} saved`
+      : set >= f.setup.targetAmount - 0.004
       ? `${icon('target', 'goal reached')} "${esc(f.fund)}" hit its ${money(f.setup.targetAmount)} goal — enjoy it!`
       : `${icon('target')} "${esc(f.fund)}" matured with ${money(set)} of ${money(f.setup.targetAmount)} saved`);
   }
@@ -3952,7 +4050,9 @@ function showMonthCloseWorkflow(last, nid, onCreated) {
           <td class="${moneyCls(r2(c.planned - c.spent))}">${money(r2(c.planned - c.spent))}</td></tr>`).join('')}
         </tbody></table></details>
       ${attList.length ? `<p style="margin:10px 0 4px"><b>${icon('warn', 'needs attention')} Needs attention (${attList.length})</b></p><ul class="modal-list">
-        ${attList.map((x) => li(x, x.attention === 'exceeded' ? `over by <span class="neg">${money(-x.leftover)}</span>` : 'off pace')).join('')}</ul>` : ''}
+        ${attList.map((x) => li(x, x.attention === 'exceeded' ? `over by <span class="neg">${money(-x.overThisMonth)}</span>` : 'off pace')).join('')}</ul>` : ''}
+      ${carryList.length ? `<p style="margin:10px 0 4px"><b>${icon('ledger')} Carried in from earlier months (${carryList.length})</b> <span class="muted">— ${money(carryTotal)} in all</span></p><ul class="modal-list">
+        ${carryList.map((x) => li(x, `${money(x.carriedIn)} carried · this month ${carriedThisMonthWords(x)}`)).join('')}</ul>` : ''}
       ${offList.length ? `<p style="margin:10px 0 4px"><b>${icon('move')} Available to move (${offList.length})</b></p><ul class="modal-list">
         ${offList.map((x, i) => li(x, `<span class="pos">${money(x.leftover)}</span> free — <a href="#" data-wf-xfer="${esc(x.fund)}">transfer it</a>`)).join('')}</ul>` : ''}
       ${isFutureClose ? `<p class="modal-warn">${monthLabel(last.id)} hasn't started yet —

@@ -23,7 +23,7 @@
 //    the real tool it opens (Transfer…, Open Budget, Review N unassigned), and
 //    `phrase` is the one-line plain state for tooltips. Garden phrasing
 //    survives only in status-only text (season note, the calm affirmation).
-import { computeMonth, fundFlags, normFund, r2, isTransferTx } from './compute.js';
+import { computeMonth, fundFlags, fundSplit, normFund, r2, isTransferTx } from './compute.js';
 
 // ---- tunables (first guesses — revisit after a month of living with it) ----
 export const SEASON_WINDOW_DAYS = 90;   // compare the latest AUM snapshot to ~this far back
@@ -136,7 +136,11 @@ export function plantFor(f, category, flag, ctx, txCount) {
   else if (flag && flag.attention === 'pace') state = 'thirsty';
   else if (flag && flag.offset) state = 'harvest';
   else if (Math.abs(budget) <= 0.004 && !hasActivity) state = 'resting';
-  else if (ctx.monthDone && f.leftover >= -0.004) state = 'blooming';
+  // 1.2.1 (W5): plants follow this month. At close a fund blooms when it isn't
+  // red, or when its red only came in from earlier months and this month
+  // stayed inside its own plan (fundSplit().own) — one that didn't is wilting
+  // via W1's attention above.
+  else if (ctx.monthDone && (f.leftover >= -0.004 || fundSplit(f).own >= -0.004)) state = 'blooming';
   else if (flag && flag.pace === 'on' && ctx.monthPct >= LATE_MONTH_PCT) state = 'blooming';
   else if (!hasActivity) state = 'planted';
   else state = 'growing';
@@ -165,9 +169,13 @@ export function plantFor(f, category, flag, ctx, txCount) {
   // Clicking any plant opens that fund in Budget (§3); `action` is the named
   // remedy for the states that have one, `jump` the click target for all.
   const jump = { kind: 'budget', fund: f.fund, category, label: ACTION_LABELS.budget };
+  // Wilting is THIS month's overspend (W1's overThisMonth); a deficit carried
+  // in from earlier months is named separately below, never as "over".
+  const overThisMonth = flag ? flag.overThisMonth || 0 : 0;
+  const carriedIn = flag ? flag.carriedIn || 0 : 0;
   if (state === 'wilting') {
-    caption = `Over by ${money(f.leftover)} — a transfer covers it.`;
-    phrase = `${money(f.leftover)} over`;
+    caption = `Over by ${money(overThisMonth)} this month — a transfer covers it.`;
+    phrase = `${money(overThisMonth)} over`;
     action = { kind: 'transfer', to: f.fund, label: ACTION_LABELS.transfer };
   } else if (state === 'harvest') {
     caption = `${money(f.leftover)} unspent — free to move.`;
@@ -176,11 +184,20 @@ export function plantFor(f, category, flag, ctx, txCount) {
   } else if (state === 'thirsty') {
     action = jump;
   }
+  // Carrying (W5): still on the books from before. The tooltip always says so;
+  // the caption only on the quiet states — an actionable caption keeps to its
+  // one remedy.
+  if (carriedIn < 0 && f.leftover < -0.004) {
+    const tail = ` · carrying (${money(carriedIn)}) from before`;
+    phrase += tail;
+    if (state === 'blooming' || state === 'growing' || state === 'planted') caption = caption.replace(/\.$/, '') + tail + '.';
+  }
 
   return {
     fund: f.fund, category, family, species, state, stage, progress: r2(progress),
     caption, phrase, action, jump, type: s.type || 'basic',
     planned: f.planned, carryOver: f.carryOver, spent, leftover: f.leftover, budget,
+    overThisMonth, carriedIn,
   };
 }
 
@@ -405,10 +422,11 @@ export function gardenState(data, { monthId, todayISO }) {
   const wilting = plants.filter((p) => p.state === 'wilting');
   if (wilting.length) {
     const first = wilting[0];
-    const over = r2(wilting.reduce((a, p) => a + p.leftover, 0));
+    // This month's overspend only (W1/W5) — carried-in red has its own card.
+    const over = r2(wilting.reduce((a, p) => a + p.overThisMonth, 0));
     messages.push({ kind: 'wilting', text: wilting.length === 1
-      ? `"${first.fund}" is ${money(first.leftover)} over — a transfer from a fund with money to spare covers it.`
-      : `${names(wilting)} are over — ${money(over)} in all. A transfer from a fund with money to spare covers each one.`,
+      ? `"${first.fund}" is ${money(first.overThisMonth)} over this month — a transfer from a fund with money to spare covers it.`
+      : `${names(wilting)} are over — ${money(over)} in all this month. A transfer from a fund with money to spare covers each one.`,
       action: { kind: 'transfer', to: first.fund, label: ACTION_LABELS.transfer } });
   }
   const thirsty = plants.filter((p) => p.state === 'thirsty');
@@ -418,6 +436,17 @@ export function gardenState(data, { monthId, todayISO }) {
       ? `"${first.fund}" is spending faster than planned — on pace to go over this month.`
       : `${names(thirsty)} are spending faster than planned — on pace to go over this month.`,
       action: { kind: 'budget', fund: first.fund, category: first.category, label: ACTION_LABELS.budget } });
+  }
+  // Carried in (1.2.1 W5): one card carries the deficit total — never hidden,
+  // never called "over". It sits below the things this month can still fix.
+  const carried = plants.filter((p) => p.carriedIn < 0 && p.leftover < -0.004);
+  if (carried.length) {
+    const first = carried[0];
+    const total = r2(carried.reduce((a, p) => a + p.carriedIn, 0));
+    messages.push({ kind: 'carried', text: carried.length === 1
+      ? `"${first.fund}" is carrying (${money(first.carriedIn)}) from earlier months — this month it's ${first.state === 'wilting' ? 'over too' : 'on plan'}.`
+      : `${names(carried)} are carrying (${money(total)}) from earlier months between them.`,
+      action: { kind: 'budget', label: ACTION_LABELS.budget } });
   }
   const harvest = plants.filter((p) => p.state === 'harvest');
   if (harvest.length) {

@@ -183,6 +183,21 @@ export function isOverridden(f, monthId) {
   return auto != null && Math.abs(f.planned - auto) > 0.004;
 }
 
+// 1.2.1 (Option B): where a fund's position came from. Display-only — the
+// leftover identity (Inv 2) and carry-over derivation (Inv 6) are untouched.
+//   own           this month on its own terms (planned + expensed; ≥ 0 = inside its plan)
+//   carriedIn     the negative carry-over that entered the month, else 0
+//   overThisMonth with a deficit coming in, what THIS month added; with a
+//                 positive carry that carry was spendable money, so over is over
+//   carriedOnly   red only because of earlier months — on plan this month
+export function fundSplit(f) {
+  const own = r2(f.planned + f.expensed);
+  const carriedIn = f.carryOver < -0.004 ? f.carryOver : 0;
+  const red = f.leftover < -0.004;
+  const overThisMonth = !red ? 0 : carriedIn < 0 ? r2(Math.min(0, own)) : f.leftover;
+  return { own, carriedIn, overThisMonth, carriedOnly: red && carriedIn < 0 && own >= -0.004 };
+}
+
 // Attention/offset flags + pace tags for a computed month (expense funds only;
 // Work excluded). todayISO paces the current calendar month; past months are
 // judged as complete; future months as not started.
@@ -215,39 +230,52 @@ export function fundFlags(month, comp, todayISO) {
       if (s.excludeInsights) continue; // fully quiet: no flags, no pace chips
       const type = s.type || 'basic';
       const spent = f.expensed < 0 ? -f.expensed : 0;
-      const budget = r2(f.carryOver + f.planned);
+      // 1.2.1 (W1): pace judges this month's own money. A negative carry is a
+      // debt, not a smaller budget — otherwise steady spending reads "off pace"
+      // all month and then "carried-only, fine" at close.
+      const ownBudget = r2(Math.max(f.carryOver, 0) + f.planned);
       let attention = null, offset = false, pace = null;
 
-      if (f.leftover < -0.004) attention = 'exceeded';
+      // 'exceeded' means THIS month overspent its own plan (W1). A deficit that
+      // only came in from earlier months is carried, not exceeded.
+      const sp = fundSplit(f);
+      if (sp.overThisMonth < -0.004) attention = 'exceeded';
 
-      if (type === 'pacing' && isCurrent && !monthDone && budget > 0.004 && !attention) {
+      if (type === 'pacing' && isCurrent && !monthDone && ownBudget > 0.004 && !attention) {
         // On/off pace. "Off" means the current spending rate is projected to
         // overrun the budget by a material amount — not merely being ahead of a
         // straight line, which flags every fund that front-loads its spending.
         if (monthPct >= PACE_GRACE_PCT) {
           const projected = spent / monthPct;          // spend at this rate all month
-          const slack = Math.max(PACE_MIN_OVER, budget * PACE_OVER_FRACTION);
-          pace = projected > budget + slack ? 'off' : 'on';
+          const slack = Math.max(PACE_MIN_OVER, ownBudget * PACE_OVER_FRACTION);
+          pace = projected > ownBudget + slack ? 'off' : 'on';
           if (pace === 'off') attention = 'pace';
         } else {
           pace = 'on'; // too early in the month to judge
         }
       }
 
+      // "Available to move" (S12 rule (a), 1.2.1 W2): a Fixed fund is done once
+      // its one bill posts; Basic and Pacing only once the month is over.
       if (!attention && f.leftover > 0.004) {
-        if (type === 'basic' || type === 'fixed') offset = (txCount[k] || 0) >= 1;
-        else if (type === 'pacing') offset = monthDone;
+        if (type === 'fixed') offset = (txCount[k] || 0) >= 1;        // one bill, then it's done
+        else if (type === 'basic' || type === 'pacing') offset = monthDone;
         else if (type === 'savings') {
           // Build-over-time pots are never "available to move"; target-date goals
-          // only in their maturity month.
-          offset = s.savingsMode !== 'build' && month.id === s.targetMonth && ((txCount[k] || 0) >= 1 || monthDone);
+          // only once their target month is over — a goal is spent in its month,
+          // not before.
+          offset = s.savingsMode !== 'build' && month.id === s.targetMonth && monthDone;
         }
       }
 
-      if (attention || offset || pace) {
+      // A carried-only fund has no attention, offset or pace, but the chips,
+      // Review and garden still need its entry to say "carrying".
+      if (attention || offset || pace || (sp.carriedIn < 0 && f.leftover < -0.004)) {
         out.push({
           fund: f.fund, category: c.name, type, attention, offset, pace,
           leftover: f.leftover, planned: f.planned, spent: r2(spent), carryOver: f.carryOver,
+          own: sp.own, carriedIn: sp.carriedIn, overThisMonth: sp.overThisMonth, carriedOnly: sp.carriedOnly,
+          budget: ownBudget,
         });
       }
     }
@@ -585,7 +613,10 @@ export function buildNextMonth(prev, tithePercent) {
       if (s && s.type === 'savings' && s.targetMonth && id > s.targetMonth) {
         s.targetMonth = monthAdd(s.targetMonth, 12);
       }
-      let planned = f.planned; // default: repeat last month's plan
+      // Default: repeat last month's plan. A fund paused for one month (1.2.1
+      // W6, fund.pausedPlanned) gets its plan back here; the field itself is
+      // not copied — the returned object lists its fields explicitly below.
+      let planned = f.pausedPlanned != null ? f.pausedPlanned : f.planned;
       const auto = autoPlanned({ ...f, setup: s, carryOver }, id);
       if (auto != null) {
         planned = auto; // fund setup wins: overrides reset each new month

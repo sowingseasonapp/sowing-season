@@ -9,6 +9,62 @@ so entries before that are dated by when the work happened, not by commit.
 
 ---
 
+## Unreleased — 1.2.1
+
+### 2026-10-31 — Carried-in split, free-to-move rule, chip block, Review/recap/garden split, pause this month (sitting A: W1–W6)
+
+Sitting A of the 1.2.1 work order (`_cowork/work-order-1.2.1.md`, items W1–W6; three-year report "The bigger
+story", S12, S16, overlap table; Option B decided 2026-10-05). `src/compute.js`, `src/app.js`, `src/garden.js`,
+`src/styles.css`, `tools/test-compute.mjs`, `tools/test-garden.mjs`. **First `compute.js` change since 1.1.1,
+additive only, in three places. No data.version bump, no migration.** One optional field added,
+`fund.pausedPlanned` on an expense fund inside one month, ignored by every migration.
+Suites: csv 606 (unchanged) · migrate 17 (unchanged) · garden **156 → 176** · compute **1091 → 1147**, 0 failed.
+
+- **W1 — the carried-in split (the big story).** One test, `leftover < 0`, used to drive the row chip, Review,
+  the recap and the garden, so a fund that inherited −$829 and spent exactly its plan read "over $829" all
+  month. New export `fundSplit(f)` → `{ own, carriedIn, overThisMonth, carriedOnly }`, computed from the three
+  numbers the engine already produces. `fundFlags` entries gain those four fields plus `budget` (this month's
+  own money); `attention: 'exceeded'` now means *this month overspent its own plan*; pace judges
+  `max(carryOver, 0) + planned`, so a −$200 carry no longer makes steady spending "off pace" all month; a
+  carried-only fund gets an entry with `attention: null` so the surfaces can say "carrying". `computeMonth`
+  untouched (the new test serialises it before and after `fundFlags`); Cowork verifies byte-identity on the two
+  persona files.
+- **W2 — S12 rule (a).** A Basic or Pacing fund is "free to move" only once the month is done; a savings goal
+  only once its target month is over; Fixed keeps the one-charge rule. No $1 floor (decided). The free chip's
+  title and Review's "Available to move" line are type-aware.
+- **W3 — the chip block.** `fundChips` = rule chip + type mark + ONE status chip (over · off pace · $X free ·
+  on-pace dot) + modifier chips in order: `carrying ($X)` (muted) · `paused` (warn) · `overridden` (warn) ·
+  `full` (muted, a build-up pot at its cap). Fixes A-29/B-08 (overridden hidden behind over) and B-16. `over`
+  reads `overThisMonth`; its title names the carried-in amount when there is one. Hook `goalProjection()`
+  returns `''` until sitting B's W9. `.rule-chip + .rule-chip` gets a 4px gap.
+- **W4 — Review, the total line, the recap, S16.** Needs attention = this-month overs and off-pace only, rows
+  read `Over by $overThisMonth`. New Review group **Carried in from earlier months** (`Carrying ($X) · this
+  month on plan / $Y under plan / $Z over`), after Needs attention, counting as ONE in the Review badge. Under
+  the month-head stats: `($X) of earlier overspending is still on the books across N funds · Review`. The
+  recap splits the same way (`Carried in from earlier months (n) — ($X) in all`); "Start X anyway" still keys
+  on `attList.length || offList.length` — carried-in red is not a reason. S16: a matured goal that was spent
+  past what it saved reads `"X" matured — $spent spent against $saved saved` (neutral); met and unspent still
+  says "enjoy it!".
+- **W5 — the garden follows this month.** At close a plant blooms when it isn't red *or* when its red only came
+  in from earlier months and this month stayed inside its plan (`fundSplit().own ≥ 0`). Wilting caption `Over
+  by $X this month — a transfer covers it.`; every carrying plant's tooltip (and the quiet states' caption)
+  ends `· carrying ($X) from before`; plants carry `overThisMonth` and `carriedIn`. Garden status line adds
+  `N carrying from before`; new message `kind: 'carried'` (after thirsty, before harvest; neutral border
+  `.msg-carried`); the wilting message totals this month's overspend.
+- **W6 — #17 Pause this month.** Fund panel → `⏸ Pause this month` on an expense fund that isn't retiring:
+  `pausedPlanned = planned; planned = 0; rule = null`, one `markDirty` (Ctrl+Z restores both), toast
+  `"X" paused — $Y comes back when you start <month>.`; `▶ Unpause — put $Y back` restores. `buildNextMonth`
+  uses `pausedPlanned ?? planned` and never copies the field; a fund with a setup gets its auto amount as
+  always (Invariant 13). Typing a non-zero planned into a paused fund unpauses it.
+- **Tests.** test-compute: new 1.2.1 section (the six W1 rows × 6, the gate, pace on/off, computeMonth
+  before/after, S12 rule (a) per type incl. the four-cent case, pause ×6). test-garden: §1 `Electric` and §7b
+  `C`/`D` fixtures moved to `fixed` so they keep asserting the one-charge rule where it still applies; §1's
+  wilting caption and §7b's wilting total take the new "this month" wording; new §1b (rule (a) per type) and
+  §1c (carried in: Rent/Groc/Gas); §11 guards that the recap has `matured — ` and no surface reads
+  `money(-x.leftover)` any more.
+- **Decisions recorded, not re-opened:** Option C (catch-up plan) → 1.3.0 I1; perennials ignore carried-in red
+  → 1.4.0 reads `fundSplit().own`; no penny floor; carried-in red never triggers "Start anyway".
+
 ## 1.2.0 — 2026-10-26 — quick wins, Batch 5
 
 Twelve small things from the post-1.1.0 roadmap and the three-year simulation's Batch 5, shipped as three sittings (A, B, C below). No data.version bump; no migration; three optional fields added (`settings.accountNames`, `settings.lastExportAt`, `fund.retireAtClose`). `view === 'import'` is aliased to Transactions for this release and goes away in 1.3.0.

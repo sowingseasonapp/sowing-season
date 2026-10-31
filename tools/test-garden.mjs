@@ -37,7 +37,7 @@ function makeMonth(id, { categories, income, transactions = [] }) {
         fund('Fun', 100, 'pacing'),                // planted: nothing spent yet
       ] },
       { name: 'Bills', excludeFromTotals: false, funds: [
-        fund('Electric', 100, 'basic'),            // harvest: paid, money left
+        fund('Electric', 100, 'fixed'),            // harvest: paid, money left (one-charge rule — Fixed only since 1.2.1 W2)
         fund('Water', 50, 'basic'),                // wilting: over
         fund('Unused', 0, 'basic'),                // resting
         fund('Quiet', 100, 'basic', { setup: { excludeInsights: true } }), // no plant
@@ -77,7 +77,7 @@ function makeMonth(id, { categories, income, transactions = [] }) {
   const by = Object.fromEntries(g.plants.map((p) => [p.fund, p]));
   check('harvest caption: plain money, free to move', by.Electric.caption === '$20.00 unspent — free to move.', by.Electric.caption);
   check('harvest action = Transfer… from fund', by.Electric.action.kind === 'transfer' && by.Electric.action.from === 'Electric' && by.Electric.action.label === 'Transfer…');
-  check('wilting caption: over by money, a transfer covers it', by.Water.caption === 'Over by $10.00 — a transfer covers it.', by.Water.caption);
+  check('wilting caption: over by money this month, a transfer covers it', by.Water.caption === 'Over by $10.00 this month — a transfer covers it.', by.Water.caption);
   check('wilting action = Transfer… to fund', by.Water.action.kind === 'transfer' && by.Water.action.to === 'Water' && by.Water.action.label === 'Transfer…');
   check('thirsty caption is plain budget language', by.Groceries.caption === 'Spending faster than planned — on pace to go over.', by.Groceries.caption);
   check('thirsty action = Open Budget at the fund', by.Groceries.action.kind === 'budget' && by.Groceries.action.fund === 'Groceries' && by.Groceries.action.category === 'Everyday' && by.Groceries.action.label === 'Open Budget');
@@ -117,6 +117,61 @@ function makeMonth(id, { categories, income, transactions = [] }) {
   check('future month → planted (except resting)', future.plants.every((p) => p.state === 'planted' || (p.state === 'resting' && p.fund === 'Unused')),
     JSON.stringify(future.plants.map((p) => [p.fund, p.state])));
   check('future month calm message', future.messages.length === 1 && future.messages[0].kind === 'calm' && /Freshly sown/.test(future.messages[0].text));
+}
+
+// ---- 1b. S12 rule (a) (1.2.1 W2): Basic is free only once the month is done; a goal only once its target month is over ----
+{
+  const mk = (todayISO) => gardenState({ version: 6, settings: {}, months: [makeMonth('2026-08', {
+    categories: [
+      { name: 'Bills', excludeFromTotals: false, funds: [fund('Phone', 60, 'basic')] },
+      { name: 'Savings', excludeFromTotals: false, funds: [fund('Trip', 100, 'savings', { setup: { targetAmount: 1200, targetMonth: '2026-08' }, fund: { carryOver: 1100 } })] },
+    ],
+    transactions: [tx('Phone', -45), tx('Trip', -500)],
+  })], aum: { snapshots: [] } }, { monthId: '2026-08', todayISO });
+  const mid = Object.fromEntries(mk(TODAY).plants.map((p) => [p.fund, p.state]));
+  const end = Object.fromEntries(mk('2026-08-31').plants.map((p) => [p.fund, p.state]));
+  check('basic paid mid-month with money left → growing, not harvest', mid.Phone === 'growing', mid.Phone);
+  check('basic on the last day → harvest', end.Phone === 'harvest', end.Phone);
+  check('goal in its target month, one charge mid-month → not harvest', mid.Trip === 'growing', mid.Trip);
+  check('goal in its target month on the last day → harvest', end.Trip === 'harvest', end.Trip);
+}
+
+// ---- 1c. Carried in (1.2.1 W1/W5): plants follow this month; one card carries the deficit ----
+{
+  const month = makeMonth('2026-07', {
+    income: [{ fund: 'Pay', carryOver: 0, planned: 550, rule: null, group: 'bonus' }],
+    categories: [{ name: 'Everyday', excludeFromTotals: false, funds: [
+      fund('Rent', 400, 'basic', { fund: { carryOver: -100 } }),  // carried-only: on plan this month → blooming at close
+      fund('Groc', 100, 'basic', { fund: { carryOver: -50 } }),   // mixed: $30 over this month AND carrying $50
+      fund('Gas', 50, 'basic'),                                    // fresh: $10 over this month
+    ] }],
+    transactions: [tx('Rent', -400, '2026-07-05'), tx('Groc', -130, '2026-07-12'), tx('Gas', -60, '2026-07-20')],
+  });
+  const g = gardenState({ version: 7, settings: {}, months: [month], aum: { snapshots: [] } }, { monthId: '2026-07', todayISO: '2026-07-31' });
+  const by = Object.fromEntries(g.plants.map((p) => [p.fund, p]));
+  check('carried-only fund on plan this month → blooming at close', by.Rent.state === 'blooming', by.Rent.state);
+  check('carried-only caption says carrying, from before', /carrying \(\$100\.00\) from before\.$/.test(by.Rent.caption), by.Rent.caption);
+  check('carried-only phrase carries it too', by.Rent.phrase === 'finished on plan · carrying ($100.00) from before', by.Rent.phrase);
+  check('plant carries carriedIn', by.Rent.carriedIn === -100 && by.Groc.carriedIn === -50 && by.Gas.carriedIn === 0, JSON.stringify(g.plants.map((p) => [p.fund, p.carriedIn])));
+  check('mixed fund → wilting on this month\'s overspend only', by.Groc.state === 'wilting' && by.Groc.caption === 'Over by $30.00 this month — a transfer covers it.', by.Groc.caption);
+  check('mixed phrase: this month over, carrying from before', by.Groc.phrase === '$30.00 over · carrying ($50.00) from before', by.Groc.phrase);
+  check('fresh fund → wilting, over by leftover', by.Gas.state === 'wilting' && by.Gas.caption === 'Over by $10.00 this month — a transfer covers it.' && by.Gas.overThisMonth === -10, by.Gas.caption);
+  check('counts: 2 wilting, 1 blooming', g.counts.wilting === 2 && g.counts.blooming === 1, JSON.stringify(g.counts));
+  check('ladder: wilting, carried, … (carried after thirsty, before harvest)', g.messages.map((m) => m.kind).slice(0, 2).join(',') === 'wilting,carried', g.messages.map((m) => m.kind).join(','));
+  const w = g.messages.find((m) => m.kind === 'wilting'), cd = g.messages.find((m) => m.kind === 'carried');
+  check('wilting total is this month\'s overspend', w && /\$40\.00 in all this month/.test(w.text), w && w.text);
+  check('carried card names the funds and the total, opens Budget', cd && cd.text === '"Rent", "Groc" are carrying ($150.00) from earlier months between them.' && cd.action.kind === 'budget' && cd.action.label === 'Open Budget', cd && cd.text);
+  // Single carried-only fund: says what this month did.
+  const one = gardenState({ version: 7, settings: {}, months: [{ ...month, categories: [{ name: 'Everyday', excludeFromTotals: false, funds: [fund('Rent', 400, 'basic', { fund: { carryOver: -100 } })] }], transactions: [tx('Rent', -400, '2026-07-05')] }], aum: { snapshots: [] } }, { monthId: '2026-07', todayISO: '2026-07-31' });
+  const c1 = one.messages.find((m) => m.kind === 'carried');
+  check('single carried card: on plan this month', c1 && c1.text === '"Rent" is carrying ($100.00) from earlier months — this month it\'s on plan.', c1 && c1.text);
+  // Paid back this month → nothing carried.
+  const paid = gardenState({ version: 7, settings: {}, months: [{ ...month, categories: [{ name: 'Everyday', excludeFromTotals: false, funds: [fund('Rent', 150, 'basic', { fund: { carryOver: -100 } })] }], transactions: [tx('Rent', -30, '2026-07-05')] }], aum: { snapshots: [] } }, { monthId: '2026-07', todayISO: '2026-07-15' });
+  check('deficit paid back → no flag entry, so nothing carried and no carried card', paid.plants[0].carriedIn === 0 && paid.plants[0].state === 'growing' && !/carrying/.test(paid.plants[0].phrase) && !paid.messages.some((m) => m.kind === 'carried'), JSON.stringify([paid.plants[0].state, paid.plants[0].carriedIn, paid.plants[0].phrase]));
+  // Two-register guard over the new strings.
+  const METAPHOR = /\b(water(s|ed|ing)?|harvest|replant|weeds?|sow|sown|bloom(ing)?|wilt(ed|ing)?|thirsty|tend(ing)?|garden|bed|seed|plant|drink(ing)?)\b/i;
+  const stripNames = (t) => t.replace(/"[^"]*"/g, '"…"');
+  check('carried card and phrases speak budget, not garden', !METAPHOR.test(stripNames(cd.text)) && !METAPHOR.test(by.Rent.phrase) && !METAPHOR.test(by.Groc.phrase), cd.text);
 }
 
 // ---- 2. Blooming: month done / pacing on pace late-month ----
@@ -228,12 +283,13 @@ function makeMonth(id, { categories, income, transactions = [] }) {
 {
   const month = makeMonth('2026-08', {
     income: [{ fund: 'Pay', carryOver: 0, planned: 1000, rule: null, group: 'bonus' }],
-    categories: [{ name: 'Bills', excludeFromTotals: false, funds: [fund('A', 50), fund('B', 50), fund('C', 100), fund('D', 100), fund('E', 700)] }],
+    // C and D are Fixed: the one-charge "free" rule is theirs alone since 1.2.1 W2.
+    categories: [{ name: 'Bills', excludeFromTotals: false, funds: [fund('A', 50), fund('B', 50), fund('C', 100, 'fixed'), fund('D', 100, 'fixed'), fund('E', 700)] }],
     transactions: [tx('A', -60), tx('B', -75), tx('C', -20), tx('D', -30)],
   });
   const g = gardenState({ version: 6, settings: {}, months: [month], aum: { snapshots: [] } }, { monthId: '2026-08', todayISO: TODAY });
   const w = g.messages.find((m) => m.kind === 'wilting'), h = g.messages.find((m) => m.kind === 'harvest');
-  check('multi-wilting text names funds + total, label Transfer…', w && w.text === '"A", "B" are over — $35.00 in all. A transfer from a fund with money to spare covers each one.' && w.action.label === 'Transfer…' && w.action.to === 'A', w && w.text);
+  check('multi-wilting text names funds + total, label Transfer…', w && w.text === '"A", "B" are over — $35.00 in all this month. A transfer from a fund with money to spare covers each one.' && w.action.label === 'Transfer…' && w.action.to === 'A', w && w.text);
   check('multi-harvest text names total + funds, label Transfer…', h && h.text === '2 funds have $150.00 unspent between them — free to move: "C", "D".' && h.action.label === 'Transfer…' && h.action.from === 'C', h && h.text);
   check('single weed label', gardenState({ version: 6, settings: {}, months: [{ ...month, transactions: [tx('Nobody', -1)] }], aum: { snapshots: [] } }, { monthId: '2026-08', todayISO: TODAY }).messages[0].action.label === 'Review 1 unassigned');
 }
@@ -444,6 +500,9 @@ function makeMonth(id, { categories, income, transactions = [] }) {
   check('Budget hero copy unchanged', appSrc.includes("'Zero-based ✓ — every dollar has a job'") && !/Every dollar sown/.test(appSrc));
   check('sidebar button unchanged', html.includes('>+ Start next month<') && !/Sow \$\{/.test(appSrc) && !/🌱 Sow/.test(appSrc));
   check('month-created toast stays literal', appSrc.includes('created — review planned amounts.') && !/is sown —/.test(appSrc));
+  // 1.2.1 W4: the recap's S16 neutral line exists, and no surface says "over by" the whole leftover any more.
+  check('recap: an overspent matured goal gets the neutral line', appSrc.includes('matured — '));
+  check('Needs attention never reads over-by-leftover (split, W1/W4)', !appSrc.includes('money(-x.leftover)') && !appSrc.includes('money(-flag.leftover)'));
   check('month-close: ceremony title, literal action button', appSrc.includes('harvest</h2>') && /`Start \$\{monthLabel\(nid\)\} anyway` : `Start \$\{monthLabel\(nid\)\}`/.test(appSrc));
   check('Garden view has no editing controls (only buttons that navigate)', !/<input[^>]*class="money/.test(appSrc.slice(appSrc.indexOf('function renderGarden'), appSrc.indexOf('/* ---------------- Settings view'))));
   const rm = css.slice(css.indexOf('@media (prefers-reduced-motion: reduce)'));

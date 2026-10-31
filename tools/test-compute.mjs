@@ -5,6 +5,7 @@ import {
   applyTitheRules, titheBase, autoPlanned, isOverridden, fundFlags, r2,
   savingsMonthly, monthAdd, monthDiff,
   migrateV6, migrateV7, resyncCarryOvers, aumTotals, upsertSnapshot, aumLastUpdated,
+  fundSplit,
 } from '../src/compute.js';
 import { parseBankCsv, buildVendorMap, suggestFund, findDuplicate } from '../src/csv.js';
 import fs from 'fs';
@@ -562,6 +563,107 @@ console.log(`\nCompute engine vs spreadsheet: ${ok} checks passed, ${bad} failed
     t('S7 cascade idempotent', resyncCarryOvers(d).length === 0);
   }
   console.log(`\nV7 derived carry-overs: assertions folded into the pass/fail totals above (now ${ok} ok / ${bad} bad)`);
+}
+
+// ---- 1.2.1 sitting A: carried-in split (W1), pace on own money, S12 rule (a) (W2), pause this month (W6) ----
+{
+  const t = (label, cond, detail = '') => {
+    if (cond) ok++; else { bad++; console.log(`FAIL 1.2.1 ${label}${detail ? ` — ${detail}` : ''}`); }
+  };
+  const mkMonth = (id, funds, transactions = []) => ({
+    id, label: 'M', checks: {}, income: [], categories: [{ name: 'C', excludeFromTotals: false, funds }], transactions,
+  });
+  const basic = (fund, carryOver, planned, more = {}) => ({ fund, carryOver, planned, rule: null, setup: { type: 'basic' }, ...more });
+  const pacing = (fund, carryOver, planned) => ({ fund, carryOver, planned, rule: null, setup: { type: 'pacing', everyMonths: 1, totalAmount: 0, targetAmount: 0, targetMonth: null } });
+  const tx = (date, amount, fund) => ({ id: 'x' + Math.random().toString(36).slice(2), date, vendor: 'v', amount, fund });
+
+  // W1: the six worked rows of the work order's table — fundSplit's four fields
+  // and the attention fundFlags gives at month end (todayISO = the last day).
+  // [carryOver, planned, spent, own, overThisMonth, carriedIn, carriedOnly, attention]
+  const rows = [
+    [0,    400, 450, -50,  -50,  0,    false, 'exceeded'],   // fresh — unchanged from today
+    [100,  400, 550, -150, -50,  0,    false, 'exceeded'],   // the +100 carry was real money
+    [-829, 400, 400, 0,    0,    -829, true,  null],         // carrying — on plan this month (A-11)
+    [-829, 400, 360, 40,   0,    -829, true,  null],         // carrying — $40 under plan
+    [-829, 400, 520, -120, -120, -829, false, 'exceeded'],   // over $120 this month · carrying
+    [-100, 150, 30,  120,  0,    -100, false, null],         // paid back — a plain row with $20 left
+  ];
+  for (const [co, pl, sp, own, over, cin, conly, att] of rows) {
+    const m = mkMonth('2026-08', [basic('F', co, pl)], [tx('2026-08-10', -sp, 'F')]);
+    const comp = computeMonth(m);
+    const f = comp.categories[0].funds[0];
+    const s = fundSplit(f);
+    const label = `split ${co}/${pl}/−${sp}`;
+    t(`${label} own`, s.own === own, String(s.own));
+    t(`${label} overThisMonth`, s.overThisMonth === over, String(s.overThisMonth));
+    t(`${label} carriedIn`, s.carriedIn === cin, String(s.carriedIn));
+    t(`${label} carriedOnly`, s.carriedOnly === conly, String(s.carriedOnly));
+    const fl = fundFlags(m, comp, '2026-08-31')[0];
+    t(`${label} attention at month end`, fl && fl.attention === att, JSON.stringify(fl));
+    if (fl) t(`${label} entry carries the split`, fl.own === own && fl.carriedIn === cin && fl.overThisMonth === over && fl.carriedOnly === conly, JSON.stringify(fl));
+  }
+  // The gate: the carried-only row has an entry with attention null (and
+  // nothing else to say); the paid-back row has no entry at all mid-month.
+  {
+    const co = mkMonth('2026-08', [basic('F', -829, 400)], [tx('2026-08-10', -400, 'F')]);
+    const e = fundFlags(co, computeMonth(co), '2026-08-15');
+    t('gate: carried-only fund gets an entry mid-month', e.length === 1 && e[0].attention === null && !e[0].offset && e[0].pace === null && e[0].carriedOnly === true, JSON.stringify(e));
+    const pb = mkMonth('2026-08', [basic('F', -100, 150)], [tx('2026-08-10', -30, 'F')]);
+    t('gate: deficit paid back → no entry mid-month', fundFlags(pb, computeMonth(pb), '2026-08-15').length === 0);
+    const pbEnd = fundFlags(pb, computeMonth(pb), '2026-08-31')[0];
+    t('gate: paid back at month end → plain "free" row, nothing carried', pbEnd && pbEnd.offset === true && pbEnd.attention === null && pbEnd.carriedOnly === false, JSON.stringify(pbEnd));
+  }
+  // Pace judges this month's own money (budget = max(carryOver, 0) + planned).
+  {
+    const p1 = mkMonth('2026-08', [pacing('G', -200, 400)], [tx('2026-08-10', -200, 'G')]);
+    const f1 = fundFlags(p1, computeMonth(p1), '2026-08-15')[0];
+    t('pace: −200 carry, 200 of 400 spent by the 15th → on (was off)', f1 && f1.pace === 'on' && f1.attention === null, JSON.stringify(f1));
+    t('pace: budget carried out is this month\'s own money', f1 && f1.budget === 400, f1 && String(f1.budget));
+    const p2 = mkMonth('2026-08', [pacing('G', 200, 400)], [tx('2026-08-10', -400, 'G')]);
+    const f2 = fundFlags(p2, computeMonth(p2), '2026-08-15')[0];
+    t('pace: +200 carry, 400 of 600 spent by the 15th → off', f2 && f2.pace === 'off' && f2.attention === 'pace' && f2.budget === 600, JSON.stringify(f2));
+  }
+  // The money didn't move: computeMonth is the same before and after fundFlags,
+  // and fundFlags never writes into the computed month it reads.
+  {
+    const m = mkMonth('2026-08', [basic('F', -829, 400), pacing('G', 50, 300)], [tx('2026-08-10', -520, 'F'), tx('2026-08-12', -100, 'G')]);
+    const before = JSON.stringify(computeMonth(m));
+    const comp = computeMonth(m);
+    fundFlags(m, comp, '2026-08-15'); fundFlags(m, comp, '2026-08-31');
+    t('computeMonth serialises identically before and after fundFlags', JSON.stringify(computeMonth(m)) === before);
+    t('fundFlags does not touch the computed month it reads', JSON.stringify(comp) === before);
+  }
+  // W2 — S12 rule (a): Basic is free only once the month is done; Fixed keeps
+  // the one-charge rule; a goal in its target month only once the month is over.
+  {
+    const b = mkMonth('2026-08', [basic('Sub', 0, 85)], [tx('2026-08-03', -15.49, 'Sub')]);
+    t('S12(a): basic, one charge on the 3rd → not free mid-month', fundFlags(b, computeMonth(b), '2026-08-15').length === 0);
+    const bEnd = fundFlags(b, computeMonth(b), '2026-08-31')[0];
+    t('S12(a): basic at month end → free, no $1 floor', bEnd && bEnd.offset === true && bEnd.leftover === 69.51, JSON.stringify(bEnd));
+    const fx = mkMonth('2026-08', [{ fund: 'Net', carryOver: 0, planned: 80, rule: null, setup: { type: 'fixed', everyMonths: 1, totalAmount: 80 } }], [tx('2026-08-03', -70, 'Net')]);
+    t('S12(a): fixed, one charge mid-month → free (unchanged)', fundFlags(fx, computeMonth(fx), '2026-08-15')[0]?.offset === true);
+    const goal = { fund: 'Trip', carryOver: 1100, planned: 100, rule: null, setup: { type: 'savings', savingsMode: 'target', targetAmount: 1200, targetMonth: '2026-08', everyMonths: 1, totalAmount: 0 } };
+    const gm = mkMonth('2026-08', [goal], [tx('2026-08-03', -500, 'Trip')]);
+    t('S12(a): goal in its target month, one charge mid-month → not free', !(fundFlags(gm, computeMonth(gm), '2026-08-15')[0]?.offset));
+    t('S12(a): goal in its target month at month end → free', fundFlags(gm, computeMonth(gm), '2026-08-31')[0]?.offset === true);
+    const pennies = mkMonth('2026-08', [basic('Tiny', 0, 10)], [tx('2026-08-03', -9.96, 'Tiny')]);
+    t('S12(a): four cents free at month end stays, honestly labelled', fundFlags(pennies, computeMonth(pennies), '2026-08-31')[0]?.leftover === 0.04);
+  }
+  // W6 — pause this month: fund.pausedPlanned comes back in buildNextMonth and
+  // is never copied forward; this month's leftover is just carryOver + 0 + expensed.
+  {
+    const pm = mkMonth('2026-08', [basic('Groc', 0, 0, { pausedPlanned: 300 })], [tx('2026-08-10', -120, 'Groc')]);
+    const pc = computeMonth(pm).categories[0].funds[0];
+    t('pause: leftover = carryOver + 0 + expensed (Inv 2, nothing special)', pc.leftover === -120, String(pc.leftover));
+    const nf = buildNextMonth(pm, 0.1).categories[0].funds[0];
+    t('pause: next month gets the paused plan back', nf.planned === 300, String(nf.planned));
+    t('pause: pausedPlanned is not copied into the next month', nf.pausedPlanned === undefined);
+    t('pause: carry-over derives from the paused month\'s leftover', nf.carryOver === -120, String(nf.carryOver));
+    const pf = mkMonth('2026-08', [{ fund: 'Claude', carryOver: 0, planned: 0, pausedPlanned: 20, rule: null, setup: { type: 'fixed', everyMonths: 1, totalAmount: 20 } }]);
+    t('pause: a fixed $20/mo fund comes back at its auto amount', buildNextMonth(pf, 0.1).categories[0].funds[0].planned === 20);
+    t('no pause: planned repeats as always', buildNextMonth(mkMonth('2026-08', [basic('X', 0, 55)]), 0.1).categories[0].funds[0].planned === 55);
+  }
+  console.log(`1.2.1 sitting A: assertions folded into the pass/fail totals above (now ${ok} ok / ${bad} bad)`);
 }
 
 // ---- checking-account CSV format ----

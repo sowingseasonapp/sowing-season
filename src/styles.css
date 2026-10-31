@@ -230,6 +230,9 @@ td.neg { color: var(--red); }
 .rule-chip.chip-danger { background: var(--red-tint); color: var(--red-deep); }
 .rule-chip.chip-good { background: #e9f7ef; color: var(--green); }
 .rule-chip.chip-muted { background: #f0efe8; color: var(--ink-soft); }
+/* 1.2.1 (W3): a status chip and its modifier chips sit side by side — a tighter
+   gap between neighbours than before the first, so the pair reads as one row. */
+.rule-chip + .rule-chip { margin-left: 4px; }
 a.fund-name { color: inherit; text-decoration: none; border-bottom: 1px dashed #cfd2c4; }
 a.fund-name:hover { color: var(--accent); border-bottom-color: var(--accent); }
 /* Review badge + strip: one entry point for every insight */
@@ -799,6 +802,8 @@ span.neg { color: var(--red); }
 .garden-msg .btn { align-self: flex-start; }
 .garden-msg.msg-calm { background: var(--accent-tint); border-color: var(--accent-tint-line); }
 .garden-msg.msg-wilting, .garden-msg.msg-thirsty { border-color: #ecd9c8; }
+/* 1.2.1 (W5): carried-in red is a fact, not an alarm — a neutral border. */
+.garden-msg.msg-carried { border-color: rgba(99, 106, 89, .35); }
 .garden-maturity { font-size: .82rem; }
 .garden-intro .wt-media svg, .garden-strip { width: 100%; height: auto; display: block; border-radius: 8px; }
 .recap-baskets { font-size: .85rem; margin: -4px 0 8px; letter-spacing: 1px; }
