@@ -1565,8 +1565,8 @@ function goalAskWords(f, monthId) {
 
 // Where an under- or over-funded goal lands (#12, W9) — the overridden chip's
 // title and the panel's result line append it. Under the ask: the landing
-// counts from zero when a deficit came in (a negative carry is a debt, not
-// savings) and says so. Over the ask: how many months early the target falls,
+// is what the fund actually holds by the target month — a carried-in deficit
+// is paid back first, and the sentence says so. Over the ask: how many months early the target falls,
 // or nothing when it doesn't fall early. '' for anything that isn't an
 // overridden goal.
 function goalProjection(f, monthId) {
@@ -1577,9 +1577,13 @@ function goalProjection(f, monthId) {
   const months = Math.max(1, monthDiff(monthId, s.targetMonth) + 1);
   const planned = f.planned || 0, carry = f.carryOver || 0;
   if (planned < auto - 0.004) {
-    const landing = r2(Math.max(0, carry) + planned * months);
-    const short = r2(s.targetAmount - landing);
-    return `At ${money(planned)} a month you'll have ${money(landing)} of ${money(s.targetAmount)} by ${ymLabel(s.targetMonth)} — ${money(short)} short${carry < -0.004 ? ` after making back ${money(-carry)}` : ''}.`;
+    const net = r2(carry + planned * months);                 // what the fund actually holds by the target month
+    if (net <= 0.004) {
+      return `At ${money(planned)} a month you'd still be ${money(-net)} behind by ${ymLabel(s.targetMonth)}, with nothing saved toward ${money(s.targetAmount)}.`;
+    }
+    const short = r2(s.targetAmount - net);
+    return `At ${money(planned)} a month you'll have ${money(net)} of ${money(s.targetAmount)} by ${ymLabel(s.targetMonth)} — ${money(short)} short${
+      carry < -0.004 ? ` (${money(-carry)} of what you put in goes to making back what was carried in)` : ''}.`;
   }
   for (let k = 1; k < months; k++) {
     if (carry + planned * k >= s.targetAmount - 0.004) {

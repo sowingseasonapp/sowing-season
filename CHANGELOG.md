@@ -44,6 +44,10 @@ Suites: csv 606 · migrate 17 · garden **176 → 177** · compute 1147, 0 faile
   setup: `Planned this month: $150.00 — you set it; the goal asks $407.14. <projection>` (fixed/build funds get
   the same lead with "the setup asks"; a paused fund keeps today's line — W6's button already says so). Only
   while the form still shows the saved setup; mid-edit the ask is what's moving. Nothing in the grid cell.
+  **Fixed before release (2026-10-31):** the under-the-ask landing is now `net = carryOver + planned × months` — what
+  the fund actually holds — so a carried-in deficit is paid back first instead of counted from zero. `net ≤ 0` reads
+  `At $0.00 a month you'd still be $542.17 behind by Mar 2029, with nothing saved toward $2,500.00.`; otherwise the
+  parenthesis `($542.17 of what you put in goes to making back what was carried in)` replaces `after making back`.
 - **W10 — #24, the tithe moves in the open.** Panel, income fund, while the month has a `rule.type === 'tithe'`
   fund: `#pnlIncCalc` gains `· tithe becomes $X` on every keystroke in Planned, computed on a `structuredClone`
   of the month with the typed planned applied the way `onchange` will apply it and `applyTitheRules` run; shown
