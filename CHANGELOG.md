@@ -9,7 +9,9 @@ so entries before that are dated by when the work happened, not by commit.
 
 ---
 
-## Unreleased — 1.2.0
+## 1.2.0 — 2026-10-26 — quick wins, Batch 5
+
+Twelve small things from the post-1.1.0 roadmap and the three-year simulation's Batch 5, shipped as three sittings (A, B, C below). No data.version bump; no migration; three optional fields added (`settings.accountNames`, `settings.lastExportAt`, `fund.retireAtClose`). `view === 'import'` is aliased to Transactions for this release and goes away in 1.3.0.
 
 ### 2026-10-26 — Move and remove, AUM still right, six-letter vendor keys, UI fixes (sitting C: W9–W12)
 
