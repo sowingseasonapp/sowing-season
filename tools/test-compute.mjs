@@ -6,6 +6,7 @@ import {
   savingsMonthly, monthAdd, monthDiff,
   migrateV6, migrateV7, resyncCarryOvers, aumTotals, upsertSnapshot, aumLastUpdated,
   fundSplit,
+  applyChecksRules, incomeTrueUp, setIncomeActual, incomePlanFor, fundDeposits,
 } from '../src/compute.js';
 import { parseBankCsv, buildVendorMap, suggestFund, findDuplicate } from '../src/csv.js';
 import fs from 'fs';
@@ -281,7 +282,11 @@ console.log(`\nCompute engine vs spreadsheet: ${ok} checks passed, ${bad} failed
   console.log(`Transfers: raw income=${s.actualIncome} exT=${s.actualIncomeExT} (expect 1000/1000) · raw expense=${s.actualExpense} exT=${s.actualExpenseExT} (expect -95/-95) · diff exT=${s.actualDiffExT} (expect 905)`);
 }
 
-// ---- income carry-forward + tithe exemption on standard income ----
+// ---- income carry at the boundary (1.3.0 I1) + tithe exemption on standard income ----
+// Pre-1.3.0 this block asserted carryForward: Reimb (flag on, carry 50, +75 in)
+// rolled 125 into September. Under I1 nothing is derived from the flag: with no
+// close decision recorded on August (no lateAtClose, no trueUp stamp), every
+// income fund opens September at 0, not pending, and the flag is not copied.
 {
   const mo = {
     id: '2026-08', label: 'August',
@@ -297,7 +302,7 @@ console.log(`\nCompute engine vs spreadsheet: ${ok} checks passed, ${bad} failed
   const next = buildNextMonth(mo, 0.15);
   const pay = next.income.find((f) => f.fund === 'Pay');
   const reimb = next.income.find((f) => f.fund === 'Reimb');
-  console.log(`Rollover: Pay carryOver=${pay.carryOver} (expect 0), Reimb carryOver=${reimb.carryOver} (expect 125 = 50+75-0), flags kept=${reimb.carryForward && reimb.titheExempt}`);
+  console.log(`Rollover: Pay carryOver=${pay.carryOver} (expect 0), Reimb carryOver=${reimb.carryOver} (expect 0 — nothing decided at close; was 125 under carryForward), pending=${reimb.carryPending} (expect false), carryForward copied=${'carryForward' in reimb} (expect false), exempt kept=${reimb.titheExempt}`);
   // exempt standard fund contributes nothing
   mo.income[0].titheExempt = true;
   console.log(`Exempt standard: tithe base=${titheBase(mo)} (expect 0)`);
@@ -413,19 +418,20 @@ console.log(`\nCompute engine vs spreadsheet: ${ok} checks passed, ${bad} failed
     JSON.stringify(ch1[0]));
   t('planned untouched', g1.planned === 100 && g2.planned === 100 && g3.planned === 100);
 
-  // 2. Income funds: month N's OWN carryForward flag decides.
-  //    m1 Pay: carry 0 + received 120 − planned 100 → leftover 20.
+  // 2. Income funds (1.3.0 I1): the carryForward flag decides nothing any more.
+  //    m1 Pay: carry 0 + received 120 − planned 100 → leftover 20, Left to
+  //    allocate 100 (no expense funds). A stale carry on m2 with no decision
+  //    recorded on m1 resyncs to 0; the flag, on or off, is ignored.
   const inc = (carryOver, carryForward) => ({ fund: 'Pay', carryOver, planned: 100, rule: null, titheExempt: false, carryForward, group: 'bonus' });
   const d2 = { version: 7, settings: {}, months: [
     mkMonth('2026-01', [], [inc(0, false)], [tx('2026-01-05', 120, 'Pay')]),
-    mkMonth('2026-02', [], [inc(0, true)]),
+    mkMonth('2026-02', [], [inc(20, true)]),
   ] };
   const ch2 = resyncCarryOvers(d2);
-  t('income carryForward on → prev leftover', d2.months[1].income[0].carryOver === 20 && ch2.length === 1 && ch2[0].income === true,
+  t('income carryForward ignored → 0', d2.months[1].income[0].carryOver === 0 && ch2.length === 1 && ch2[0].income === true && ch2[0].from === 20 && ch2[0].to === 0,
     JSON.stringify({ carry: d2.months[1].income[0].carryOver, ch2 }));
   d2.months[1].income[0].carryForward = false;
-  resyncCarryOvers(d2);
-  t('income carryForward off → 0', d2.months[1].income[0].carryOver === 0, `got ${d2.months[1].income[0].carryOver}`);
+  t('income flag off → still 0, no change', resyncCarryOvers(d2).length === 0 && d2.months[1].income[0].carryOver === 0);
 
   // 3. A fund present only from month 2 (opening balance) is never touched.
   const d3 = { version: 7, settings: {}, months: [
@@ -667,6 +673,169 @@ console.log(`\nCompute engine vs spreadsheet: ${ok} checks passed, ${bad} failed
 }
 
 // ---- checking-account CSV format ----
+// ---- 1.3.0 I1: income true-up at close ----
+// The work order's September/October table, row by row, plus the carry rules.
+//   leftToAllocate = Σ income (planned + (carryPending ? 0 : carryOver)) − Σ expense planned
+//   income carry next month = incomePlanFor(prev): pending (late, still short),
+//   counted surplus (prev's Left to allocate at close, trueUp stamped, first
+//   Standard fund not late), or 0.
+{
+  const t = (label, cond, detail = '') => {
+    if (cond) ok++; else { bad++; console.log(`FAIL I1 ${label}${detail ? ` — ${detail}` : ''}`); }
+  };
+  const mk = (id, inc, exp, txs = [], checks = { Pay: { count: 2, amount: 2000, titheAmount: 2000 } }) =>
+    ({ id, label: 'x', checks, income: inc, categories: [{ name: 'C', excludeFromTotals: false, funds: exp }], transactions: txs });
+  const pay = (o = {}) => ({ fund: 'Pay', carryOver: 0, planned: 4000, rule: { type: 'checks' }, titheExempt: false, group: 'standard', ...o });
+  const bonus = (o = {}) => ({ fund: 'Gifts', carryOver: 0, planned: 0, rule: null, titheExempt: false, group: 'bonus', ...o });
+  const env = (p, o = {}) => ({ fund: 'Rent', carryOver: 0, planned: p, rule: null, setup: { type: 'basic' }, ...o });
+  const dep = (date, amt, fund = 'Pay') => ({ id: date + fund + amt, date, vendor: 'EMPLOYER', amount: amt, fund });
+  const LTA = (m) => computeMonth(m).summary.leftToAllocate;
+  const CC = (m) => computeMonth(m).summary.countedCarry;
+  const rows = (m) => incomeTrueUp(m, computeMonth(m));
+  const incOf = (m, name = 'Pay') => m.income.find((f) => f.fund === name);
+  const clone = (x) => JSON.parse(JSON.stringify(x));
+
+  // Row 1 — Sept as it stands: planned 4,000, received 2,000, allocated 4,000.
+  const sept = mk('2026-09', [pay()], [env(4000)], [dep('2026-09-15', 2000)]);
+  t('sept LTA 0 before any decision', LTA(sept) === 0 && CC(sept) === 0);
+  let r = rows(sept);
+  t('sept one row', r.length === 1 && r[0].fund === 'Pay' && r[0].group === 'standard');
+  t('sept row diff −2000, unresolved', r[0].diff === -2000 && r[0].resolved === false && r[0].planned === 4000 && r[0].received === 2000);
+  t('sept row options fix + late', r[0].options.join() === 'fix,late' && r[0].carryPending === false && r[0].lateAtClose === false);
+  t('within $1 → no row', rows(mk('2026-09', [pay()], [env(4000)], [dep('2026-09-15', 3999.5)])).length === 0);
+
+  // Row 2 — fix the plan: planned := 2,000; Left to allocate −2,000 (D6 blocks).
+  const sFix = clone(sept);
+  const res = setIncomeActual(sFix, 'Pay', { mode: 'fix' });
+  t('fix returns from/planned', res && res.from === 4000 && res.planned === 2000, JSON.stringify(res));
+  t('fix: planned = received, truedUp', incOf(sFix).planned === 2000 && incOf(sFix).truedUp === true);
+  t('fix: no pending flag written', incOf(sFix).carryPending === undefined);
+  t('fix: LTA −2000', LTA(sFix) === -2000);
+  t('fix: row gone', rows(sFix).length === 0);
+  t('fix: estimate untouched (not variable)', sFix.checks.Pay.amount === 2000 && sFix.checks.Pay.count === 2);
+  applyChecksRules(sFix);
+  t('applyChecksRules leaves truedUp alone', incOf(sFix).planned === 2000);
+  const sFixUntrued = clone(sFix); delete sFixUntrued.income[0].truedUp; applyChecksRules(sFixUntrued);
+  t('applyChecksRules still rules an un-trued fund', incOf(sFixUntrued).planned === 4000);
+  const nFix = buildNextMonth(sFix, 0.15);
+  t('next month built from checks regardless of truedUp', incOf(nFix).planned === 4000 && incOf(nFix).truedUp === undefined && incOf(nFix).carryOver === 0 && incOf(nFix).carryPending === false);
+  t('unknown fund → null', setIncomeActual(clone(sept), 'Nope', { mode: 'fix' }) === null);
+  // fix on a non-rule fund: planned = received, no truedUp
+  const sBonus = mk('2026-09', [pay(), bonus({ planned: 500 })], [env(4000)], [dep('2026-09-15', 4000), dep('2026-09-20', 120, 'Gifts')]);
+  t('bonus under → row fix,late', rows(sBonus).length === 1 && rows(sBonus)[0].fund === 'Gifts' && rows(sBonus)[0].diff === -380 && rows(sBonus)[0].options.join() === 'fix,late');
+  setIncomeActual(sBonus, 'Gifts', { mode: 'fix' });
+  t('fix on a non-rule fund: planned = received, not truedUp', incOf(sBonus, 'Gifts').planned === 120 && incOf(sBonus, 'Gifts').truedUp === undefined && LTA(sBonus) === 120);
+  // variable estimate: deposits === count → avg; 3 deposits vs count 2 → unchanged
+  const sVar = mk('2026-09', [pay()], [env(4000)], [dep('2026-09-05', 1900), dep('2026-09-19', 1800)], { Pay: { count: 2, amount: 2000, titheAmount: 2000, variable: true } });
+  setIncomeActual(sVar, 'Pay', { mode: 'fix' });
+  t('variable, deposits = count → estimate = avg', sVar.checks.Pay.amount === 1850 && incOf(sVar).planned === 3700);
+  const sVar3 = mk('2026-09', [pay()], [env(4000)], [dep('2026-09-05', 1900), dep('2026-09-12', 1800), dep('2026-09-19', 1700)], { Pay: { count: 2, amount: 2000, titheAmount: 2000, variable: true } });
+  setIncomeActual(sVar3, 'Pay', { mode: 'fix' });
+  t('variable, 3 deposits vs count 2 → estimate unchanged', sVar3.checks.Pay.amount === 2000 && incOf(sVar3).planned === 5400);
+  t('fundDeposits counts positive non-transfer rows only', fundDeposits(sVar3, 'Pay').count === 3 && fundDeposits(sVar3, 'Pay').total === 5400
+    && fundDeposits(mk('2026-09', [pay()], [], [dep('2026-09-05', 100), { id: 'x', date: '2026-09-06', vendor: 'Transfer from Rent', amount: 50, fund: 'Pay' }, dep('2026-09-07', -20)]), 'Pay').count === 1);
+
+  // Row 3 — it's late: lateAtClose recorded, LTA stays 0, Start enabled.
+  const sLate = clone(sept); incOf(sLate).lateAtClose = true; sLate.trueUp = { at: '2026-09-30' };
+  r = rows(sLate);
+  t('late: row stays, resolved; fix still offered, late not', r.length === 1 && r[0].resolved === true && r[0].lateAtClose === true && r[0].options.join() === 'fix');
+  t('late: LTA 0', LTA(sLate) === 0);
+  const octL = buildNextMonth(sLate, 0.15);
+  t('late → Oct carry −2000 pending', incOf(octL).carryOver === -2000 && incOf(octL).carryPending === true);
+  t('late → Oct lateAtClose/truedUp/carryForward not copied', incOf(octL).lateAtClose === undefined && incOf(octL).truedUp === undefined && !('carryForward' in incOf(octL)));
+  t('Oct LTA excludes the pending carry', LTA(octL) === 0 && CC(octL) === 0);
+
+  // Row 4 — Oct after "late", $6,000 lands: leftover 0, no row.
+  const oct6 = clone(octL); oct6.transactions.push(dep('2026-10-02', 2000), dep('2026-10-15', 2000), dep('2026-10-29', 2000));
+  const c6 = computeMonth(oct6).income[0];
+  t('Oct $6,000: leftover 0 (the extra is September\'s)', c6.leftover === 0 && c6.received === 6000);
+  t('Oct $6,000: no row', rows(oct6).length === 0 && LTA(oct6) === 0);
+  // $6,500: over by 500 → actual only; planned := received + carry (it landed)
+  const oct65 = clone(octL); oct65.transactions.push(dep('2026-10-02', 2500), dep('2026-10-15', 2000), dep('2026-10-29', 2000));
+  r = rows(oct65);
+  t('Oct $6,500: diff = leftover +500, actual only', r.length === 1 && r[0].diff === 500 && r[0].options.join() === 'actual' && r[0].carryPending === true);
+  setIncomeActual(oct65, 'Pay', { mode: 'actual' });
+  t('actual with pending: planned = received + carry, stays pending', incOf(oct65).planned === 4500 && incOf(oct65).carryPending === true && LTA(oct65) === 500);
+
+  // Row 5 — Oct after "late", only $4,000: fix only; fix flips the carry to counted.
+  const oct4 = clone(octL); oct4.transactions.push(dep('2026-10-15', 2000), dep('2026-10-29', 2000));
+  r = rows(oct4);
+  t('grace: diff = leftover −2000, fix only', r.length === 1 && r[0].diff === -2000 && r[0].options.join() === 'fix' && r[0].resolved === false);
+  t('grace: LTA 0 until fixed', LTA(oct4) === 0);
+  setIncomeActual(oct4, 'Pay', { mode: 'fix' });
+  t('grace fix: carryPending === false (explicit), planned = received', incOf(oct4).carryPending === false && incOf(oct4).planned === 4000 && incOf(oct4).carryOver === -2000);
+  t('grace fix: LTA −2000, countedCarry −2000', LTA(oct4) === -2000 && CC(oct4) === -2000);
+  t('grace fix: row gone', rows(oct4).length === 0);
+  const pair = { version: 7, settings: {}, months: [clone(sLate), oct4] };
+  t('resync keeps the resolved carry counted', resyncCarryOvers(pair).length === 0 && incOf(pair.months[1]).carryPending === false && incOf(pair.months[1]).carryOver === -2000);
+
+  // Row 6 — earned more, use actual: planned 6,000; LTA +2,000.
+  const sMore = mk('2026-09', [pay()], [env(4000)], [dep('2026-09-05', 3000), dep('2026-09-19', 3000)]);
+  r = rows(sMore);
+  t('over: row actual only', r.length === 1 && r[0].diff === 2000 && r[0].options.join() === 'actual');
+  setIncomeActual(sMore, 'Pay', { mode: 'actual' });
+  t('actual: planned = received, truedUp, LTA +2000', incOf(sMore).planned === 6000 && incOf(sMore).truedUp === true && LTA(sMore) === 2000 && rows(sMore).length === 0);
+
+  // Row 7 — an unassigned +2,000 carries counted (stamp required), until assigned.
+  const noStamp = buildNextMonth(sMore, 0.15);
+  t('no stamp → no carry', incOf(noStamp).carryOver === 0 && incOf(noStamp).carryPending === false && LTA(noStamp) === 0);
+  sMore.trueUp = { at: '2026-09-30' };
+  const plan = incomePlanFor(sMore);
+  t('incomePlanFor: host Pay gets 2000 counted', plan.get('pay').carryOver === 2000 && plan.get('pay').carryPending === false);
+  const octS = buildNextMonth(sMore, 0.15);
+  t('stamped → Oct carry +2000 counted', incOf(octS).carryOver === 2000 && incOf(octS).carryPending === false);
+  t('Oct LTA +2000, countedCarry 2000', LTA(octS) === 2000 && CC(octS) === 2000);
+  octS.transactions.push(dep('2026-10-05', 2000), dep('2026-10-19', 2000));
+  const cS = computeMonth(octS).income[0];
+  t('Oct leftover +2000 but own = 0 → no row', cS.leftover === 2000 && rows(octS).length === 0);
+  octS.categories[0].funds[0].planned = 6000; // allocate the surplus
+  t('allocated → LTA 0', LTA(octS) === 0);
+  octS.trueUp = { at: '2026-10-31' };
+  const nov = buildNextMonth(octS, 0.15);
+  t('an assigned surplus never rolls twice', incOf(nov).carryOver === 0 && incOf(nov).carryPending === false);
+  // resync agrees with buildNextMonth (idempotence) on both pairs
+  t('resync idempotent on [sept, oct] surplus pair', resyncCarryOvers({ version: 7, settings: {}, months: [clone(sMore), buildNextMonth(sMore, 0.15)] }).length === 0);
+  t('resync idempotent on [sept, oct] late pair', resyncCarryOvers({ version: 7, settings: {}, months: [clone(sLate), buildNextMonth(sLate, 0.15)] }).length === 0);
+  // resync derives a missing counted carry when the stamp is there
+  const stale = { version: 7, settings: {}, months: [clone(sMore), clone(buildNextMonth(sMore, 0.15))] };
+  stale.months[1].income[0].carryOver = 0;
+  const chS = resyncCarryOvers(stale);
+  t('resync restores a counted surplus from the stamp', chS.length === 1 && chS[0].income === true && chS[0].to === 2000 && incOf(stale.months[1]).carryOver === 2000 && incOf(stale.months[1]).carryPending === undefined);
+
+  // A late import into Sept clears Oct's pending carry.
+  const late2 = { version: 7, settings: {}, months: [clone(sLate), clone(octL)] };
+  late2.months[0].transactions.push(dep('2026-09-30', 2000));
+  const chL = resyncCarryOvers(late2);
+  t('late import into prev → pending carry resynced to 0', chL.length === 1 && chL[0].from === -2000 && chL[0].to === 0 && incOf(late2.months[1]).carryOver === 0 && incOf(late2.months[1]).carryPending === undefined);
+  t('…and Sept\'s late row now reads landed', rows(late2.months[0]).length === 1 && rows(late2.months[0])[0].resolved === true && rows(late2.months[0])[0].diff === 0);
+
+  // Host choice: standard first; a late standard → first non-late fund.
+  const two = mk('2026-09', [bonus({ planned: 1000 }), pay()], [env(4500)], [dep('2026-09-15', 4000), dep('2026-09-20', 1000, 'Gifts')]);
+  two.trueUp = { at: '2026-09-30' };
+  t('host: standard beats a bonus listed first', incomePlanFor(two).get('pay').carryOver === 500 && incomePlanFor(two).get('gifts').carryOver === 0);
+  const twoLate = clone(two); twoLate.transactions = [dep('2026-09-15', 2000), dep('2026-09-20', 1000, 'Gifts')]; incOf(twoLate).lateAtClose = true;
+  const pl = incomePlanFor(twoLate);
+  t('host: late standard → pending; surplus on the first non-late fund', pl.get('pay').carryPending === true && pl.get('pay').carryOver === -2000 && pl.get('gifts').carryOver === 500 && pl.get('gifts').carryPending === false);
+  const nTwo = buildNextMonth(twoLate, 0.15);
+  t('buildNextMonth matches incomePlanFor', incOf(nTwo).carryOver === -2000 && incOf(nTwo).carryPending === true && incOf(nTwo, 'Gifts').carryOver === 500 && LTA(nTwo) === 500 - 4500 + 4000);
+
+  // No stamp, no carry (two-month fixture, +500 at the first close).
+  const a = mk('2026-09', [pay()], [env(3500)], [dep('2026-09-05', 2000), dep('2026-09-19', 2000)]);
+  t('fixture LTA +500', LTA(a) === 500);
+  const b = buildNextMonth(a, 0.15);
+  const dNo = { version: 7, settings: {}, months: [clone(a), clone(b)] };
+  t('no stamp: buildNextMonth carry 0', incOf(b).carryOver === 0 && incOf(b).carryPending === false);
+  t('no stamp: resync leaves 0', resyncCarryOvers(dNo).length === 0 && incOf(dNo.months[1]).carryOver === 0);
+  dNo.months[0].trueUp = { at: '2026-09-30' };
+  const chN = resyncCarryOvers(dNo);
+  t('stamped: resync writes +500 counted on the standard fund', chN.length === 1 && chN[0].to === 500 && incOf(dNo.months[1]).carryOver === 500 && incOf(dNo.months[1]).carryPending === undefined && LTA(dNo.months[1]) === 1000); // 4000 + 500 − 3500
+  t('stamped: buildNextMonth agrees', incOf(buildNextMonth(dNo.months[0], 0.15)).carryOver === 500);
+
+  // Pending carry is spread through to comp.income; countedCarry excludes it.
+  const cPend = computeMonth(octL);
+  t('comp.income carries carryPending through', cPend.income[0].carryPending === true && cPend.incomeTotals.carryOver === -2000 && cPend.summary.countedCarry === 0);
+}
+
 if (!process.env.CHECKING_CSV) {
   console.log('\nChecking CSV section skipped — set CHECKING_CSV to a real checking export to run it.');
 } else {
@@ -709,5 +878,10 @@ if (!process.env.CARD_CSV) {
   console.log('sample:', sample.join(' | '));
 }
 
-// Fail the process when any spreadsheet check missed, so `npm test` goes red on regressions.
+// Fail the process when any check missed, so `npm test` goes red on regressions.
+// The line above the fund rows counts the spreadsheet section only; this is the
+// whole suite (spreadsheet + every hard-asserting block) — the number the work
+// orders pin.
+console.log(`
+test-compute: ${ok} passed, ${bad} failed`);
 process.exitCode = bad ? 1 : 0;

@@ -88,12 +88,18 @@ export function computeMonth(month) {
   // Transactions whose fund doesn't match any fund in this month.
   const unassigned = month.transactions.filter((t) => !known.has(normFund(t.fund)) || !normFund(t.fund));
 
+  // 1.3.0 I1: a counted income carry (an unassigned surplus from last month, or a
+  // late amount the grace month gave up on) is money to allocate; a pending one
+  // (expected late) is not. Inv 2's Left-to-allocate clause.
+  const countedCarry = r2(income.reduce((a, f) => a + (f.carryPending ? 0 : f.carryOver), 0));
+
   return {
     income, incomeTotals, categories, totals,
     summary: {
       plannedIncome: incomeTotals.planned,
       allocated: totals.planned,
-      leftToAllocate: r2(incomeTotals.planned - totals.planned),
+      leftToAllocate: r2(incomeTotals.planned + countedCarry - totals.planned),
+      countedCarry,                       // new summary field, for the hero's note
       actualIncome: incomeTotals.received,
       actualExpense: totals.expensed,
       actualDiff: r2(incomeTotals.received + totals.expensed),
@@ -435,10 +441,13 @@ export function migrateV6(data) {
 }
 
 // ---- Carry-over integrity — v7 ----
-// Carry-over is a derived number: month N's carry-over IS month N−1's leftover
-// (an income fund's only when it opts into carryForward). buildNextMonth seeds
-// it; this keeps it true afterwards, whatever changes in an older month — an
-// import, an edit, a deleted transaction, a moved date. Walks months in order,
+// Carry-over is a derived number: an expense fund's carry-over IS month N−1's
+// leftover. An income fund's (1.3.0 I1) follows the decision recorded when
+// month N−1 closed — `lateAtClose` on the fund (a pending carry, outside Left to
+// allocate) and the closing month's Left to allocate (a counted surplus on the
+// host fund, only once `trueUp` is stamped) — see incomePlanFor. buildNextMonth
+// seeds both; this keeps them true afterwards, whatever changes in an older
+// month — an import, an edit, a deleted transaction, a moved date. Walks months in order,
 // so a change anywhere chains forward through every later month in one pass.
 // Idempotent: a second call returns []. A fund with no same-named predecessor
 // (the budget's first month, or a fund added mid-year) is user-owned — its
@@ -456,8 +465,12 @@ export function migrateV6(data) {
 // whose carry did not change. Income funds are not in scope. Such a change is
 // recorded with plannedFrom / plannedTo on the change object. The rule only
 // fires when a carry changes, so it prevents new stale values; it does not heal
-// one left by an earlier release. (A future I1 session deleting the income
-// loop below: keep this rule in the expense loop.)
+// one left by an earlier release. (1.3.0 I1 replaced the income loop below;
+// this rule stays in the expense loop.)
+//
+// Income (I1): the one carry the resync must NOT re-derive is a pending carry
+// the user already resolved in the grace month — setIncomeActual('fix') writes
+// `carryPending: false` explicitly (not deleted), and the loop leaves it alone.
 export function resyncCarryOvers(data) {
   const changes = [];
   const months = data.months || [];
@@ -466,8 +479,6 @@ export function resyncCarryOvers(data) {
     const comp = computeMonth(months[i - 1]);
     const prevExp = new Map();
     for (const c of comp.categories) for (const f of c.funds) prevExp.set(normFund(f.fund), f);
-    const prevInc = new Map();
-    for (const f of comp.income) prevInc.set(normFund(f.fund), f);
     for (const c of cur.categories) {
       for (const f of c.funds) {
         const p = prevExp.get(normFund(f.fund));
@@ -489,15 +500,16 @@ export function resyncCarryOvers(data) {
         changes.push(ch);
       }
     }
+    const plans = incomePlanFor(months[i - 1], comp);
     for (const f of cur.income) {
-      const p = prevInc.get(normFund(f.fund));
+      const p = plans.get(normFund(f.fund));
       if (!p) continue;
-      // Month N's own carryForward flag decides — that's the one on the row
-      // the user is looking at.
-      const want = f.carryForward ? r2(p.leftover) : 0;
-      if (Math.abs(want - f.carryOver) < 0.005) continue;
+      const pendingWant = p.carryPending, want = p.carryOver;
+      if (f.carryPending === false && pendingWant) continue; // resolved in the grace month — keep it counted
+      if (Math.abs(want - f.carryOver) < 0.005 && !!f.carryPending === pendingWant) continue;
       changes.push({ month: cur.id, fund: f.fund, income: true, from: f.carryOver, to: want });
       f.carryOver = want;
+      if (pendingWant) f.carryPending = true; else delete f.carryPending;
     }
   }
   return changes;
@@ -586,20 +598,22 @@ export function buildNextMonth(prev, tithePercent) {
     categories: [],
     transactions: [],
   };
+  // 1.3.0 I1: an income fund's carry is what the close decided — pending (late),
+  // counted (an unassigned surplus), or 0. The old per-fund carry-forward flag is
+  // not read (nor copied) any more.
+  const plans = incomePlanFor(prev, comp);
   month.income = comp.income.map((f) => {
     let planned = 0;
     if (f.rule && f.rule.type === 'checks') {
       const chk = month.checks[f.fund] || { count: 0, amount: 0 };
       planned = r2(chk.count * chk.amount);
     }
-    // Income funds reset to zero carry-over each month (spreadsheet convention)
-    // unless the fund opts in to carrying its leftover forward.
+    const plan = plans.get(normFund(f.fund));
     return {
       fund: f.fund,
-      carryOver: f.carryForward ? r2(f.leftover) : 0,
+      carryOver: plan.carryOver, carryPending: plan.carryPending,
       planned, rule: f.rule || null,
       titheExempt: !!f.titheExempt,
-      carryForward: !!f.carryForward,
       group: f.group || 'bonus',
     };
   });
@@ -635,11 +649,111 @@ export function buildNextMonth(prev, tithePercent) {
 }
 
 // Recompute checks-rule income planned from the month's checks settings.
+// A fund trued up at close (1.3.0 I1, `truedUp`) keeps its record; the next
+// month is built from `checks` as always.
 export function applyChecksRules(month) {
   for (const f of month.income) {
-    if (f.rule && f.rule.type === 'checks') {
+    if (f.rule && f.rule.type === 'checks' && !f.truedUp) {
       const chk = month.checks[f.fund];
       if (chk) f.planned = r2(chk.count * chk.amount);
     }
   }
+}
+
+// The paychecks that actually posted to an income fund this month: positive,
+// non-transfer transactions assigned to it. Returns { count, total } where
+// total is the sum of those deposits' amounts. This is the one deposit rule
+// shared by "Use actual" (app.js applyActualChecks), setIncomeActual below and
+// garden.js recentPerCheckAvg (re-exported there) — never substitute the fund's
+// `received` / fundSums() for `total`: those include transfers in and any
+// negative adjustment on the fund. Moved here from garden.js in 1.3.0 (I1).
+export function fundDeposits(month, fundName) {
+  const key = normFund(fundName);
+  let count = 0, total = 0;
+  for (const t of month.transactions || []) {
+    if (!(t.amount > 0) || isTransferTx(t) || normFund(t.fund) !== key) continue;
+    count++; total += t.amount;
+  }
+  return { count, total: r2(total) };
+}
+
+// ---- 1.3.0 I1: income true-up at close ----
+// Income carry-over into the next month is exactly one of three things, recorded
+// at close: a PENDING late amount (negative, outside Left to allocate; one
+// month's grace), a COUNTED amount (any sign — a surplus that wasn't assigned,
+// or a late amount the grace month gave up on), or 0. Nothing is derived from
+// the old carry-forward flag any more (the key is left in old data, unread).
+
+// The close-time list. One row per income fund whose month didn't match its
+// plan. `diff` is what still needs a decision: received − planned normally;
+// the whole leftover when a late carry is pending (the late money was expected
+// inside this month). Tolerance ±$1, as incomeCheckIns. A fund marked late
+// whose money then landed (|diff| ≤ 1) still appears, resolved, so the row can
+// offer to clear the flag.
+export function incomeTrueUp(month, comp) {
+  const out = [];
+  for (const f of comp.income) {
+    const diff = f.carryPending ? f.leftover : r2(f.received - f.planned);
+    const resolved = Math.abs(diff) <= 1 || f.lateAtClose === true;
+    const options = [];
+    if (diff < -1) { options.push('fix'); if (!f.carryPending && !f.lateAtClose) options.push('late'); }
+    if (diff > 1) options.push('actual');
+    if (Math.abs(diff) > 1 || f.lateAtClose) out.push({ fund: f.fund, group: f.group || 'bonus', planned: f.planned, received: f.received,
+      carryOver: f.carryOver, carryPending: !!f.carryPending, lateAtClose: !!f.lateAtClose, diff, resolved, options });
+  }
+  return out;
+}
+
+// Default 2/3: planned becomes what the month got. 'fix' (under): planned :=
+// received; a pending carry becomes counted — the late money is written against
+// Left to allocate. 'actual' (over): planned := received + carry when a pending
+// carry exists (it landed), else received. Checks-rule funds are written
+// directly and marked truedUp; the estimate moves only for a variable fund
+// whose deposits matched the expected count (S3/S9 stay true). This is the
+// close-time rule; app.js applyActualChecks is the mid-month one and differs
+// on purpose. Returns { planned, from } or null.
+export function setIncomeActual(month, fundName, { mode }) {
+  const comp = computeMonth(month);
+  const f = month.income.find((x) => normFund(x.fund) === normFund(fundName));
+  const c = f && comp.income.find((x) => normFund(x.fund) === normFund(fundName));
+  if (!f || !c) return null;
+  const from = f.planned;
+  let target = c.received;
+  if (f.carryPending) {
+    if (mode === 'actual') target = r2(c.received + f.carryOver);   // it landed
+    else f.carryPending = false;                                     // it didn't — counted (explicit false, see resyncCarryOvers)
+  }
+  target = r2(Math.max(0, target));
+  f.planned = target;
+  if (f.rule && f.rule.type === 'checks') {
+    f.truedUp = true;
+    const chk = (month.checks || {})[f.fund];
+    const dep = fundDeposits(month, f.fund);
+    if (chk && chk.variable && dep.count > 0 && dep.count === chk.count) chk.amount = r2(dep.total / dep.count);
+  }
+  return { planned: target, from };
+}
+
+// What each income fund carries into the month after `prev`. pending: prev
+// marked late and still short. counted surplus: prev's Left to allocate at
+// close, on the first Standard fund that isn't late (Default 1), else the first
+// fund that isn't. Shared by buildNextMonth and resyncCarryOvers so the two
+// always agree.
+export function incomePlanFor(prev, comp = computeMonth(prev)) {
+  const plan = new Map();
+  for (const f of comp.income) {
+    const k = normFund(f.fund);
+    if (f.lateAtClose && f.leftover < -0.02) plan.set(k, { carryOver: r2(f.leftover), carryPending: true });
+    else plan.set(k, { carryOver: 0, carryPending: false });
+  }
+  // The surplus carries only out of a month that was closed through the
+  // 1.3.0 workflow (prev.trueUp stamped by createNextMonth). Months closed
+  // before 1.3.0 have no stamp, so history never grows a carry it never had.
+  const surplus = prev.trueUp ? comp.summary.leftToAllocate : 0;
+  if (surplus > 0.02) {
+    const host = comp.income.find((f) => (f.group || 'bonus') === 'standard' && !plan.get(normFund(f.fund)).carryPending)
+      || comp.income.find((f) => !plan.get(normFund(f.fund)).carryPending);
+    if (host) plan.set(normFund(host.fund), { carryOver: r2(surplus), carryPending: false });
+  }
+  return plan;
 }

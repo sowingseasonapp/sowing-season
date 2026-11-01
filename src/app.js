@@ -4,6 +4,7 @@ import {
   autoPlanned, isOverridden, fundFlags, savingsMonthly, migrateV5,
   migrateV6, migrateV7, resyncCarryOvers, aumTotals, upsertSnapshot, aumLastUpdated,
   MONTH_NAMES, nextMonthId, monthDiff,
+  incomeTrueUp, setIncomeActual, incomePlanFor,
 } from './compute.js';
 import { gardenState, incomeCheckIns, stonesLaidIn, sownStreak, monthContext, recentPerCheckAvg, fundDeposits } from './garden.js';
 import { sceneSvg, stripSvg, plantSprite, butterflySymbol, PALETTE_TOKENS, GARDEN_MILESTONE_LABELS } from './garden-scene.js';
@@ -369,6 +370,16 @@ function prevMonthName(month) {
 function carryLockTitle(month) {
   const p = prevMonthName(month);
   return `Carried from ${p}'s leftover. To change it, change ${p}.`;
+}
+// 1.3.0 I1: the three income carry states, as the row and panel explain them.
+function pendingCarryTitle(month) {
+  const p = prevMonthName(month);
+  return `Expected from ${p} — it hadn't arrived when ${p} closed. Stays out of Left to allocate until it does.`;
+}
+function countedCarryTitle(month, carry) {
+  const p = prevMonthName(month);
+  return carry > 0 ? `Carried from ${p}: income that wasn't assigned. Counted toward Left to allocate.`
+    : `${p}'s late income that never came. Counted against Left to allocate.`;
 }
 
 /* ---------------- shell ---------------- */
@@ -822,7 +833,8 @@ function renderFundPanel() {
             ${carryEditable(month, f.fund, isIncome)
               ? `<label title="Opening balance — what's in this fund today. There's no earlier month to carry from.">Opening balance<input class="money" id="pnlCarry" value="${money(f.carryOver)}"></label>`
               : `<div class="panel-num-ro"><span>Carry over</span>
-                  <b class="${moneyCls(f.carryOver)}" title="${esc(carryLockTitle(month))}">${money(f.carryOver)}</b></div>`}
+                  <b class="${moneyCls(f.carryOver)}" title="${esc(isIncome && f.carryPending ? pendingCarryTitle(month) : carryLockTitle(month))}">${money(f.carryOver)}</b>${
+                  isIncome && f.carryPending ? `<div class="fund-note" title="${esc(pendingCarryTitle(month))}">expected from ${prevMonthName(month)} — pending</div>` : ''}</div>`}
             <label>Planned<input class="money" id="pnlPlanned" value="${money(f.planned)}"></label>
             <div class="panel-num-ro"><span>${isIncome ? 'Received' : 'Spent'}</span>
               ${isIncome
@@ -873,7 +885,6 @@ function renderFundPanel() {
             <p class="setup-result" id="pnlIncCalc"></p>
             <div class="setup-options">
               <label title="This fund's income doesn't count toward the tithe base."><input type="checkbox" id="pnlExempt" ${f.titheExempt ? 'checked' : ''}> Exempt from tithe</label>
-              <label title="Off: resets to $0 carry-over each new month (right for paychecks). On: leftover rolls forward like an expense fund."><input type="checkbox" id="pnlCarryFwd" ${f.carryForward ? 'checked' : ''}> Carry leftover into next month</label>
             </div>`
           : setupFormHtml(f.setup, month.id)}
         </section>
@@ -979,6 +990,10 @@ function renderFundPanel() {
           recalcRules(month); markDirty(`reconnecting "${f.fund}" to paychecks`); render();
           toast(`"${f.fund}" planned follows checks × amount again.`);
         };
+      } else if (f.truedUp) {
+        // 1.3.0 I1 (Default 2): the month closed with planned written to what
+        // arrived. The checks fields still roll into next month untouched.
+        $('#pnlIncCalc', wrap).innerHTML = `Planned this month: <b>${money(f.planned)}</b> <span class="muted">· trued up at close — the paycheck fields drive next month, not this one.</span>`;
       } else {
         $('#pnlIncCalc', wrap).innerHTML = t === 'standard' && c
           ? `Planned this month: <b>${money(r2((c.count || 0) * (c.amount || 0)))}</b> <span class="muted">· tithed on ${money(r2((c.count || 0) * (c.titheAmount || 0)))}</span>`
@@ -1053,7 +1068,6 @@ function renderFundPanel() {
       const moved = titheMovedNote(titheBefore, titheSum(month)); // W10
       if (moved) toast(moved);
     };
-    $('#pnlCarryFwd', wrap).onchange = (e) => { f.carryForward = e.target.checked; markDirty(`the carry-forward change on "${f.fund}"`); render(); };
     incRefresh();
   } else {
     wireSetupForm(wrap, {
@@ -1447,7 +1461,7 @@ function showAddFund(preset = {}) {
       month.income.push({
         fund: nm, carryOver: 0, planned: 0,
         rule: grp === 'standard' ? { type: 'checks' } : null,
-        titheExempt: false, carryForward: false, group: grp,
+        titheExempt: false, group: grp,
       });
       if (grp === 'standard') month.checks[nm] = { count: 0, amount: 0, titheAmount: 0 };
     } else {
@@ -1805,12 +1819,18 @@ function checklistNavigate(key) {
   }
 }
 
-// Variable-income true-up: snap the per-check estimate to what actually
-// arrived. Never writes planned directly — recalcRules recomputes it from
-// count × amount, which keeps the checks rule alive and rolls the real number
-// into next month. Shared by the Budget review strip and the Garden's message card.
+// Variable-income true-up, MID-MONTH: snap the per-check estimate to what
+// actually arrived. Never writes planned directly — recalcRules recomputes it
+// from count × amount, which keeps the checks rule alive and rolls the real
+// number into next month. Shared by the Budget review strip and the Garden's
+// message card. This is deliberately NOT the close-time rule: compute.js
+// setIncomeActual (1.3.0 I1, Default 2) writes the closing month's planned
+// directly and marks the fund truedUp, moving the estimate only for a variable
+// fund whose deposits matched the expected count — a month that is over is a
+// record, not a forecast. The two differ on purpose; only the close workflow
+// calls setIncomeActual.
 // Per check = Σ(deposits that actually posted) ÷ how many there were
-// (garden.js fundDeposits — the same rule the recent-average helper uses), not
+// (compute.js fundDeposits — the same rule the recent-average helper uses), not
 // received ÷ the planned count: a lapse month with one deposit against a count
 // of 3 used to write a third of a real check, and an empty month wrote $0
 // (3-year sim S3). chk.count is left alone — next month's planned is still
@@ -1859,6 +1879,9 @@ function renderBudget(main) {
   // Income shortfall copy: "still expected" while the month runs, "came in
   // under plan" once it's over (S17). A future month is not done.
   const { monthDone } = monthContext(month.id, todayISO());
+  // 1.3.0 I1: a month with a later one after it has been closed — its close-time
+  // marks (lateAtClose) are history worth showing on the row.
+  const isClosedMonth = data.months.some((m) => m.id > month.id);
 
   // The carried group counts as ONE item, like unassigned — per fund it would
   // put "Review · 12" back for every month that inherits a deficit.
@@ -1903,7 +1926,9 @@ function renderBudget(main) {
         : roundingOnly ? `Zero-based ✓ — the ${Math.round(Math.abs(s.leftToAllocate) * 100)}¢ is rounding from auto-calculated amounts`
         : s.leftToAllocate > 0 ? 'Income not yet assigned to a fund'
         : 'Planned more than your income'}
-        · planned income ${money(s.plannedIncome)} · allocated ${money(s.allocated)}</div>
+        · planned income ${money(s.plannedIncome)} · allocated ${money(s.allocated)}${
+        s.countedCarry > 0.004 ? ` · incl. ${money(s.countedCarry)} carried from ${prevMonthName(month)}`
+        : s.countedCarry < -0.004 ? ` · ${money(s.countedCarry)} counted from ${prevMonthName(month)}'s late income` : ''}</div>
     </div>
     <div class="month-head">
       <div class="recap-stats month-stats">
@@ -2019,23 +2044,32 @@ function renderBudget(main) {
     for (const { f, i } of rows) {
       const chk = (month.checks || {})[f.fund] || { count: 0, amount: 0, titheAmount: 0 };
       // Paycheck maths live in the fund panel; the row just states the result.
-      const caption = isStd && chk.count
-        ? `<div class="fund-note">${chk.count} × ${money(chk.amount)}${chk.variable ? ' est.' : ''}${chk.titheAmount && Math.abs(chk.titheAmount - chk.amount) > 0.004
-            ? ` · titheable ${money(chk.titheAmount)}` : ''}</div>`
-        : '';
+      // 1.3.0 I1: a fund trued up at close says so — the checks fields no longer
+      // describe this month's planned.
+      const capBits = [];
+      if (isStd && chk.count) capBits.push(`${chk.count} × ${money(chk.amount)}${chk.variable ? ' est.' : ''}${chk.titheAmount && Math.abs(chk.titheAmount - chk.amount) > 0.004
+            ? ` · titheable ${money(chk.titheAmount)}` : ''}`);
+      if (f.truedUp) capBits.push(`trued up to ${money(f.planned)} at close`);
+      const caption = capBits.length ? `<div class="fund-note">${capBits.join(' · ')}</div>` : '';
       body += `<tr>
         <td><a href="#" class="fund-name" data-inc-setup="${i}" title="Open this fund — income type, tithe, carry-over, paycheck">${esc(f.fund)}</a>${
           f.titheExempt ? '<span class="rule-chip chip-muted" title="Exempt from tithe — not counted in the tithe base.">no tithe</span>' : ''}${
-          f.carryForward ? '<span class="type-mark" title="Leftover rolls into next month\'s carry-over instead of resetting to $0.">↷</span>' : ''}${
+          isClosedMonth && f.lateAtClose ? `<span class="rule-chip chip-muted" title="Marked late when ${monthName(month.id)} closed — the shortfall carries into ${monthName(nextMonthId(month.id))}, pending.">late</span>` : ''}${
           isStd && !(f.rule && f.rule.type === 'checks')
             ? '<span class="rule-chip chip-warn" title="Planned no longer follows the paycheck numbers — it was typed by hand. Open the fund (click its name) to reconnect it.">set by hand</span>' : ''}${txChip(f)}${caption}</td>
         <td>${carryEditable(month, f.fund, true)
           ? `<input class="money" data-inc="${i}" data-k="carryOver" value="${money(f.carryOver)}" title="Opening balance — what's in this fund today. There's no earlier month to carry from."><div class="fund-note">opening</div>`
+          // 1.3.0 I1: the carry is what last month's close decided — pending (late,
+          // outside Left to allocate), counted (in it), or nothing.
+          : f.carryPending
+          ? `<span class="mono" title="${esc(pendingCarryTitle(month))}">${money(f.carryOver)}</span><div class="fund-note">pending</div>`
+          : Math.abs(f.carryOver) > 0.004
+          ? `<span class="mono" title="${esc(countedCarryTitle(month, f.carryOver))}">${money(f.carryOver)}</span><div class="fund-note">${f.carryOver > 0 ? 'carried in · counted' : 'counted'}</div>`
           : `<span class="mono" title="${esc(carryLockTitle(month))}">${money(f.carryOver)}</span>`}</td>
         <td><input class="money" data-inc="${i}" data-k="planned" value="${money(f.planned)}"></td>
         <td class="${moneyCls(f.received)}"><a href="#" class="mono" data-txfund="${esc(f.fund)}" style="color:inherit">${money(f.received)}</a></td>
         <td class="${f.leftover < -0.004 ? 'muted' : moneyCls(f.leftover)}"${
-          f.leftover < -0.004 ? ` title="${money(-f.leftover)} ${monthDone ? 'came in under plan' : 'still expected this month'}"` : ''}>${money(f.leftover)}</td>
+          f.leftover < -0.004 ? ` title="${money(-f.leftover)} ${f.carryPending ? `still expected from ${prevMonthName(month)}` : monthDone ? 'came in under plan' : 'still expected this month'}"` : ''}>${money(f.leftover)}</td>
         <td class="row-actions"><button class="btn-ghost row-more" data-inc-setup="${i}" title="Open this fund — setup, transfer, reorder, transactions">⋯</button></td></tr>`;
     }
     body += `</tbody></table>`;
@@ -4109,6 +4143,22 @@ function exportNudgeHtml() {
 // started any other way (the sidebar) drops a pending hold: its banner would
 // now say "hasn't started yet" about a month that has.
 function createNextMonth(last, onCreated) {
+  const comp = computeMonth(last);
+  // 1.3.0 D6 (Invariant 17): a month can't be started while the one closing is
+  // over-allocated after its income true-up, or while an income row is still
+  // undecided. The close modal disables its Start button for the same two
+  // states; this is the belt behind those braces. A month that hasn't begun
+  // (the modal's "Create … anyway" path) is exempt — its income can't have
+  // arrived yet, and that path was kept on purpose in 1.2.1 (W4).
+  if (last.id <= todayISO().slice(0, 7)) {
+    const open = incomeTrueUp(last, comp).filter((r) => !r.resolved).length;
+    if (open) { toast(`Resolve ${open} income difference${open === 1 ? '' : 's'} in ${monthLabel(last.id)} first — open "Start next month".`); return; }
+    if (comp.summary.leftToAllocate < -0.02) { toast(`${monthLabel(last.id)} is ${money(-comp.summary.leftToAllocate)} over-allocated — fix that before starting ${monthLabel(nextMonthId(last.id))}.`); return; }
+  }
+  // I1: the close stamp. incomePlanFor reads it — unassigned planned income
+  // carries into the new month, counted, only out of a month closed through
+  // this workflow, so months closed before 1.3.0 never grow a carry.
+  last.trueUp = { at: todayISO() };
   const next = buildNextMonth(last, data.settings.tithePercent ?? 0.15);
   // S13: funds removed while they had transactions (retireAtClose) leave now —
   // if they closed at $0.00. buildNextMonth builds fresh fund objects, so the
@@ -4117,7 +4167,6 @@ function createNextMonth(last, onCreated) {
   // that ended off zero (a late row landed on it) stays, flag cleared, and the
   // toast says why — silently dropping a balance is the one thing this must
   // never do.
-  const comp = computeMonth(last);
   const survived = [];
   last.categories.forEach((lc, ci) => {
     lc.funds.forEach((lf, fi) => {
@@ -4151,12 +4200,92 @@ function startNextMonth() {
   showMonthCloseWorkflow(last, nextMonthId(last.id));
 }
 
+// #27 (1.3.0 W4): the recap can't know about rows still sitting in the bank.
+// When the file has ever been imported into and the newest imported row is
+// more than 7 days before the closing month's last day, say so — one line, a
+// button, never a block (a lapse month can be a real lapse). "Imported" is the
+// source stamp or a bank id; rows brought in before the stamp existed
+// (2026-10-06) only have a non-empty account, so for those the newest
+// transaction in the closing month stands in.
+function importLapseHtml(last) {
+  let newest = '', stamped = false, ever = false;
+  for (const m of data.months) {
+    for (const t of m.transactions) {
+      const isImp = t.source === 'import' || !!t.externalId;
+      if (isImp || t.account) ever = true;
+      if (isImp) { stamped = true; if (t.date > newest) newest = t.date; }
+    }
+  }
+  if (!ever) return '';
+  if (!stamped) for (const t of last.transactions) if (t.date && t.date > newest) newest = t.date;
+  if (!newest) return '';
+  const [y, mo] = last.id.split('-').map(Number);
+  const cutoff = new Date(y, mo, 0); // last day of the closing month
+  cutoff.setDate(cutoff.getDate() - 7);
+  const cutoffISO = `${cutoff.getFullYear()}-${String(cutoff.getMonth() + 1).padStart(2, '0')}-${String(cutoff.getDate()).padStart(2, '0')}`;
+  if (newest >= cutoffISO) return '';
+  return `<p class="muted" id="wfImportLine" style="font-size:.85rem;margin:0 0 10px">${icon('file')} Your newest imported transaction is dated ${fmtDateWords(newest)}.
+    If the bank has more for ${monthName(last.id)}, bring it in first — the recap below doesn't know about it yet.
+    <button class="btn btn-sm" id="wfImport" style="margin-left:6px" title="The same importer as Transactions → Import CSV">Import CSV…</button></p>`;
+}
+
+// 1.3.0 I1 (W2): the Income check rows. One per incomeTrueUp entry, in income
+// order; each button writes the decision onto the closing month and the modal
+// re-opens on the new numbers. Copy per state:
+//   under      Fix the plan — set it to $received · It's late — carry $D into Next
+//   over       Use actual — set it to $received
+//   grace      (a pending carry from Prev, still short) Fix the plan — count Prev's $C against Left to allocate
+//              (…and over) Use actual — set it to $received + carry
+//   late-marked  marked late — carries ($D) into Next, pending · Not late after all
+function incomeCheckRowsHtml(rows, plans, last, nid) {
+  const prev = prevMonthName(last), next = monthName(nid);
+  const btn = (mode, fund, label) => `<button class="btn btn-sm" data-tu="${mode}" data-tu-fund="${esc(fund)}">${label}</button>`;
+  return rows.map((r) => {
+    const grp = r.group === 'standard' ? 'Standard' : 'Extra';
+    const plan = plans.get(normFund(r.fund)) || { carryOver: 0, carryPending: false };
+    let why, buttons;
+    if (r.lateAtClose) {
+      why = plan.carryPending
+        ? `marked late — carries <span class="neg">${money(plan.carryOver)}</span> into ${next}, pending`
+        : r.diff > 1
+        ? `marked late — it came in, <span class="pos">${money(r.diff)}</span> over plan · nothing carries`
+        : `marked late — it landed after all · nothing carries`;
+      buttons = (r.diff > 1 && !plan.carryPending ? btn('actual', r.fund, `Use actual — set it to ${money(r.received)}`) : '') + btn('unlate', r.fund, 'Not late after all');
+    } else if (r.carryPending) {
+      why = `carry <span class="neg">${money(r.carryOver)}</span> expected from ${prev} · received ${money(r.received)} · ${r.diff < 0
+        ? `still <span class="neg">${money(-r.diff)}</span> short` : `<span class="pos">${money(r.diff)}</span> over`}`;
+      buttons = r.diff < 0
+        ? btn('fix', r.fund, `Fix the plan — count ${prev}'s ${money(-r.carryOver)} against Left to allocate`)
+        : btn('actual', r.fund, `Use actual — set it to ${money(r2(r.received + r.carryOver))}`);
+    } else {
+      why = `planned ${money(r.planned)} · received ${money(r.received)} · <span class="${r.diff < 0 ? 'neg' : 'pos'}">${money(Math.abs(r.diff))}</span> ${r.diff < 0 ? 'under' : 'over'}`;
+      buttons = r.diff < 0
+        ? btn('fix', r.fund, `Fix the plan — set it to ${money(r.received)}`) + btn('late', r.fund, `It's late — carry ${money(-r.diff)} into ${next}`)
+        : btn('actual', r.fund, `Use actual — set it to ${money(r.received)}`);
+    }
+    return `<li><b>${esc(r.fund)}</b> <span class="muted">· ${grp}</span> — ${why}
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin:4px 0 6px">${buttons}</div></li>`;
+  }).join('');
+}
+
 function showMonthCloseWorkflow(last, nid, onCreated) {
   const comp = computeMonth(last);
   const s = comp.summary;
   // Guard (W4): "closing" a month that hasn't even started is almost always a
   // slip of the mouse — say so plainly before another future month is created.
   const isFutureClose = last.id > todayISO().slice(0, 7);
+  // 1.3.0 I1 / D6: the Income check and the Start gate. A month that hasn't
+  // begun is exempt (its income can't have arrived) — createNextMonth agrees.
+  const tuRows = isFutureClose ? [] : incomeTrueUp(last, comp);
+  const unresolved = tuRows.filter((r) => !r.resolved).length;
+  const overAlloc = !isFutureClose && s.leftToAllocate < -0.02;
+  // What each income fund would carry into ${nid} if the month closed now —
+  // the stamp is pretended so the unassigned line can name the host fund.
+  const plans = incomePlanFor({ ...last, trueUp: last.trueUp || { at: 'preview' } }, comp);
+  const hostKey = [...plans.entries()].find(([, p]) => p.carryOver > 0.02 && !p.carryPending)?.[0];
+  const hostFund = hostKey ? comp.income.find((f) => normFund(f.fund) === hostKey)?.fund : null;
+  const gateText = unresolved ? `Resolve ${unresolved} income difference${unresolved === 1 ? '' : 's'} first`
+    : overAlloc ? `Fix ${money(-s.leftToAllocate)} over-allocated first` : '';
   const flags = fundFlags(last, comp, todayISO());
   const attList = flags.filter((x) => x.attention);
   const offList = flags.filter((x) => x.offset);
@@ -4238,6 +4367,10 @@ function showMonthCloseWorkflow(last, nid, onCreated) {
   overlay.innerHTML = `
     <div class="modal modal-wide">
       <h2>The ${MONTH_NAMES[Number(last.id.split('-')[1]) - 1]} harvest</h2>
+      ${isFutureClose ? '' : importLapseHtml(last)}
+      ${tuRows.length ? `<p style="margin:0 0 4px"><b>${icon('paycheck')} Income check (${tuRows.length})</b> <span class="muted">— what ${monthName(last.id)} planned against what arrived</span></p>
+        <ul class="modal-list">${incomeCheckRowsHtml(tuRows, plans, last, nid)}</ul>` : ''}
+      ${!isFutureClose && !unresolved && s.leftToAllocate > 0.02 && hostFund ? `<p class="muted" style="font-size:.85rem;margin:0 0 10px">${money(s.leftToAllocate)} of ${monthName(last.id)}'s income isn't assigned to a fund. It carries into ${monthName(nid)} on ${esc(hostFund)}, counted toward Left to allocate.</p>` : ''}
       ${vignette}
       <div class="recap-stats">
         <div><span class="k">Income${exT() ? ' *' : ''}</span><span class="v pos">${money(actIncome(comp))}</span></div>
@@ -4262,8 +4395,10 @@ function showMonthCloseWorkflow(last, nid, onCreated) {
         creating ${monthLabel(nid)} now is probably not what you want.</p>` : ''}
       ${exportNudgeHtml()}
       <div class="modal-actions">
+        ${gateText ? `<a href="#" id="wfOpenBudget" class="muted" style="align-self:center;margin-right:auto;font-size:.9rem" title="Close this and go to ${monthLabel(last.id)}'s Budget page">Open Budget</a>` : ''}
         <button class="btn" id="wfCancel">Cancel</button>
-        <button class="btn btn-accent" id="wfGo">${isFutureClose ? `Create ${monthLabel(nid)} anyway`
+        <button class="btn btn-accent" id="wfGo"${gateText ? ' disabled style="opacity:.5;cursor:default"' : ''}${gateText ? ` title="${unresolved ? 'Decide each income row above first.' : `${monthLabel(last.id)} plans more than its income. Lower a fund's planned amount, or fix the plan on an income row.`}"` : ''}>${gateText ? gateText
+          : isFutureClose ? `Create ${monthLabel(nid)} anyway`
           : attList.length || offList.length ? `Start ${monthLabel(nid)} anyway` : `Start ${monthLabel(nid)}`}</button>
       </div>
     </div>`;
@@ -4281,8 +4416,37 @@ function showMonthCloseWorkflow(last, nid, onCreated) {
       showTransferModal(from, () => showMonthCloseWorkflow(last, nid, onCreated));
     }
   });
+  // Income check (I1): write the decision, re-run the tithe only — not
+  // recalcRules, whose applyChecksRules pass is exactly what a trued-up fund
+  // must not go through again — then re-open on the new numbers (#7 pattern).
+  overlay.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-tu]');
+    if (!b) return;
+    const f = last.income.find((x) => normFund(x.fund) === normFund(b.dataset.tuFund));
+    if (!f) return;
+    const mode = b.dataset.tu;
+    const titheBefore = titheSum(last);
+    let label;
+    if (mode === 'late') { f.lateAtClose = true; label = `marking "${f.fund}" late at ${monthLabel(last.id)}'s close`; }
+    else if (mode === 'unlate') { delete f.lateAtClose; label = `un-marking "${f.fund}" late`; }
+    else {
+      const res = setIncomeActual(last, f.fund, { mode });
+      if (!res) return;
+      label = `truing up "${f.fund}" to ${money(res.planned)} at ${monthLabel(last.id)}'s close`;
+    }
+    applyTitheRules(last, data.settings.tithePercent ?? 0.15);
+    markDirty(label); render();
+    const moved = titheMovedNote(titheBefore, titheSum(last)); // W10
+    if (moved) toast(moved);
+    close();
+    showMonthCloseWorkflow(last, nid, onCreated);
+  });
+  const openBudget = $('#wfOpenBudget', overlay);
+  if (openBudget) openBudget.onclick = (e) => { e.preventDefault(); close(); currentMonthId = last.id; view = 'budget'; flagPanel = null; render(); };
+  const wfImport = $('#wfImport', overlay);
+  if (wfImport) wfImport.onclick = () => { close(); openImportFromTransactions(); };
   $('#wfCancel', overlay).onclick = close;
-  $('#wfGo', overlay).onclick = () => { close(); createNextMonth(last, onCreated); };
+  $('#wfGo', overlay).onclick = () => { if (gateText) return; close(); createNextMonth(last, onCreated); };
   // Export nudge (#21): the workflow stays open; the line goes once the stamp is in.
   const wfExport = $('#wfExport', overlay);
   if (wfExport) wfExport.onclick = () => exportCopy().then(() => {
@@ -4778,7 +4942,7 @@ async function wzFinish() {
   for (const src of wizard.sources) {
     month.income.push({
       fund: src.name, carryOver: 0, planned: 0, rule: { type: 'checks' },
-      titheExempt: false, carryForward: false, group: 'standard',
+      titheExempt: false, group: 'standard',
     });
     const chk = { count: src.count || 0, amount: src.amount || 0, titheAmount: src.amount || 0 };
     if (src.variable) chk.variable = true;
@@ -4787,7 +4951,7 @@ async function wzFinish() {
   // Gifts and bonuses always have a home.
   month.income.push({
     fund: 'Other Income', carryOver: 0, planned: 0, rule: null,
-    titheExempt: false, carryForward: false, group: 'bonus',
+    titheExempt: false, group: 'bonus',
   });
 
   const giving = wizard.givingChoice === 'yes';

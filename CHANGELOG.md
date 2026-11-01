@@ -9,6 +9,80 @@ so entries before that are dated by when the work happened, not by commit.
 
 ---
 
+## Unreleased — 1.3.0 — income true-up at close, D6 hard block, catch-up plans, Reports
+
+Headline for the release (filled in sitting by sitting): income carry-over becomes a month-close decision (fix / late / use actual); unassigned income carries counted; Start next month is disabled while the closing month is over-allocated (D6, Invariant 17); catch-up plans for carried-in red; Reports replaces Year Overview; goal done; next charge month + already saved; vendor key fallback. `data.version` **7 unchanged**; optional keys only; `carryForward` no longer read.
+
+### 2026-11-01 — Income true-up at close, D6 start gate, import nudge (sitting A: W1–W4)
+
+Sitting A of the 1.3.0 work order (`_cowork/work-order-1.3.0.md`, items W1–W4; proposal §3.0 I1, D5, D6;
+three-year report S15, S20, "What Dustin would change" 5/6/14, wishlist #27; friction A-16, A-19, A-32, B-02,
+B-03, B-07). The first `compute.js` change that **rewrites** a line rather than adding one — `computeMonth`'s
+`leftToAllocate`. Expense side untouched: `categories`, `totals` and `leftToAllocate` byte-identical on all 92
+months of the export copy and both personas, `resyncCarryOvers` → `[]` on all three
+(`_cowork/3yr-sim/pass4/i1-precheck/i1verify.mjs`: identity 377 ok, 0 bad · worked table 401 ok, 0 bad).
+New optional keys, all absent from existing files: income fund `carryPending`, `lateAtClose`, `truedUp`; month
+`trueUp = { at }`. `carryForward` is no longer read or written (left in old data; next real version bump strips
+it). Suites: csv 606 · migrate 17 · garden 177 · compute **1147 → 1205** (+58; the two old `carryForward` resync
+checks are replaced one-for-one), 0 failed. `test-compute.mjs` now prints the whole-suite total as its last line.
+
+- **W1 — the engine.** `leftToAllocate = Σ income (planned + (carryPending ? 0 : carryOver)) − Σ expense planned`
+  (counted, non-Work); new summary field `countedCarry`. Income carry into the next month is exactly one of three
+  recorded things, from the new `incomePlanFor(prev)`: **pending** (prev's fund marked `lateAtClose` and still
+  short — negative, outside Left to allocate, one month's grace), **counted** (prev's Left to allocate at close on
+  the first Standard fund that isn't late — Default 1 — or a late amount the grace month gave up on), or **0**.
+  The surplus carries only out of a month stamped `trueUp` by `createNextMonth`, so nothing already in a file
+  moves on upgrade (Dustin's Aug $26.39 / Sep $64.47 stay where they were). `buildNextMonth` and
+  `resyncCarryOvers`' income loop both read that helper and agree by construction; the resync leaves alone a
+  pending carry the user resolved in the grace month (`carryPending: false`, written explicitly). New
+  `incomeTrueUp(month, comp)` — one row per income fund off its plan by more than $1 (`diff` = received − planned,
+  or the whole leftover when a late carry is pending), with `options` fix / late / actual and `resolved`. New
+  `setIncomeActual(month, fund, { mode })` — Default 2/3: `fix` → planned := received, a pending carry becomes
+  counted; `actual` → planned := received (+ carry when pending — it landed); a checks-rule fund is written
+  directly and marked `truedUp`, its per-check estimate moving only when `variable` and deposits === count.
+  `applyChecksRules` skips a `truedUp` fund. `fundDeposits` moved from `garden.js` into `compute.js`
+  (re-exported from `garden.js`, callers unchanged).
+- **W2 — the close workflow.** New first section **Income check**: `Fund · Standard|Extra planned $X · received $Y
+  · $D under|over` with `Fix the plan — set it to $Y` / `It's late — carry $D into Next` / `Use actual — set it to
+  $Y`; grace month `Fix the plan — count Prev's $C against Left to allocate` (no late button); a late-marked row
+  `marked late — carries ($D) into Next, pending` + `Not late after all`. Each click writes the decision, re-runs
+  `applyTitheRules` only (not `recalcRules`), `markDirty`, `render`, and re-opens the modal; W10's tithe toast
+  fires when a Bonus-group fix moves the tithe. Then the unassigned line: `$X of Month's income isn't assigned to
+  a fund. It carries into Next on Host, counted toward Left to allocate.` **Start button (D6):** enabled only when
+  every row is resolved and `leftToAllocate ≥ −0.02`; otherwise disabled reading `Resolve N income difference(s)
+  first` or `Fix $X over-allocated first`, with an `Open Budget` link beside it. `… anyway` survives only for
+  attention / available-to-move items. `createNextMonth` stamps `last.trueUp = { at }` before `buildNextMonth`
+  and guards the same two states (toast + return). A month that hasn't begun keeps 1.2.1's `Create … anyway`
+  path: no Income check, no gate — its income can't have arrived. Hero note: `· incl. $X carried from Prev` /
+  `· ($X) counted from Prev's late income` when `countedCarry ≠ 0`.
+- **W3 — rows and panel.** The `Carry leftover into next month` checkbox, its handler, the `↷` mark and
+  `carryForward: false` in the three constructors are gone (`grep carryForward src/*.js` → nothing). Income row
+  carry cell: pending → amount + `pending` (`Expected from Prev — it hadn't arrived when Prev closed. Stays out of
+  Left to allocate until it does.`); counted → `carried in · counted` / `counted` with matching titles. Leftover
+  title while pending and short: `$X still expected from Prev`. Caption on a trued-up fund `· trued up to $X at
+  close`; a closed month's late-marked row gets a `late` chip. Panel: `expected from Prev — pending` under Carry
+  over; `#pnlIncCalc` on a trued-up fund: `Planned this month: $X · trued up at close — the paycheck fields drive
+  next month, not this one.` `applyActualChecks` (mid-month "Use actual": estimate = average of deposits, count
+  unchanged) is deliberately **not** the close-time rule and is untouched; its comment says so.
+- **W4 — #27.** Above the Income check, when the file has ever been imported into and the newest imported row is
+  more than 7 days before the closing month's last day: `Your newest imported transaction is dated Mon D, YYYY. If
+  the bank has more for Month, bring it in first — the recap below doesn't know about it yet.` + `Import CSV…`
+  (closes, opens the importer). Rows imported before the `source` stamp only have an account; for those the
+  newest transaction in the closing month stands in. One line, never a block.
+
+**Invariants.** #2's Left-to-allocate clause → `Σ income (planned + counted carry) − Σ expense planned`.
+#6 → expense funds roll leftover → carryOver; income funds carry only what the close recorded: a late amount
+(pending, outside Left to allocate), a counted amount (an unassigned surplus, or a late amount the grace month
+gave up on), or nothing — never derived after the fact beyond that record. **#17 (new)** → A month cannot be
+started while the previous month is over-allocated after its income true-up, or while an income row is
+unresolved.
+
+**Known behaviour change, stated plainly:** a month that closes with unassigned planned income now opens the
+next month with that amount carried in, counted (Default 1) — starting with the first month closed under 1.3.0.
+On Dustin's file that would have been $26.39 → September and $64.47 → October.
+
+---
+
 ## 1.2.1 — 2026-10-31 — carried-in split, Batches 4 + 4b
 
 Two sittings from the 1.2.1 work order: the three-year simulation's Batches 4 and 4b — red is split into "over" (this month) and "carrying" (inherited), with no change to the numbers — plus wishes #12, #13, #17, #23, #24 and the B-16 chip. First `compute.js` change since 1.1.1, additive only (`fundSplit`, three `fundFlags` fields, S12 offsets, one `buildNextMonth` line); no data.version bump; one optional field added (`fund.pausedPlanned`). `computeMonth` verified byte-identical on 82 simulated months.

@@ -23,7 +23,7 @@
 //    the real tool it opens (Transfer…, Open Budget, Review N unassigned), and
 //    `phrase` is the one-line plain state for tooltips. Garden phrasing
 //    survives only in status-only text (season note, the calm affirmation).
-import { computeMonth, fundFlags, fundSplit, normFund, r2, isTransferTx } from './compute.js';
+import { computeMonth, fundFlags, fundSplit, normFund, r2, isTransferTx, fundDeposits } from './compute.js';
 
 // ---- tunables (first guesses — revisit after a month of living with it) ----
 export const SEASON_WINDOW_DAYS = 90;   // compare the latest AUM snapshot to ~this far back
@@ -223,21 +223,10 @@ export function incomeCheckIns(month, comp, todayISO) {
   return out;
 }
 
-// The paychecks that actually posted to an income fund this month: positive,
-// non-transfer transactions assigned to it. Returns { count, total } where
-// total is the sum of those deposits' amounts. This is the one deposit rule
-// shared by "Use actual" (app.js applyActualChecks) and recentPerCheckAvg —
-// never substitute the fund's `received` / fundSums() for `total`: those
-// include transfers in and any negative adjustment on the fund.
-export function fundDeposits(month, fundName) {
-  const key = normFund(fundName);
-  let count = 0, total = 0;
-  for (const t of month.transactions || []) {
-    if (!(t.amount > 0) || isTransferTx(t) || normFund(t.fund) !== key) continue;
-    count++; total += t.amount;
-  }
-  return { count, total: r2(total) };
-}
+// fundDeposits lives in compute.js since 1.3.0 (I1 — setIncomeActual needs it
+// and compute.js can't import garden.js). Re-exported so app.js and
+// recentPerCheckAvg below keep their import.
+export { fundDeposits } from './compute.js';
 
 // Suggested per-check estimate for a variable-income fund: one pooled average
 // over the deposits that actually posted in the last (up to) three months
