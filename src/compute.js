@@ -168,20 +168,40 @@ export function savingsMonthly(monthId, carryOver, s) {
   return r2(Math.max(0, s.targetAmount - carryOver) / months);
 }
 
+// The setup's monthly ask: null for Basic/Pacing (the user sets it), a number
+// for Fixed, Build-up and Goal. 1.3.0 sitting B adds three optional setup keys:
+//   nextChargeMonth (W7, fixed)  — plan like a goal does: (total − carry) ÷ months
+//                                  to the charge, inclusive (the savingsMonthly
+//                                  convention). Absent → total ÷ everyMonths, as always.
+//   done (W6, target goal)       — the goal is finished: the ask is $0 for good.
+//   catchUp (W5, Basic/Pacing/Build-up) — { base, perMonth, until }: a fixed
+//                                  add-on through `until`, on top of the auto
+//                                  (Build-up) or of `base` (Basic/Pacing).
 export function autoPlanned(f, monthId) {
   const s = f.setup;
   if (!s) return null;
-  if (s.type === 'fixed' && s.everyMonths >= 1) return r2((s.totalAmount || 0) / s.everyMonths);
-  if (s.type === 'savings') {
+  let auto = null;
+  if (s.type === 'fixed' && s.everyMonths >= 1) {
+    if (s.nextChargeMonth && monthId) {
+      const months = Math.max(1, monthDiff(monthId, s.nextChargeMonth) + 1);   // inclusive, like savingsMonthly
+      auto = r2(Math.max(0, (s.totalAmount || 0) - (f.carryOver || 0)) / months);
+    } else auto = r2((s.totalAmount || 0) / s.everyMonths);
+  } else if (s.type === 'savings') {
     if (s.savingsMode === 'build') {
       const amt = s.monthlyAmount || 0;
       // With a goal: contribute only up to the goal (capped), resume if it drops below.
-      if (s.buildGoal > 0) return r2(Math.min(amt, Math.max(0, s.buildGoal - (f.carryOver || 0))));
-      return r2(amt);
+      if (s.buildGoal > 0) auto = r2(Math.min(amt, Math.max(0, s.buildGoal - (f.carryOver || 0))));
+      else auto = r2(amt);
+    } else {
+      if (s.done) return 0;                                   // W6: a done goal never asks again (and gets no catch-up)
+      if (monthId) auto = savingsMonthly(monthId, f.carryOver || 0, s);
     }
-    if (monthId) return savingsMonthly(monthId, f.carryOver || 0, s);
   }
-  return null;
+  // W5: the catch-up add-on — a fixed amount a month through `until`. It does
+  // not read carryOver, so a resync that moves the carry never moves planned (S7).
+  const cu = s.catchUp;
+  if (cu && monthId && monthId <= cu.until) return r2((auto != null ? auto : (cu.base || 0)) + cu.perMonth);
+  return auto;
 }
 
 export function isOverridden(f, monthId) {
@@ -269,8 +289,8 @@ export function fundFlags(month, comp, todayISO) {
         else if (type === 'savings') {
           // Build-over-time pots are never "available to move"; target-date goals
           // only once their target month is over — a goal is spent in its month,
-          // not before.
-          offset = s.savingsMode !== 'build' && month.id === s.targetMonth && monthDone;
+          // not before. A done goal (1.3.0 W6) is free at any month's end.
+          offset = s.savingsMode !== 'build' && monthDone && (month.id === s.targetMonth || s.done);
         }
       }
 
@@ -623,14 +643,29 @@ export function buildNextMonth(prev, tithePercent) {
     funds: c.funds.map((f) => {
       const carryOver = r2(f.leftover);
       const s = f.setup ? { ...f.setup } : null;
-      // Savings target has passed → recalibrate to the same month next year.
-      if (s && s.type === 'savings' && s.targetMonth && id > s.targetMonth) {
+      // Savings target has passed → recalibrate to the same month next year
+      // (Inv 14) — unless the goal is done (1.3.0 W6): a finished goal keeps
+      // its month and asks $0 until it's emptied and removed.
+      if (s && s.type === 'savings' && s.targetMonth && id > s.targetMonth && !s.done) {
         s.targetMonth = monthAdd(s.targetMonth, 12);
+      }
+      // 1.3.0 W7: a fixed fund's charge month has passed → the next charge is
+      // one cycle later (Inv 14, extended).
+      if (s && s.type === 'fixed' && s.nextChargeMonth && id > s.nextChargeMonth) {
+        s.nextChargeMonth = monthAdd(s.nextChargeMonth, s.everyMonths);
       }
       // Default: repeat last month's plan. A fund paused for one month (1.2.1
       // W6, fund.pausedPlanned) gets its plan back here; the field itself is
       // not copied — the returned object lists its fields explicitly below.
       let planned = f.pausedPlanned != null ? f.pausedPlanned : f.planned;
+      // 1.3.0 W5: a catch-up plan ends on its last month, or early once the carry
+      // is back to ≥ 0 — the plan is dropped and a Basic/Pacing fund returns to
+      // base. (The `auto` line below still runs, so a Build-up fund returns to
+      // its own auto.)
+      if (s && s.catchUp && (id > s.catchUp.until || carryOver >= -0.004)) {
+        if (s.catchUp.base != null) planned = s.catchUp.base;
+        delete s.catchUp;
+      }
       const auto = autoPlanned({ ...f, setup: s, carryOver }, id);
       if (auto != null) {
         planned = auto; // fund setup wins: overrides reset each new month
@@ -689,12 +724,14 @@ export function fundDeposits(month, fundName) {
 // the whole leftover when a late carry is pending (the late money was expected
 // inside this month). Tolerance ±$1, as incomeCheckIns. A fund marked late
 // whose money then landed (|diff| ≤ 1) still appears, resolved, so the row can
-// offer to clear the flag.
+// offer to clear the flag. A late fund whose money then came in OVER is not
+// resolved (1.3.0 sitting B, W0): the extra needs the 'actual' decision, or
+// Left to allocate never sees it.
 export function incomeTrueUp(month, comp) {
   const out = [];
   for (const f of comp.income) {
     const diff = f.carryPending ? f.leftover : r2(f.received - f.planned);
-    const resolved = Math.abs(diff) <= 1 || f.lateAtClose === true;
+    const resolved = Math.abs(diff) <= 1 || (f.lateAtClose === true && diff <= 1);
     const options = [];
     if (diff < -1) { options.push('fix'); if (!f.carryPending && !f.lateAtClose) options.push('late'); }
     if (diff > 1) options.push('actual');

@@ -836,6 +836,156 @@ console.log(`\nCompute engine vs spreadsheet: ${ok} checks passed, ${bad} failed
   t('comp.income carries carryPending through', cPend.income[0].carryPending === true && cPend.incomeTotals.carryOver === -2000 && cPend.summary.countedCarry === 0);
 }
 
+// ---- 1.3.0 sitting B: catch-up (W5), goal done (W6), next charge month (W7), late-over (W0) ----
+{
+  const t = (label, cond, detail = '') => {
+    if (cond) ok++; else { bad++; console.log(`FAIL 1.3.0B ${label}${detail ? ` — ${detail}` : ''}`); }
+  };
+  const mk = (id, funds, txs = [], income = []) =>
+    ({ id, label: 'x', checks: {}, income, categories: [{ name: 'C', excludeFromTotals: false, funds }], transactions: txs });
+  const tx = (date, amount, fund) => ({ id: date + fund + amount, date, vendor: 'v', amount, fund });
+  const clone = (x) => JSON.parse(JSON.stringify(x));
+  const fundOf = (m, name) => m.categories[0].funds.find((f) => f.fund === name);
+
+  // W5 — Basic, carry −175, planned 400, N = 3 → 458.33 for three months, 400 after.
+  {
+    const f = { fund: 'Ess', carryOver: -175, planned: 400, rule: null,
+      setup: { type: 'basic', catchUp: { base: 400, perMonth: r2(175 / 3), until: monthAdd('2026-09', 2) } } };
+    t('W5 basic: autoPlanned 458.33 in month 1', autoPlanned(f, '2026-09') === 458.33, String(autoPlanned(f, '2026-09')));
+    t('W5 basic: 458.33 in month 2 and 3', autoPlanned(f, '2026-10') === 458.33 && autoPlanned(f, '2026-11') === 458.33);
+    t('W5 basic: null again after until', autoPlanned(f, '2026-12') === null);
+    t('W5 basic: isOverridden false at the auto', isOverridden({ ...f, planned: 458.33 }, '2026-09') === false);
+    t('W5 basic: isOverridden true when typed', isOverridden({ ...f, planned: 500 }, '2026-09') === true);
+    // Walk it through buildNextMonth: each month spends exactly its base, so the carry climbs by 58.33 a month.
+    const sep = mk('2026-09', [{ ...f, planned: 458.33 }], [tx('2026-09-10', -400, 'Ess')]);
+    const oct = buildNextMonth(sep, 0.1);
+    const fo = fundOf(oct, 'Ess');
+    t('W5 basic: Oct carry −116.67, planned 458.33, plan kept', fo.carryOver === -116.67 && fo.planned === 458.33 && fo.setup.catchUp && fo.setup.catchUp.until === '2026-11', JSON.stringify(fo));
+    oct.transactions.push(tx('2026-10-10', -400, 'Ess'));
+    const nov = buildNextMonth(oct, 0.1);
+    const fn = fundOf(nov, 'Ess');
+    t('W5 basic: Nov (the until month) still on plan', fn.carryOver === -58.34 && fn.planned === 458.33 && !!fn.setup.catchUp, JSON.stringify(fn));
+    nov.transactions.push(tx('2026-11-10', -400, 'Ess'));
+    const dec = buildNextMonth(nov, 0.1);
+    const fd = fundOf(dec, 'Ess');
+    t('W5 basic: Dec past until → base 400, catchUp gone, carry −0.01 (rounding)', fd.planned === 400 && fd.setup.catchUp === undefined && fd.carryOver === -0.01, JSON.stringify(fd));
+    // Early end: the carry is back to +10 in month 2 → month 2 opens at base and the plan is gone.
+    const sep2 = mk('2026-09', [{ ...f, planned: 458.33 }], [tx('2026-09-10', -273.33, 'Ess')]);
+    const oct2 = fundOf(buildNextMonth(sep2, 0.1), 'Ess');
+    t('W5 basic: early end — carry +10 → base 400, catchUp gone', oct2.carryOver === 10 && oct2.planned === 400 && oct2.setup.catchUp === undefined, JSON.stringify(oct2));
+    // A typed override on the until month is not carried: Dec opens at base either way.
+    const novT = clone(nov); fundOf(novT, 'Ess').planned = 999;
+    t('W5 basic: a typed planned on the last month does not outlive the plan', fundOf(buildNextMonth(novT, 0.1), 'Ess').planned === 400);
+    // Pacing takes the same path (base is the typed planned).
+    const pc = { fund: 'Groc', carryOver: -60, planned: 300, rule: null, setup: { type: 'pacing', catchUp: { base: 300, perMonth: 30, until: '2026-10' } } };
+    t('W5 pacing: 330 on plan, null after', autoPlanned(pc, '2026-10') === 330 && autoPlanned(pc, '2026-11') === null);
+  }
+  // W5 — Build-up monthly 50, carry −120, N = 2 → 110, 110, then 50 (its own auto).
+  {
+    const b = { fund: 'Pot', carryOver: -120, planned: 110, rule: null,
+      setup: { type: 'savings', savingsMode: 'build', monthlyAmount: 50, buildGoal: 0, catchUp: { base: null, perMonth: 60, until: '2026-10' } } };
+    t('W5 build: 110 in month 1', autoPlanned(b, '2026-09') === 110);
+    const sep = mk('2026-09', [b], [tx('2026-09-10', -50, 'Pot')]);
+    const oct = buildNextMonth(sep, 0.1);
+    const fo = fundOf(oct, 'Pot');
+    t('W5 build: Oct 110 (carry −60), plan kept', fo.planned === 110 && fo.carryOver === -60 && !!fo.setup.catchUp, JSON.stringify(fo));
+    oct.transactions.push(tx('2026-10-10', -50, 'Pot'));
+    const fn = fundOf(buildNextMonth(oct, 0.1), 'Pot');
+    t('W5 build: Nov back to its own auto 50, catchUp gone', fn.planned === 50 && fn.setup.catchUp === undefined && fn.carryOver === 0, JSON.stringify(fn));
+    // Build-up with a cap: the add-on sits on top of the capped auto.
+    const bc = { fund: 'Cap', carryOver: 470, planned: 0, rule: null, setup: { type: 'savings', savingsMode: 'build', monthlyAmount: 50, buildGoal: 500, catchUp: { base: null, perMonth: 20, until: '2026-12' } } };
+    t('W5 build with cap: capped auto 30 + 20 = 50', autoPlanned(bc, '2026-09') === 50);
+  }
+  // W5 — S7 interplay: a prior-month transaction moves so the carry changes while
+  // on plan → the resync change has no plannedTo (the auto doesn't read the carry).
+  {
+    const f = { fund: 'Ess', carryOver: 0, planned: 400, rule: null, setup: { type: 'basic' } };
+    const sep = mk('2026-09', [f], [tx('2026-09-10', -575, 'Ess')]);
+    const oct = buildNextMonth(sep, 0.1);
+    const fo = fundOf(oct, 'Ess');
+    t('W5 S7 fixture: Oct carry −175', fo.carryOver === -175);
+    fo.setup.catchUp = { base: 400, perMonth: 58.33, until: '2026-12' };
+    fo.planned = autoPlanned(fo, '2026-10');
+    t('W5 S7 fixture: on plan at 458.33', fo.planned === 458.33);
+    const d = { version: 7, settings: {}, months: [sep, oct] };
+    t('W5 S7: resync is quiet while nothing moved', resyncCarryOvers(d).length === 0);
+    sep.transactions[0].amount = -520;                       // the September charge was really $520
+    const ch = resyncCarryOvers(d);
+    t('W5 S7: carry resynced to −120, planned untouched (no plannedTo)', ch.length === 1 && ch[0].to === -120 && ch[0].plannedTo === undefined && fo.planned === 458.33 && fo.carryOver === -120, JSON.stringify(ch));
+    t('W5 S7: autoPlanned on a plan ignores the carry', autoPlanned({ ...fo, carryOver: -900 }, '2026-10') === 458.33);
+  }
+
+  // W6 — goal done: autoPlanned 0, no +12 roll, Review offset at month end.
+  {
+    const g = { fund: 'Baby', carryOver: 300, planned: 0, rule: null,
+      setup: { type: 'savings', savingsMode: 'target', targetAmount: 3000, targetMonth: '2027-05', everyMonths: 1, totalAmount: 0, done: true } };
+    t('W6: done goal autoPlanned === 0 (before its month)', autoPlanned(g, '2027-03') === 0);
+    t('W6: done goal autoPlanned === 0 (after its month)', autoPlanned(g, '2027-08') === 0);
+    t('W6: a done goal gets no catch-up add-on', autoPlanned({ ...g, setup: { ...g.setup, catchUp: { base: null, perMonth: 50, until: '2027-12' } } }, '2027-08') === 0);
+    const aug = mk('2027-08', [g]);
+    const sep = fundOf(buildNextMonth(aug, 0.1), 'Baby');
+    t('W6: buildNextMonth past the target month keeps targetMonth and done', sep.setup.targetMonth === '2027-05' && sep.setup.done === true && sep.planned === 0 && sep.carryOver === 300, JSON.stringify(sep));
+    const notDone = { ...g, setup: { ...g.setup, done: false } };
+    const sepN = fundOf(buildNextMonth(mk('2027-08', [notDone]), 0.1), 'Baby');
+    t('W6: a goal that is not done still rolls +12 (Inv 14)', sepN.setup.targetMonth === '2028-05' && sepN.planned > 0, JSON.stringify(sepN));
+    const mid = fundFlags(aug, computeMonth(aug), '2027-08-15')[0];
+    t('W6: done goal with $300 left — not free mid-month (S12 rule a)', !mid || mid.offset === false, JSON.stringify(mid));
+    const end = fundFlags(aug, computeMonth(aug), '2027-08-31')[0];
+    t('W6: done goal with $300 left — free at month end', end && end.offset === true && end.leftover === 300, JSON.stringify(end));
+    const nd = mk('2027-08', [notDone]);
+    const endN = fundFlags(nd, computeMonth(nd), '2027-08-31')[0];
+    t('W6: not-done goal outside its target month — not free at month end (unchanged)', !endN || endN.offset === false, JSON.stringify(endN));
+    const empty = mk('2027-08', [{ ...g, carryOver: 0 }]);
+    t('W6: done goal at $0 — no entry at all', fundFlags(empty, computeMonth(empty), '2027-08-31').length === 0);
+  }
+
+  // W7 — nextChargeMonth: (total − carry) ÷ months to the charge, inclusive; rolls +everyMonths.
+  {
+    const fx = (o) => ({ fund: 'Ins', carryOver: 0, planned: 0, rule: null, setup: { type: 'fixed', everyMonths: 12, totalAmount: 220, ...o } });
+    t('W7: three months out, 220, carry 0 → 73.33', autoPlanned({ ...fx({ nextChargeMonth: '2026-11' }), carryOver: 0 }, '2026-09') === 73.33);
+    t('W7: carry 75.08, 12 months → 12.08', autoPlanned({ ...fx({ nextChargeMonth: '2027-08' }), carryOver: 75.08 }, '2026-09') === 12.08);
+    t('W7: Renters 220 every 12, 3 months out, $100 set aside → 40', autoPlanned({ ...fx({ nextChargeMonth: '2026-11' }), carryOver: 100 }, '2026-09') === 40);
+    t('W7: in the charge month itself → the whole remainder', autoPlanned({ ...fx({ nextChargeMonth: '2026-09' }), carryOver: 150 }, '2026-09') === 70);
+    t('W7: fully set aside → 0, never negative', autoPlanned({ ...fx({ nextChargeMonth: '2026-11' }), carryOver: 300 }, '2026-09') === 0);
+    t('W7: no monthId → total ÷ everyMonths', autoPlanned(fx({ nextChargeMonth: '2026-11' }), undefined) === 18.33);
+    // No field → identical to today, on Dustin's two fixtures.
+    t('W7: Car Insurance 3316.44/6 carry 2644.05 → 552.74 (unchanged)', autoPlanned({ fund: 'Car', carryOver: 2644.05, planned: 0, setup: { type: 'fixed', everyMonths: 6, totalAmount: 3316.44 } }, '2026-09') === 552.74);
+    t('W7: Renters Insurance 598/12 carry 144.92 → 49.83 (unchanged)', autoPlanned({ fund: 'Rent', carryOver: 144.92, planned: 0, setup: { type: 'fixed', everyMonths: 12, totalAmount: 598 } }, '2026-09') === 49.83);
+    t('W7: nextChargeMonth null → unchanged too', autoPlanned({ ...fx({ nextChargeMonth: null }), carryOver: 100 }, '2026-09') === 18.33);
+    // Roll: past the charge month → +everyMonths; before it → kept.
+    const nov = mk('2026-11', [{ ...fx({ nextChargeMonth: '2026-11' }), carryOver: 146.67, planned: 73.33 }], [tx('2026-11-05', -220, 'Ins')]);
+    const dec = fundOf(buildNextMonth(nov, 0.1), 'Ins');
+    t('W7: past the charge month → rolled +12 to 2027-11, carry 0, planned 18.33', dec.setup.nextChargeMonth === '2027-11' && dec.carryOver === 0 && dec.planned === 18.33, JSON.stringify(dec));
+    const oct = fundOf(buildNextMonth(mk('2026-09', [{ ...fx({ nextChargeMonth: '2026-11' }), planned: 73.33 }]), 0.1), 'Ins');
+    t('W7: before the charge month → kept, planned re-derived (220 − 73.33) ÷ 2 = 73.34', oct.setup.nextChargeMonth === '2026-11' && oct.carryOver === 73.33 && oct.planned === 73.34, JSON.stringify(oct));
+    const q = fundOf(buildNextMonth(mk('2026-09', [{ fund: 'Q', carryOver: 0, planned: 0, rule: null, setup: { type: 'fixed', everyMonths: 3, totalAmount: 90, nextChargeMonth: '2026-09' } }]), 0.1), 'Q');
+    t('W7: every 3 → rolls +3', q.setup.nextChargeMonth === '2026-12');
+  }
+
+  // W0 — a late-marked fund whose money then came in over is NOT resolved.
+  {
+    const pay = (o = {}) => ({ fund: 'Pay', carryOver: 0, planned: 4000, rule: { type: 'checks' }, titheExempt: false, group: 'standard', ...o });
+    const dep = (date, amt) => ({ id: date + amt, date, vendor: 'EMPLOYER', amount: amt, fund: 'Pay' });
+    const base = () => ({ id: '2026-09', label: 'x', checks: { Pay: { count: 2, amount: 2000, titheAmount: 2000 } }, income: [pay({ lateAtClose: true })],
+      categories: [{ name: 'C', excludeFromTotals: false, funds: [{ fund: 'Rent', carryOver: 0, planned: 4000, rule: null, setup: { type: 'basic' } }] }],
+      transactions: [] });
+    const sept = base(); sept.transactions = [dep('2026-09-05', 2500), dep('2026-09-19', 2000)];
+    const r = incomeTrueUp(sept, computeMonth(sept));
+    t('W0: late + $4,500 → row open, actual offered', r.length === 1 && r[0].resolved === false && r[0].diff === 500 && r[0].options.includes('actual'), JSON.stringify(r));
+    t('W0: Left to allocate still 0 before the decision', computeMonth(sept).summary.leftToAllocate === 0);
+    setIncomeActual(sept, 'Pay', { mode: 'actual' });
+    const ra = incomeTrueUp(sept, computeMonth(sept));
+    t('W0: after actual → planned 4,500, LTA +500, resolved', sept.income[0].planned === 4500 && computeMonth(sept).summary.leftToAllocate === 500 && ra.length === 1 && ra[0].resolved === true, JSON.stringify(ra));
+    const late = base(); late.transactions = [dep('2026-09-05', 2000)];
+    const rl = incomeTrueUp(late, computeMonth(late));
+    t('W0: late and still short → resolved as before', rl.length === 1 && rl[0].resolved === true && rl[0].diff === -2000);
+    const landed = base(); landed.transactions = [dep('2026-09-05', 2000), dep('2026-09-19', 2000)];
+    const rd = incomeTrueUp(landed, computeMonth(landed));
+    t('W0: late and landed exactly → resolved, row kept to clear the flag', rd.length === 1 && rd[0].resolved === true && rd[0].diff === 0);
+  }
+  console.log(`1.3.0 sitting B: assertions folded into the pass/fail totals above (now ${ok} ok / ${bad} bad)`);
+}
+
 if (!process.env.CHECKING_CSV) {
   console.log('\nChecking CSV section skipped — set CHECKING_CSV to a real checking export to run it.');
 } else {

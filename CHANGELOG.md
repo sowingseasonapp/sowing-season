@@ -13,6 +13,76 @@ so entries before that are dated by when the work happened, not by commit.
 
 Headline for the release (filled in sitting by sitting): income carry-over becomes a month-close decision (fix / late / use actual); unassigned income carries counted; Start next month is disabled while the closing month is over-allocated (D6, Invariant 17); catch-up plans for carried-in red; Reports replaces Year Overview; goal done; next charge month + already saved; vendor key fallback. `data.version` **7 unchanged**; optional keys only; `carryForward` no longer read.
 
+### 2026-11-01 — Catch-up plans, goal done, next charge month; late-over and truedUp touch-ups (sitting B: W0, W5–W7)
+
+Sitting B of the 1.3.0 work order (`_cowork/work-order-1.3.0.md`, items W5–W7 with §0 Defaults 4–6, plus W0 —
+two Sitting A touch-ups from Cowork's second look at `e2e401a`; three-year report "The bigger story" / Option C,
+wishlist #10, #15, "What Dustin would change" 11; friction A-18, A-20, B-09; re-run 1.2.1 B §5 lead 3). All three
+items live in `autoPlanned` and `buildNextMonth`, so `autoPlanned` is restructured into one `auto` variable with
+the catch-up add-on at the bottom; **no existing number moves**: `autoPlanned`, `buildNextMonth` and `fundFlags`
+are identical before/after on every fund-month of the export copy (514, incl. the 24 fixed funds — Car Insurance
+$552.74, iDrive $7.60) and both personas (794 + 2526). Three new optional setup keys, all absent from existing
+files: `setup.catchUp = { base, perMonth, until }`, `setup.done` (bool), `setup.nextChargeMonth` ('YYYY-MM').
+`data.version` stays 7. **Invariant 14 now reads:** a goal's `targetMonth` rolls +12 months when the month passes
+*unless the goal is done*; a fixed fund's `nextChargeMonth` rolls +`everyMonths` once the charge month passes.
+Suites: csv 606 · migrate 17 · garden 177 · compute **1205 → 1251** (+46), 0 failed.
+
+- **W0 — touch-ups.** `incomeTrueUp`: a late-marked fund whose money then came in *over* is no longer "resolved"
+  (`resolved = |diff| ≤ 1 || (lateAtClose && diff ≤ 1)`) — the row stays open with `Use actual` / `Not late
+  after all`, the gate reads `Resolve 1 income difference first`, and after `actual` planned = $4,500 with Left
+  to allocate +$500 (it was silently orphaned before). `truedUp` is now cleared wherever planned is typed (grid
+  and panel) and on the panel's Reconnect, so a row never shows `set by hand` *and* `trued up to $X at close`,
+  and Reconnect really reconnects (`applyChecksRules` skips `truedUp` funds).
+- **W5 — "Make it back over N months" (Option C, Default 4).** On a Basic, Pacing or Build-up fund with
+  `carriedIn < 0`, Review's carried-in row and the fund panel's Actions offer `Make it back…` → `Add [$58.33] a
+  month for [3 ▾] months (1 · 2 · 3 · 6 · 12). Left to allocate drops by $58.33 while it runs.` → `Start` writes
+  `setup.catchUp = { base, perMonth: r2(−carriedIn / N), until: monthAdd(month, N − 1) }` on this month's setup
+  (Inv 8 — `buildNextMonth` copies it); `base` is today's planned for Basic/Pacing (a typed override becomes the
+  base; a paused fund's base is the plan it paused), `null` for Build-up (its own auto). `autoPlanned` adds
+  `perMonth` on top of the auto (Build-up) or `base` (Basic/Pacing) through `until` — it does not read the carry,
+  so S7's resync never re-derives planned on a plan (tested). `buildNextMonth` drops the plan on the month after
+  `until`, or early on the first month that opens with the carry ≥ 0, restoring `base` (Basic/Pacing) or the
+  fund's own auto. Chips: `making back` (`chip-muted`, beside `carrying`, which stays until the carry is ≥ 0) with
+  `Making back $X — $base + $perMonth a month through Mon YYYY.`; the type mark of a Pacing/Build-up fund says
+  the same; the Review row reads `Carrying ($X) · making back $Y/mo`; the panel shows `making back $Y/mo · N
+  months left` + `Stop the plan` (deletes the plan, planned back to base). A re-typed planned shows `overridden`
+  as usual (Inv 13). Starting a plan can push Left to allocate below −$0.02 — the hero goes red and D6's gate
+  reads `Fix $X over-allocated first`; that is the decided behaviour and the chooser's last line says so.
+  `readSetupForm` carries `catchUp` (and `done`) over from the fund's current setup, so editing any other setup
+  field never drops a plan.
+- **W6 — goal done (#15, Default 5).** A target-mode goal can be marked done: the recap's matured-goal line gets
+  `Done — stop asking` · `Again next year` (Again only hides the pair — today's roll), and the panel's Actions
+  `✓ Goal done` / `Set a new target` (toggles `setup.done`). Done writes the flag on this month's setup only;
+  this month's planned is left where it was (changing it at close would move money between months). From then
+  on `autoPlanned` is 0 (and a done goal never gets a catch-up add-on), `buildNextMonth` does not roll
+  `targetMonth`, and `fundFlags` offsets the leftover once the month is over (S12 rule (a) still gates on
+  `monthDone`). `goalAskWords` leads with `Goal done — $T by Mon YYYY. $X still here; transfer it where it's
+  needed, then remove the fund.` (`Nothing left — the fund can be removed.` at $0); a `goal done` chip
+  (`chip-muted`) replaces the ask and the `overridden` chip. The wizard's Christmas/Vacation goals are never
+  auto-done. (Editing another setup field on a done goal re-derives this month's planned to $0 — the existing
+  "setup change wins" path.)
+- **W7 — next charge month + already set aside (#10, Default 6) + lead 3.** `setupFormHtml`'s fixed row gains
+  `· next charge [month]` when `everyMonths > 1` (shown/hidden live as the cadence changes); `readSetupForm`
+  stores `nextChargeMonth` (null at a monthly cadence or when blank). With it, `autoPlanned` plans like a goal:
+  `max(0, total − carryOver) ÷ months to the charge, inclusive` (the `savingsMonthly` convention); without it,
+  `total ÷ everyMonths` exactly as before. `buildNextMonth` rolls it +`everyMonths` once the charge month passes.
+  In the panel an existing fixed fund's picker is **blank** (not defaulted to next month) so touching another
+  field can't silently change its formula; the add dialog defaults it to next month. The add dialog's expense
+  side gains `Already set aside: $[ ]` for Fixed and Goal behaviours — the value becomes the new fund's opening
+  `carryOver` and feeds the previewed monthly (`wireSetupForm` now reads `opts.carryOver` on every refresh).
+  Type mark and result line share one sentence: `Fixed recurring — $220.00 every 12 months, next due Nov 2026,
+  $100.00 already set aside, so $40.00 a month.` **Lead 3:** a fixed fund whose largest charge this month is
+  ≥ `totalAmount − 0.02`, red, with no bill-went-up, titles its `over $X` chip `This cycle's charge posted; the
+  fund was $X short of it — rounding over the cycle, or a cycle that started late.` (`cycleChargePosted` beside
+  `billWentUp`; `fundStatusChip` takes it as a third argument).
+- **Tests** (`test-compute.mjs`, new section `1.3.0 sitting B`): Basic −175/400/N=3 → 458.33 ×3 then 400 through
+  `buildNextMonth`, early end at +10, typed value on the last month doesn't outlive the plan, Pacing; Build-up
+  −120/50/N=2 → 110, 110, 50, and the add-on on a capped Build-up; S7 resync on a plan carries no `plannedTo`;
+  done goal → 0, no roll, offset false mid-month / true at month end, not-done roll unchanged; `nextChargeMonth`
+  73.33 / 12.08 / 40 / in-month remainder / fully set aside → 0 / no monthId, the two Dustin-shaped fixtures
+  unchanged (552.74, 49.83), rolls +12 and +3; W0 late-over open → actual → +500, late-short and late-landed
+  unchanged.
+
 ### 2026-11-01 — Income true-up at close, D6 start gate, import nudge (sitting A: W1–W4)
 
 Sitting A of the 1.3.0 work order (`_cowork/work-order-1.3.0.md`, items W1–W4; proposal §3.0 I1, D5, D6;

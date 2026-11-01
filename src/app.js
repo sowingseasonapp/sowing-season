@@ -3,7 +3,7 @@ import {
   monthLabel, normFund, r2, migrateV2, migrateV3, migrateV4,
   autoPlanned, isOverridden, fundFlags, savingsMonthly, migrateV5,
   migrateV6, migrateV7, resyncCarryOvers, aumTotals, upsertSnapshot, aumLastUpdated,
-  MONTH_NAMES, nextMonthId, monthDiff,
+  MONTH_NAMES, nextMonthId, monthDiff, monthAdd, fundSplit,
   incomeTrueUp, setIncomeActual, incomePlanFor,
 } from './compute.js';
 import { gardenState, incomeCheckIns, stonesLaidIn, sownStreak, monthContext, recentPerCheckAvg, fundDeposits } from './garden.js';
@@ -615,7 +615,10 @@ function defaultTargetMonth(monthId) {
 }
 
 // Read the form back into a setup object (expense) — returns {setup} or {error}.
-function readSetupForm(root, monthId) {
+// `prev` is the fund's current setup (the panel; absent in the add dialog): the
+// form has no field for a catch-up plan (W5) or a done goal (W6), so an edit to
+// any other field must not drop them.
+function readSetupForm(root, monthId, prev = null) {
   const b = root.querySelector('input[name="fsBehavior"]:checked').value;
   const s = blankSetup();
   s.excludeInsights = $('#fsQuiet', root).checked;
@@ -626,6 +629,12 @@ function readSetupForm(root, monthId) {
     if (!n || n < 1 || n > 60) return { error: 'Months must be between 1 and 60.' };
     if (isNaN(tot) || tot <= 0) return { error: 'Enter the transaction total.' };
     s.type = 'fixed'; s.everyMonths = n; s.totalAmount = tot;
+    // 1.3.0 W7 (#10): when the charge is due. Only past a monthly cadence, and
+    // only when filled in — blank keeps today's total ÷ everyMonths.
+    const nx = $('#fsNext', root);
+    const when = n > 1 && nx ? nx.value : '';
+    if (when && when < monthId) return { error: 'Next charge must be this month or later.' };
+    s.nextChargeMonth = when || null;
   } else if (b === 'goal') {
     const goal = Math.abs(parseMoney($('#fsGoal', root).value));
     const when = $('#fsWhen', root).value;
@@ -639,7 +648,38 @@ function readSetupForm(root, monthId) {
     s.type = 'savings'; s.savingsMode = 'build'; s.monthlyAmount = amt;
     s.buildGoal = isNaN(stop) ? 0 : stop;
   }
+  if (prev) {
+    if (prev.catchUp && catchUpEligibleSetup(s)) s.catchUp = prev.catchUp;
+    if (prev.done && s.type === 'savings' && s.savingsMode === 'target') s.done = true;
+  }
   return { setup: s };
+}
+
+// W5: a catch-up plan is offered on Basic, Pacing and Build-up funds only —
+// goals already catch up (savingsMonthly) and a fixed fund has "bill went up".
+function catchUpEligibleSetup(s) {
+  const t = (s && s.type) || 'basic';
+  return t === 'basic' || t === 'pacing' || (t === 'savings' && s.savingsMode === 'build');
+}
+// The fund's active plan this month, or null.
+function activeCatchUp(f, monthId) {
+  const cu = f && f.setup && f.setup.catchUp;
+  return cu && monthId <= cu.until ? cu : null;
+}
+// What the plan is making back and from where — one sentence, shared by the
+// chip, the type mark and the panel's result line.
+function catchUpWords(f, cu, carriedIn, monthId) {
+  const base = cu.base != null ? cu.base : r2((autoPlanned(f, monthId) ?? cu.perMonth) - cu.perMonth);
+  return `Making back ${money(carriedIn < 0 ? -carriedIn : 0)} — ${money(base)} + ${money(cu.perMonth)} a month through ${ymLabel(cu.until)}.`;
+}
+// W7: a fixed fund's plan in words — the type mark and the setup form's result
+// line read the same sentence. "already set aside" is said only when the
+// next charge is known, since that's the only time the carry changes the number.
+function fixedWords(s, carryOver, monthId) {
+  const auto = autoPlanned({ carryOver, setup: s }, monthId);
+  const due = s.nextChargeMonth ? `, next due ${ymLabel(s.nextChargeMonth)}` : '';
+  const aside = s.nextChargeMonth && carryOver > 0.004 ? `, ${money(carryOver)} already set aside` : '';
+  return `${money(s.totalAmount)} every ${s.everyMonths} month${s.everyMonths === 1 ? '' : 's'}${due}${aside}, so ${money(auto)} a month.`;
 }
 
 function setupFormHtml(setup, monthId) {
@@ -659,7 +699,10 @@ function setupFormHtml(setup, monthId) {
         <input id="fsN" class="search" style="width:58px;flex:none" value="${s.everyMonths || 1}" inputmode="numeric">
         <span class="muted">month(s), costing</span>
         <input id="fsT" class="search" style="width:110px;flex:none" value="${s.totalAmount ? money(s.totalAmount) : ''}" placeholder="$0.00" inputmode="decimal">
-        <span class="muted">each time</span></div>
+        <span class="muted">each time</span>
+        <span data-for-next style="display:${(s.everyMonths || 1) > 1 ? 'inline-flex' : 'none'};align-items:center;gap:6px"><span class="muted">· next charge</span>
+          <input id="fsNext" type="month" class="search" style="flex:none" value="${setup ? (s.nextChargeMonth || '') : monthAdd(monthId, 1)}" min="${monthId}"
+            title="The month the charge posts. With it, the app plans (total − what's set aside) ÷ months to the charge, like a goal. Blank: total ÷ months, as before."></span></div>
       <div data-for="goal" class="modal-row"><label style="width:auto">Save up</label>
         <input id="fsGoal" class="search" style="width:110px;flex:none" value="${s.targetAmount ? money(s.targetAmount) : ''}" placeholder="$0.00" inputmode="decimal">
         <span class="muted">by</span>
@@ -681,20 +724,30 @@ function setupFormHtml(setup, monthId) {
 // Show/hide the fields belonging to the selected behaviour and keep the result line live.
 // `fund` is the panel's live fund (absent in the add dialog): with it, the
 // result line can lead with the user's own planned when it overrides the setup.
-function wireSetupForm(root, { monthId, carryOver = 0, onChange = null, fund = null }) {
+// `opts.carryOver` is read on every refresh (not captured) so the add dialog's
+// "Already set aside" box (W7) can move the previewed monthly.
+function wireSetupForm(root, opts) {
+  const { monthId, onChange = null, fund = null } = opts;
   // `commit` separates "show me what this would do" (every keystroke) from
   // "save it" (blur / enter / picking a behaviour), so typing 2400 doesn't
   // briefly save 2, then 24, then 240.
   const refresh = (commit = false) => {
+    const carryOver = opts.carryOver || 0;
     const b = root.querySelector('input[name="fsBehavior"]:checked').value;
     $$('.behavior', root).forEach((el) => el.classList.toggle('sel', el.querySelector('input').checked));
     $$('#fsFields [data-for]', root).forEach((el) => { el.style.display = el.dataset.for === b ? '' : 'none'; });
-    const res = readSetupForm(root, monthId);
+    // W7: the next-charge picker only means something past a monthly cadence.
+    const nxt = $('[data-for-next]', root);
+    if (nxt) nxt.style.display = (parseInt($('#fsN', root).value, 10) || 1) > 1 ? 'inline-flex' : 'none';
+    const res = readSetupForm(root, monthId, fund ? fund.setup : null);
     const calc = $('#fsCalc', root);
     if (res.error) calc.innerHTML = `<span class="muted">${esc(res.error)}</span>`;
     else {
-      const probe = { carryOver, setup: res.setup };
+      // `leftover` (the panel passes the computed fund's) lets a done goal's
+      // words say what's actually here; the add dialog has none.
+      const probe = { carryOver, leftover: opts.leftover, setup: res.setup };
       const auto = autoPlanned(probe, monthId);
+      const cu = activeCatchUp(probe, monthId);
       // W9 (A-20): when the fund's planned overrides the setup, lead with the
       // user's number, not the setup's. Only while the form still shows the
       // saved setup (same ask) — mid-edit the ask is the thing moving. A paused
@@ -703,6 +756,15 @@ function wireSetupForm(root, { monthId, carryOver = 0, onChange = null, fund = n
         && autoPlanned(fund, monthId) === auto && isOverridden(fund, monthId);
       if (auto == null) {
         calc.innerHTML = `Planned this month: <b>you set it</b> <span class="muted">— this type doesn't calculate an amount.</span>`;
+      } else if (res.setup.done) {
+        // W6: a done goal — this month's planned stays what it is; the ask is $0 from here on.
+        calc.innerHTML = `Planned this month: <b>${money(fund ? fund.planned : auto)}</b> <span class="muted">— ${esc(goalAskWords(probe, monthId))}</span>`;
+      } else if (cu) {
+        // W5: on a catch-up plan the number is base + the add-on.
+        calc.innerHTML = `Planned this month: <b>${money(auto)}</b> <span class="muted">— ${esc(catchUpWords(probe, cu, carryOver, monthId))}</span>`;
+      } else if (b === 'fixed') {
+        // W7: the fixed sentence (cadence, next due, already set aside).
+        calc.innerHTML = `Planned this month: <b>${money(auto)}</b> <span class="muted">— ${esc(fixedWords(res.setup, carryOver, monthId))}</span>`;
       } else if (overridden) {
         const proj = b === 'goal' ? goalProjection(fund, monthId) : '';
         calc.innerHTML = `Planned this month: <b>${money(fund.planned)}</b> <span class="muted">— you set it; the ${b === 'goal' ? 'goal' : 'setup'} asks ${money(auto)}.${proj ? ` ${esc(proj)}` : ''}</span>`;
@@ -723,6 +785,99 @@ function wireSetupForm(root, { monthId, carryOver = 0, onChange = null, fund = n
   });
   refresh(false);
   return refresh;
+}
+
+/* ---------------- Catch-up plans (1.3.0 W5, Option C) ----------------
+ * "Make it back over N months": a fixed add-on to the fund's plan, written on
+ * THIS month's setup (Inv 8 — buildNextMonth copies setup forward) and read by
+ * autoPlanned. perMonth = deficit ÷ N, fixed at the click, so the sentence
+ * stays true. Ends on `until`, or early once the carry opens at ≥ 0.
+ */
+const CATCH_UP_N = [1, 2, 3, 6, 12];
+function catchUpChooserHtml(carriedIn, prefix, n0 = 3) {
+  const per = r2(-carriedIn / n0);
+  return `<div class="modal-row" style="flex-wrap:wrap;gap:6px;align-items:center">
+      <span>Add <b id="${prefix}Per">${money(per)}</b> a month for</span>
+      <select class="inline" id="${prefix}N">${CATCH_UP_N.map((n) => `<option value="${n}" ${n === n0 ? 'selected' : ''}>${n}</option>`).join('')}</select>
+      <span>month<span id="${prefix}S">${n0 === 1 ? '' : 's'}</span>.</span>
+      <button class="btn btn-sm btn-accent" id="${prefix}Go">Start</button>
+    </div>
+    <p class="muted" style="margin:4px 0 0;font-size:.85rem">Left to allocate drops by <span id="${prefix}Drop">${money(per)}</span> while it runs.</p>`;
+}
+function wireCatchUpChooser(root, prefix, onStart) {
+  const sel = $(`#${prefix}N`, root);
+  if (!sel) return;
+  const carriedIn = Number(sel.dataset.carried || 0);
+  const upd = () => {
+    const n = Number(sel.value) || 1;
+    const per = money(r2(-carriedIn / n));
+    $(`#${prefix}Per`, root).textContent = per;
+    $(`#${prefix}Drop`, root).textContent = per;
+    $(`#${prefix}S`, root).textContent = n === 1 ? '' : 's';
+  };
+  sel.onchange = upd;
+  $(`#${prefix}Go`, root).onclick = () => onStart(Number(sel.value) || 1);
+}
+function startCatchUp(month, f, carriedIn, n) {
+  if (!(carriedIn < 0) || !catchUpEligibleSetup(f.setup)) return;
+  f.setup = f.setup || { type: 'basic' };
+  const isBuild = f.setup.type === 'savings' && f.setup.savingsMode === 'build';
+  // Basic/Pacing: today's planned is the base (a typed override becomes the
+  // base). A paused fund's base is the plan it paused. Build-up: its own auto.
+  const base = isBuild ? null : (f.pausedPlanned != null ? f.pausedPlanned : f.planned);
+  delete f.pausedPlanned;
+  const perMonth = r2(-carriedIn / n);
+  f.setup.catchUp = { base, perMonth, until: monthAdd(month.id, n - 1) };
+  f.rule = null;
+  f.planned = autoPlanned(f, month.id);
+  recalcRules(month); markDirty(`the catch-up plan on "${f.fund}"`); render();
+  toast(`"${f.fund}" is making back ${money(-carriedIn)} — ${money(perMonth)} a month through ${ymLabel(f.setup.catchUp.until)}.`);
+}
+function stopCatchUp(month, f) {
+  const cu = f.setup && f.setup.catchUp;
+  if (!cu) return;
+  delete f.setup.catchUp;
+  if (cu.base != null) f.planned = cu.base;
+  else { const auto = autoPlanned(f, month.id); if (auto != null) f.planned = auto; }
+  recalcRules(month); markDirty(`stopping the catch-up plan on "${f.fund}"`); render();
+  toast(`"${f.fund}" is back to ${money(f.planned)} planned.`);
+}
+// Review's carried-in row opens the same chooser in a small modal.
+function showCatchUpModal(month, fundName) {
+  const k = normFund(fundName);
+  let f = null, live = null;
+  const comp = computeMonth(month);
+  month.categories.forEach((c, ci) => c.funds.forEach((x, fi) => { if (normFund(x.fund) === k) { f = x; live = comp.categories[ci].funds[fi]; } }));
+  if (!f || !live) return;
+  const carriedIn = fundSplit(live).carriedIn;
+  if (!(carriedIn < 0) || activeCatchUp(f, month.id) || !catchUpEligibleSetup(f.setup)) return;
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal" style="width:420px">
+      <h2 style="font-size:1.05rem">Make it back — ${esc(f.fund)}</h2>
+      <p class="muted" style="margin:6px 0 10px">${money(-carriedIn)} is carried in from earlier months. Add a fixed amount to the plan until it's paid back.</p>
+      ${catchUpChooserHtml(carriedIn, 'cuM').replace('id="cuMN"', `id="cuMN" data-carried="${carriedIn}"`)}
+      <div class="modal-actions"><button class="btn" id="cuMCancel">Cancel</button></div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  overlay.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+  $('#cuMCancel', overlay).onclick = close;
+  wireCatchUpChooser(overlay, 'cuM', (n) => { close(); startCatchUp(month, f, carriedIn, n); });
+}
+
+/* ---------------- Goal done (1.3.0 W6, #15) ----------------
+ * A flag on the goal's setup for this month (copied forward): the ask becomes
+ * $0, the target month never rolls +12, and what's left reads "free to move"
+ * at month end. This month's planned is left alone (Inv 13).
+ */
+function setGoalDone(month, f, done) {
+  if (!f.setup || f.setup.type !== 'savings' || f.setup.savingsMode === 'build') return;
+  if (done) f.setup.done = true; else delete f.setup.done;
+  recalcRules(month); markDirty(done ? `marking "${f.fund}" done` : `reopening the goal "${f.fund}"`); render();
+  toast(done ? `"${f.fund}" is done — it asks $0 from ${monthLabel(nextMonthId(month.id))} on.` : `"${f.fund}" asks again — set its new target month.`);
 }
 
 /* ---------------- Fund side panel ----------------
@@ -803,6 +958,12 @@ function renderFundPanel() {
   // update the total only, and say the shortfall carries.
   const bill = isIncome ? null : billWentUp(f, live, month);
   const billTopUp = bill ? r2(-live.leftover) : 0;
+  // 1.3.0 sitting B: W5 catch-up (what's carried in, the plan if one is running)
+  // and W6 goal done, for the Actions section below.
+  const cuCarried = isIncome ? 0 : fundSplit(live).carriedIn;
+  const cuActive = isIncome ? null : activeCatchUp(f, month.id);
+  const cuLeft = cuActive ? monthDiff(month.id, cuActive.until) + 1 : 0;
+  const isGoal = !isIncome && f.setup && f.setup.type === 'savings' && f.setup.savingsMode !== 'build' && !!f.setup.targetMonth;
   const billLmap = bill ? leftoverMap(month) : null;
   let billFrom = '';
   if (bill) {
@@ -899,10 +1060,18 @@ function renderFundPanel() {
             ${!isIncome && !f.retireAtClose ? (f.pausedPlanned != null
               ? `<button class="btn btn-sm" id="pnlUnpause" title="Put this month's plan back">▶ Unpause — put ${money(f.pausedPlanned)} back</button>`
               : `<button class="btn btn-sm" id="pnlPause" title="Planned becomes $0 for this month only — the plan comes back when you start ${esc(monthLabel(nextMonthId(month.id)))}">⏸ Pause this month</button>`) : ''}
+            ${!isIncome && !f.retireAtClose && isGoal ? (f.setup.done
+              ? `<button class="btn btn-sm" id="pnlGoalAgain" title="Take the goal out of 'done' — it asks again from next month; set a new target month above">Set a new target</button>`
+              : `<button class="btn btn-sm" id="pnlGoalDone" title="The goal is finished: it asks $0 from next month and never rolls to next year. What's left stays here until you move it and remove the fund.">✓ Goal done</button>`) : ''}
+            ${!isIncome && !f.retireAtClose && catchUpEligibleSetup(f.setup) && !cuActive && cuCarried < 0
+              ? `<button class="btn btn-sm" id="pnlCatchUp" title="Add a fixed amount to this fund's plan for a few months until the ${money(-cuCarried)} carried in is paid back">Make it back…</button>` : ''}
             ${f.retireAtClose
               ? `<button class="btn btn-sm" id="pnlKeep" title="Cancel the removal — the fund stays in ${esc(monthLabel(nextMonthId(month.id)))} too">Keep it after all</button>`
               : `<button class="btn btn-sm btn-danger" id="pnlDel">✕ Remove fund</button>`}
           </div>
+          ${cuActive ? `<p class="muted" style="margin:8px 0 0">making back ${money(cuActive.perMonth)}/mo · ${cuLeft} month${cuLeft === 1 ? '' : 's'} left
+            <button class="btn btn-sm" id="pnlCatchStop" style="margin-left:6px" title="Drop the plan — this month's planned goes back to ${cuActive.base != null ? money(cuActive.base) : 'the setup\'s own amount'}">Stop the plan</button></p>` : ''}
+          <div id="pnlCatchBox" style="display:none;margin-top:10px">${!isIncome && !cuActive && cuCarried < 0 ? catchUpChooserHtml(cuCarried, 'pnlCu').replace('id="pnlCuN"', `id="pnlCuN" data-carried="${cuCarried}"`) : ''}</div>
           ${f.retireAtClose ? `<p class="muted" style="margin:8px 0 0">Removed — it has transactions this month, so it stays until you start ${esc(monthLabel(nextMonthId(month.id)))}. Then it's gone, and past months keep it.</p>` : ''}
           ${!isIncome ? `<div class="modal-row" style="margin-top:10px"><label>Category</label>
             <select class="inline" id="pnlCat">
@@ -938,6 +1107,7 @@ function renderFundPanel() {
         f.rule = null;
         if (wasChecks) notes.push(`"${f.fund}" planned is now set by hand — Reconnect below puts it back on checks × amount.`);
       }
+      if (key === 'planned') delete f.truedUp; // 1.3.0 W0: a typed value is no longer the close's true-up
       // Typing a planned amount into a paused fund unpauses it (W6): the typed value wins.
       if (key === 'planned' && f.pausedPlanned != null && Math.abs(v) > 0.004) delete f.pausedPlanned;
       const titheBefore = titheSum(month);
@@ -986,6 +1156,7 @@ function renderFundPanel() {
           <button class="btn btn-sm" id="pnlReconnect">Reconnect</button>`;
         $('#pnlReconnect', wrap).onclick = () => {
           f.rule = { type: 'checks' };
+          delete f.truedUp; // 1.3.0 W0: applyChecksRules skips a trued-up fund — Reconnect must really reconnect
           if (!month.checks[f.fund]) month.checks[f.fund] = { count: 0, amount: 0, titheAmount: 0 };
           recalcRules(month); markDirty(`reconnecting "${f.fund}" to paychecks`); render();
           toast(`"${f.fund}" planned follows checks × amount again.`);
@@ -1073,10 +1244,11 @@ function renderFundPanel() {
     wireSetupForm(wrap, {
       monthId: month.id,
       carryOver: f.carryOver,
+      leftover: live.leftover, // W6: a done goal's words read what's actually here
       fund: f, // W9: the result line leads with the user's planned when it overrides the setup
       onChange: (res) => {
         if (res.error) return; // incomplete input — leave the fund as it was
-        f.setup = res.setup;
+        f.setup = res.setup; // readSetupForm carried catchUp / done over (sitting B)
         const auto = autoPlanned(f, month.id);
         if (auto != null) { f.rule = null; f.planned = auto; }
         recalcRules(month); markDirty(`the setup change on "${f.fund}"`);
@@ -1095,6 +1267,21 @@ function renderFundPanel() {
   }
 
   $('#pnlXfer', wrap).onclick = () => { closeFundPanel(); showTransferModal(f.fund); };
+  // W5: Make it back… reveals the inline chooser; Start writes the plan.
+  const cuBtn = $('#pnlCatchUp', wrap);
+  if (cuBtn) cuBtn.onclick = () => {
+    const box = $('#pnlCatchBox', wrap);
+    box.style.display = box.style.display === 'none' ? '' : 'none';
+    if (box.style.display === '') box.scrollIntoView({ block: 'nearest' });
+  };
+  if (!isIncome && !cuActive && cuCarried < 0) wireCatchUpChooser(wrap, 'pnlCu', (n) => startCatchUp(month, f, cuCarried, n));
+  const cuStop = $('#pnlCatchStop', wrap);
+  if (cuStop) cuStop.onclick = () => stopCatchUp(month, f);
+  // W6: goal done / set a new target — a flag on this month's setup.
+  const gDone = $('#pnlGoalDone', wrap);
+  if (gDone) gDone.onclick = () => setGoalDone(month, f, true);
+  const gAgain = $('#pnlGoalAgain', wrap);
+  if (gAgain) gAgain.onclick = () => { setGoalDone(month, f, false); const w = $('#fsWhen'); if (w) w.focus(); };
   $('#pnlRename', wrap).onclick = () => {
     promptName('Rename fund', 'New name', (nm) => {
       if (nm === f.fund) return null; // nothing to do
@@ -1424,6 +1611,9 @@ function showAddFund(preset = {}) {
             ${month.categories.map((c, i) => `<option value="${i}" ${i === (preset.ci ?? 0) ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
           </select></div>
         ${setupFormHtml(null, month.id)}
+        <div class="modal-row" id="afOpeningRow" style="display:none"><label title="Money already put by for this — it becomes the fund's opening balance, and the monthly amount is worked out from what's left to save.">Already set aside</label>
+          <input id="afOpening" class="search" style="width:110px;flex:none" placeholder="$0.00" inputmode="decimal"
+            title="Money already put by for this — it becomes the fund's opening balance, and the monthly amount is worked out from what's left to save."></div>
       </div>
       <div class="modal-err" id="afErr"></div>
       <div class="modal-actions">
@@ -1446,7 +1636,20 @@ function showAddFund(preset = {}) {
   };
   $$('input[name="afSide"], input[name="afIncType"]', overlay).forEach((r) => r.onchange = refresh);
   // The expense side uses the shared setup form (no commits — read on "Add fund").
-  wireSetupForm(overlay, { monthId: month.id, carryOver: 0 });
+  // W7 (A-18): "Already set aside" is asked up front for Fixed and Goal
+  // behaviours; it feeds the previewed monthly and becomes the opening carry.
+  const setupOpts = { monthId: month.id, carryOver: 0 };
+  const setupRefresh = wireSetupForm(overlay, setupOpts);
+  const openingShown = () => ['fixed', 'goal'].includes(overlay.querySelector('input[name="fsBehavior"]:checked').value);
+  const openingValue = () => { const v = Math.abs(parseMoney($('#afOpening', overlay).value)); return openingShown() && !isNaN(v) ? v : 0; };
+  const openingRefresh = () => {
+    $('#afOpeningRow', overlay).style.display = openingShown() ? '' : 'none';
+    setupOpts.carryOver = openingValue();
+    setupRefresh(false);
+  };
+  $$('input[name="fsBehavior"]', overlay).forEach((r) => r.addEventListener('change', openingRefresh));
+  $('#afOpening', overlay).oninput = openingRefresh;
+  openingRefresh();
   refresh();
   $('#afName', overlay).focus();
 
@@ -1469,7 +1672,7 @@ function showAddFund(preset = {}) {
       if (res.error) { err.textContent = res.error; return; }
       const ci = Number($('#afCat', overlay).value);
       const fund = {
-        fund: nm, carryOver: 0, planned: 0, rule: null, yearlyCharge: null, setup: res.setup,
+        fund: nm, carryOver: openingValue(), planned: 0, rule: null, yearlyCharge: null, setup: res.setup,
       };
       const auto = autoPlanned(fund, month.id);
       if (auto != null) fund.planned = auto;
@@ -1510,18 +1713,24 @@ function fundTypeMark(f, monthId) {
   let glyph = '', tip = '';
   if (type === 'fixed') {
     glyph = '↻';
-    tip = `Fixed recurring — ${money(s.totalAmount)} every ${s.everyMonths} month(s), so ${money(autoPlanned(f, monthId))} a month.`;
+    // W7: cadence, next due, already set aside — the same sentence as the setup form.
+    tip = `Fixed recurring — ${fixedWords(s, f.carryOver || 0, monthId)}`;
   } else if (type === 'savings' && s.savingsMode === 'build') {
     glyph = '▲';
     tip = `Build up — ${money(s.monthlyAmount)} set aside monthly${s.buildGoal > 0 ? `, stopping at ${money(s.buildGoal)} (resumes if it drops below)` : ', no ceiling'}.`;
   } else if (type === 'savings') {
     glyph = '◎';
     // #13 (W8): the ask in words — what's for the goal, what's making back a deficit.
-    tip = `Savings goal — ${money(s.targetAmount)} by ${ymLabel(s.targetMonth)}. ${goalAskWords(f, monthId)}`;
+    // W6: a done goal's words lead with "Goal done".
+    tip = s.done ? goalAskWords(f, monthId) : `Savings goal — ${money(s.targetAmount)} by ${ymLabel(s.targetMonth)}. ${goalAskWords(f, monthId)}`;
   } else if (type === 'pacing') {
     glyph = '▦';
     tip = "Pacing — many purchases a month; the app watches whether it's going too fast.";
   }
+  // W5: a fund on a catch-up plan says so in its mark (a Basic fund has no
+  // mark — its `making back` chip carries the same sentence).
+  const cu = activeCatchUp(f, monthId);
+  if (cu && glyph) tip += ` ${catchUpWords(f, cu, f.carryOver || 0, monthId)}`;
   let html = glyph ? `<span class="type-mark" title="${esc(tip)}">${glyph}</span>` : '';
   if (s.excludeInsights) {
     html += `<span class="type-mark quiet" title="Excluded from Review — never flagged for attention or as available to move.">⊘</span>`;
@@ -1535,13 +1744,18 @@ function fundTypeMark(f, monthId) {
 // they do, any that apply, in order: carrying · paused · overridden · full.
 // Every number on a chip is an engine value (fundFlags / the fund itself) —
 // no arithmetic in the template.
-function fundStatusChip(flag, bill = null) {
+function fundStatusChip(flag, bill = null, cycle = false) {
   if (!flag) return '';
   if (flag.attention === 'exceeded') {
     // S14 (W7): a fixed fund whose charge came in above its total isn't
     // overspending — the bill went up. Say so instead of blaming spending.
+    // 1.3.0 sitting B (lead 3): the charge posted at its usual size and the
+    // fund was a little short of it — rounding over the cycle, not overspending.
+    const short = flag.leftover < 0 ? -flag.leftover : 0; // the cycle's shortfall, not an "over by"
     const title = bill
       ? `This cycle's charge was ${money(bill.charge)} against ${money(bill.total)} set up — the bill went up. Open the fund to update it.`
+      : cycle
+      ? `This cycle's charge posted; the fund was ${money(short)} short of it — rounding over the cycle, or a cycle that started late.`
       : flag.carriedIn < 0
       ? `Spent ${money(flag.spent)} against ${money(flag.planned)} planned this month. Another ${money(-flag.carriedIn)} is carried in from earlier months — see the chip beside it.`
       : "Spent more than this month's carry-over + planned.";
@@ -1569,6 +1783,15 @@ function fundStatusChip(flag, bill = null) {
 // cent in general: the sentence is an explanation, the cell is the number.
 function goalAskWords(f, monthId) {
   const s = f.setup || {}; if (s.type !== 'savings' || s.savingsMode === 'build' || !s.targetMonth || !(s.targetAmount > 0)) return '';
+  // W6 (#15): a done goal — nothing more to plan; what's left is to be moved out.
+  if (s.done) {
+    // What's actually here: the computed fund's leftover when the caller has
+    // it (the row), else the carry (the panel's probe, where planned is $0 anyway).
+    const carry = f.leftover != null ? f.leftover : (f.carryOver || 0);
+    return `Goal done — ${money(s.targetAmount)} by ${ymLabel(s.targetMonth)}. ${carry > 0.004
+      ? `${money(carry)} still here; transfer it where it's needed, then remove the fund.`
+      : 'Nothing left — the fund can be removed.'}`;
+  }
   const months = Math.max(1, monthDiff(monthId, s.targetMonth) + 1);
   const ask = autoPlanned(f, monthId);
   if (f.carryOver >= s.targetAmount - 0.004) return `${money(s.targetAmount)} is already set aside — nothing more to plan.`;
@@ -1624,6 +1847,20 @@ function billWentUp(f, live, month) {
   const total = s.totalAmount || 0;
   return charge > total + 0.004 ? { charge: r2(charge), total: r2(total) } : null;
 }
+// Lead 3 (1.3.0 sitting B): the cycle's charge posted at (about) its set-up
+// size and the fund is a little red — twelve months of ÷ 12 rounding, or a
+// cycle that began mid-way. Only when billWentUp has nothing to say.
+function cycleChargePosted(f, live, month) {
+  const s = f.setup || {};
+  if (s.type !== 'fixed' || !live || !(live.leftover < -0.004) || !(s.totalAmount > 0)) return false;
+  const k = normFund(f.fund);
+  let charge = 0;
+  for (const t of month.transactions) {
+    if (t.isTransfer || !(t.amount < 0) || normFund(t.fund) !== k) continue;
+    if (-t.amount > charge) charge = -t.amount;
+  }
+  return charge >= s.totalAmount - 0.02;
+}
 
 function fundModifierChips(f, flag, monthId) {
   const s = f.setup || {};
@@ -1636,10 +1873,22 @@ function fundModifierChips(f, flag, monthId) {
       : `Carried in from earlier months, on top of this month's ${money(-flag.overThisMonth)} over.`;
     html += `<span class="rule-chip chip-muted" title="${esc(title)}">carrying ${money(flag.carriedIn)}</span>`;
   }
+  // Making back (1.3.0 W5): a catch-up plan is running — beside `carrying`,
+  // which stays until the carry is back to ≥ 0.
+  const cu = activeCatchUp(f, monthId);
+  if (cu) {
+    html += `<span class="rule-chip chip-muted" title="${esc(catchUpWords(f, cu, flag ? flag.carriedIn : (f.carryOver || 0), monthId))}">making back</span>`;
+  }
+  // Goal done (1.3.0 W6): in place of the ask — and of `overridden`, since this
+  // month's planned is deliberately left where it was.
+  const done = s.type === 'savings' && s.savingsMode !== 'build' && s.done;
+  if (done) {
+    html += `<span class="rule-chip chip-muted" title="${esc(goalAskWords(f, monthId))}">goal done</span>`;
+  }
   // Paused (W6) is an override too, but say the useful word.
   if (f.pausedPlanned != null) {
     html += `<span class="rule-chip chip-warn" title="Planned is $0 this month only — ${money(f.pausedPlanned)} comes back when you start the next month. Open the fund to unpause.">paused</span>`;
-  } else if (isOverridden(f, monthId)) {
+  } else if (!done && isOverridden(f, monthId)) {
     const proj = goalProjection(f, monthId);
     html += `<span class="rule-chip chip-warn" title="This month's planned amount overrides the fund's setup. New months reset to the setup.${proj ? ` ${esc(proj)}` : ''}">overridden</span>`;
   }
@@ -1654,7 +1903,15 @@ function fundModifierChips(f, flag, monthId) {
 // row is the only caller, so both are always there.
 function fundChips(f, flag, monthId, month = null, live = null) {
   const bill = month && live ? billWentUp(f, live, month) : null;
-  return ruleChip(f) + fundTypeMark(f, monthId) + fundStatusChip(flag, bill) + fundModifierChips(f, flag, monthId);
+  const cycle = month && live && !bill ? cycleChargePosted(f, live, month) : false;
+  return ruleChip(f) + fundTypeMark(f, monthId) + fundStatusChip(flag, bill, cycle) + fundModifierChips(f, flag, monthId);
+}
+
+// The stored expense fund by name (Review rows carry names, not refs).
+function findExpenseFund(month, name) {
+  const k = normFund(name);
+  for (const c of month.categories) for (const f of c.funds) if (normFund(f.fund) === k) return f;
+  return null;
 }
 
 // The one phrase Review and the recap share for a carried-in fund's own month.
@@ -1975,12 +2232,20 @@ function renderBudget(main) {
 
     // Carried in (W4): not this month's doing, so not "Needs attention" — but
     // never hidden either. Same row shape; ⇄ moves money in to cover it.
-    const carryRows = carryList.map((x) => `<tr>
+    // 1.3.0 W5: a plan that pays it back — `Make it back…` beside ⇄ on
+    // Basic/Pacing/Build-up funds; a fund already on a plan says so instead.
+    const carryRows = carryList.map((x) => {
+      const sf = findExpenseFund(month, x.fund);
+      const cu = sf ? activeCatchUp(sf, month.id) : null;
+      const offer = sf && !cu && !sf.retireAtClose && catchUpEligibleSetup(sf.setup);
+      return `<tr>
       <td><a href="#" class="fund-name" data-review-fund="${esc(x.fund)}">${esc(x.fund)}</a>
         <span class="muted">· ${esc(x.category)}</span></td>
-      <td>Carrying ${money(x.carriedIn)} · this month ${carriedThisMonthWords(x)}</td>
+      <td>Carrying ${money(x.carriedIn)} · ${cu ? `making back ${money(cu.perMonth)}/mo` : `this month ${carriedThisMonthWords(x)}`}</td>
       <td class="${moneyCls(x.leftover)}">${money(x.leftover)}</td>
-      <td style="width:40px"><button class="btn-ghost" data-xfer="${esc(x.fund)}" title="Move money into this fund">⇄</button></td></tr>`);
+      <td style="width:${offer ? 150 : 40}px;white-space:nowrap"><button class="btn-ghost" data-xfer="${esc(x.fund)}" title="Move money into this fund">⇄</button>${offer
+        ? ` <button class="btn btn-sm" data-catchup="${esc(x.fund)}" title="Add a fixed amount to this fund's plan for a few months until the ${money(-x.carriedIn)} is paid back">Make it back…</button>` : ''}</td></tr>`;
+    });
 
     const offRows = offList.map((x) => `<tr>
       <td><a href="#" class="fund-name" data-review-fund="${esc(x.fund)}">${esc(x.fund)}</a>
@@ -2225,6 +2490,8 @@ function renderBudget(main) {
     }
     const xfer = e.target.closest('[data-xfer]');
     if (xfer) { showTransferModal(xfer.dataset.xfer); return; }
+    const cuBtn = e.target.closest('[data-catchup]');
+    if (cuBtn) { showCatchUpModal(month, cuBtn.dataset.catchup); return; }
     // Variable-income true-up: snap the per-check estimate to what actually
     // arrived. Never writes planned directly — recalcRules recomputes it from
     // count × amount, which keeps the checks rule alive and rolls the real
@@ -2305,6 +2572,7 @@ function renderBudget(main) {
           f.rule = null; // manual override clears auto rule
           if (wasChecks) notes.push(`"${f.fund}" planned is now set by hand — open the fund to reconnect it to your paycheck numbers.`);
         }
+        if (el.dataset.k === 'planned') delete f.truedUp; // 1.3.0 W0: a typed value is no longer the close's true-up
         const titheBefore = titheSum(month);
         f[el.dataset.k] = v;
         recalcRules(month); markDirty(`the ${el.dataset.k === 'carryOver' ? 'carry-over' : 'planned'} change on "${f.fund}"`);
@@ -4330,11 +4598,16 @@ function showMonthCloseWorkflow(last, nid, onCreated) {
     // S16 (1.2.1): a goal that was spent past what it saved is not a win to
     // celebrate — say what happened, neutrally. Met and unspent still cheers.
     const spentHere = f.expensed < -0.004 ? -f.expensed : 0;
-    wins.push(f.leftover < -0.004
+    // 1.3.0 W6 (#15): was this a one-time goal? Done stops the ask and the +12
+    // roll; Again next year is today's behaviour (the pair just goes away).
+    const acts = f.setup.done ? '' : ` <span class="recap-goal-acts" style="white-space:nowrap">
+      <button class="btn btn-sm" data-goal-done="${esc(f.fund)}" title="A one-time goal: it asks $0 from next month and never rolls to next year. What's left stays until you move it and remove the fund.">Done — stop asking</button>
+      <button class="btn btn-sm" data-goal-again title="Keep saving for it — the target moves to ${esc(ymLabel(monthAdd(f.setup.targetMonth, 12)))} when ${esc(monthLabel(nid))} starts.">Again next year</button></span>`;
+    wins.push((f.leftover < -0.004
       ? `${icon('target')} "${esc(f.fund)}" matured — ${money(spentHere)} spent against ${money(set)} saved`
       : set >= f.setup.targetAmount - 0.004
       ? `${icon('target', 'goal reached')} "${esc(f.fund)}" hit its ${money(f.setup.targetAmount)} goal — enjoy it!`
-      : `${icon('target')} "${esc(f.fund)}" matured with ${money(set)} of ${money(f.setup.targetAmount)} saved`);
+      : `${icon('target')} "${esc(f.fund)}" matured with ${money(set)} of ${money(f.setup.targetAmount)} saved`) + acts);
   }
   // The garden's slow layer: a new all-time high in AUM lays a wall stone. A
   // decline says nothing here — what you built stays built.
@@ -4414,6 +4687,18 @@ function showMonthCloseWorkflow(last, nid, onCreated) {
       close();
       // Re-entry after an inline transfer keeps the onCreated hook (#7).
       showTransferModal(from, () => showMonthCloseWorkflow(last, nid, onCreated));
+      return;
+    }
+    // W6 (#15): the matured goal's pair — Done writes the flag on `last`'s setup
+    // (buildNextMonth copies it); Again next year only hides the pair.
+    const gd = e.target.closest('[data-goal-done]');
+    const ga = e.target.closest('[data-goal-again]');
+    if (gd || ga) {
+      const acts = e.target.closest('.recap-goal-acts');
+      if (gd) {
+        const sf = findExpenseFund(last, gd.dataset.goalDone);
+        if (sf && sf.setup) { setGoalDone(last, sf, true); if (acts) acts.innerHTML = '<span class="muted">· goal done ✓</span>'; }
+      } else if (acts) acts.remove();
     }
   });
   // Income check (I1): write the decision, re-run the tithe only — not
