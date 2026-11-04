@@ -14,7 +14,8 @@
     "test:csv": "node tools/test-csv.mjs",
     "dev": "node tools/dev-server.js",
     "test:garden": "node tools/test-garden.mjs",
-    "test:migrate": "node tools/test-migrate.mjs"
+    "test:migrate": "node tools/test-migrate.mjs",
+    "test:reports": "node tools/test-reports.mjs"
   },
   "keywords": [],
   "author": "sowingseasonapp",

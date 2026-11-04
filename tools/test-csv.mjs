@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 import {
   parseCsv, parseBankCsv, parseBankFile, scoreDuplicate, findDuplicateScored,
   findDuplicate, matchDuplicates, suggestStarterFunds, starterFundFor,
-  buildVendorMap, suggestFund,
+  buildVendorMap, suggestFund, normVendor, vendorKey,
 } from '../src/csv.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -707,6 +707,18 @@ for (const [file, expected] of Object.entries(baseline)) {
   const viaImporter = (rec) => suggestFund(map, rec.vendor, rec.account) || (rec.memo ? suggestFund(map, rec.memo, rec.account) : null);
   check('S11 [memo fallback: vendor "POS DEBIT", memo "PUBLIX SUPER MARKET" → Groceries]',
     viaImporter({ vendor: 'POS DEBIT', memo: 'PUBLIX SUPER MARKET 0412', account: '1872' })?.fund === 'Groceries');
+}
+
+// ---- 1.3.0 W12: vendorKey — the Reports grouping key (first non-boilerplate word of normVendor) ----
+{
+  check('W12 [WALMART COM SW TH ST → WALMART]', vendorKey('WALMART COM SW TH ST') === 'WALMART', vendorKey('WALMART COM SW TH ST'));
+  check('W12 [IMT SEABOURN CNP FLUS → IMT]', vendorKey('IMT SEABOURN CNP FLUS') === 'IMT', vendorKey('IMT SEABOURN CNP FLUS'));
+  check('W12 [TFR TO SAVINGS → SAVINGS (stoplist skipped)]', vendorKey('TFR TO SAVINGS') === 'SAVINGS', vendorKey('TFR TO SAVINGS'));
+  // The accent folds in normVendor first ("CAFE DU MONDE"), so the key is that output's first word.
+  check('W12 [Café Du Monde → CAFE, the first word of normVendor]',
+    normVendor('Café Du Monde') === 'CAFE DU MONDE' && vendorKey('Café Du Monde') === normVendor('Café Du Monde').split(' ')[0] && vendorKey('Café Du Monde') === 'CAFE',
+    normVendor('Café Du Monde') + ' / ' + vendorKey('Café Du Monde'));
+  check('W12 [empty → empty]', vendorKey('') === '' && vendorKey(null) === '' && vendorKey(undefined) === '');
 }
 
 console.log(`\nCSV importer: ${pass} passed, ${fail} failed`);

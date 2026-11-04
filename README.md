@@ -126,7 +126,7 @@ app opens straight on it. Existing installs (a data file already present) never 
   it — removal needs the category emptied first and never touches past months.
 - **Exclude transfers from reporting** (Settings) — fund-to-fund transfers stay visible
   inside each fund, but stop counting toward actual income/spending in the summary,
-  Year Overview and month recap. Income funds named "Transfer …" count wholly as transfers.
+  Reports and month recap. Income funds named "Transfer …" count wholly as transfers.
 - **End-of-month workflow** — "+ Start next month" opens *The {Month} harvest*: a recap of the
   closing month (income/spent/net, wins, pacing results, matured savings goals, a wall
   stone when AUM hit a new high that month, a quiet row of baskets for consecutive sown
@@ -152,8 +152,8 @@ app opens straight on it. Existing installs (a data file already present) never 
   duplicate**, still selected for you to review. Card payments — including the
   checking-side "CAPITAL ONE … PMT" withdrawals — are flagged and deselected. Nothing
   saves until you press Import.
-- **Year Overview** — income-vs-spending bars by month, a ranked "where the money went"
-  chart, the monthly actuals table, and per-fund history with a planned-vs-spent chart.
+- **Reports** — This Month (headline, plan vs reality, funds with vs-last-month and vs-average, what changed, top vendors, what rolled forward, wins) and This Year (income-vs-spending bars by month, a ranked "where the money went"
+  chart, the category × month grid with Total and Average, planned vs spent per fund with "over in n of m months", top vendors, biggest transactions, and per-fund history — income funds included — with a planned-vs-spent chart).
 - **AUM** — assets under management (SeedTime's take on net worth): everything you manage,
   minus everything you owe. Two hand-entered lists — assets and debts, no account syncing —
   under one headline number, with every value showing when it was last checked (a `stale`

@@ -221,6 +221,16 @@ export function normVendor(s) {
     .trim();
 }
 
+// 1.3.0 (Reports §3.5, #28): the grouping key for a vendor — the first word of
+// normVendor() that isn't bank boilerplate. A reporting and fallback key only;
+// buildVendorMap / suggestFund still match on normVendor first.
+const KEY_STOP = new Set(['TFR', 'WITHDRAWAL', 'DEPOSIT', 'TRANSFER', 'CHECK', 'CHECKING', 'PAYMENT', 'COMPANY', 'DES', 'DESC', 'POS', 'DEBIT', 'CREDIT', 'CARD', 'PURCHASE', 'ONLINE', 'ACH', 'WEB', 'ID', 'TO', 'FROM', 'THE']);
+export function vendorKey(vendor) {
+  const toks = normVendor(vendor).split(' ').filter(Boolean);
+  const i = toks.findIndex((t) => !KEY_STOP.has(t) && t.length >= 2);
+  return i >= 0 ? toks[i] : (toks[0] || '');
+}
+
 // Checking-account descriptions can carry a free-text memo prefix
 // ("I love you kiddo - Withdrawal to Sophias Account ..."). The stable,
 // matchable part is what follows the memo.

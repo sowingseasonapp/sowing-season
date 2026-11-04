@@ -501,7 +501,9 @@ function makeMonth(id, { categories, income, transactions = [] }) {
   check('sidebar button unchanged', html.includes('>+ Start next month<') && !/Sow \$\{/.test(appSrc) && !/🌱 Sow/.test(appSrc));
   check('month-created toast stays literal', appSrc.includes('created — review planned amounts.') && !/is sown —/.test(appSrc));
   // 1.2.1 W4: the recap's S16 neutral line exists, and no surface says "over by" the whole leftover any more.
-  check('recap: an overspent matured goal gets the neutral line', appSrc.includes('matured — '));
+  // 1.3.0 W11: the recap's strings live in reports.js (monthReport); app.js only decorates them.
+  const repSrc = fs.readFileSync(new URL('../src/reports.js', import.meta.url), 'utf8');
+  check('recap: an overspent matured goal gets the neutral line (reports.js, W11)', repSrc.includes('matured — ') && !appSrc.includes('matured — ') && /const rep = monthReport\(data, last\.id, todayISO\(\)\);/.test(appSrc));
   check('Needs attention never reads over-by-leftover (split, W1/W4)', !appSrc.includes('money(-x.leftover)') && !appSrc.includes('money(-flag.leftover)'));
   // 1.2.1 W8: a goal's ask is explained in words (type mark + panel) and reads autoPlanned — never re-derives or writes the sum back.
   check('goal ask in words (W8): catch-up sentence, read from autoPlanned, never written back', (() => {

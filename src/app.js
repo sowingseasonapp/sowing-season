@@ -13,6 +13,7 @@ import {
   suggestStarterFunds, starterFundFor, normVendor,
 } from './csv.js';
 import { groupedBars, barList, lineArea } from './charts.js';
+import { monthReport, yearReport, yearsPresent, defaultReportMonth } from './reports.js';
 import { spotTx, spotBudget, spotAum } from './spots.js';
 
 // Chart series: garden pigments, same CVD-safe blue↔orange axis (see --viz-s1/s2
@@ -41,6 +42,10 @@ let importState = null;
 // Drives the "Start {month} and bring them in" banner on Transactions.
 let importHold = null;
 let flagPanel = null; // 'att' | 'off' | null — which flag list is expanded on the Budget page
+// Reports (1.3.0 W9/W10): the tab, the month and the range live here, never in data.
+let reportsTab = 'month';   // 'month' | 'year'
+let reportsMonthId = null;   // This Month; null → the most recent finished month
+let reportsRange = null;     // This Year: { kind: 'year', year } | { kind: 'last12', uptoId }; null → the current calendar year
 let aumLogOpen = false; // AUM change-log section, collapsed by default
 let budgetFocus = null; // { fund } — arriving from the Garden: open its category, highlight the row
 let appVersion = ''; // package.json version via IPC (U3); '' in the dev harness
@@ -661,6 +666,10 @@ function catchUpEligibleSetup(s) {
   const t = (s && s.type) || 'basic';
   return t === 'basic' || t === 'pacing' || (t === 'savings' && s.savingsMode === 'build');
 }
+// 1.3.0 W0 (Sitting C): eligibility is per fund, not per setup type — a fund
+// whose planned follows a rule (the tithe) is never offered the plan, because
+// startCatchUp types the planned and would kill the rule for good.
+const catchUpEligible = (f) => !!f && !f.rule && catchUpEligibleSetup(f.setup);
 // The fund's active plan this month, or null.
 function activeCatchUp(f, monthId) {
   const cu = f && f.setup && f.setup.catchUp;
@@ -795,7 +804,7 @@ function wireSetupForm(root, opts) {
  */
 const CATCH_UP_N = [1, 2, 3, 6, 12];
 function catchUpChooserHtml(carriedIn, prefix, n0 = 3) {
-  const per = r2(-carriedIn / n0);
+  const per = Math.ceil(-carriedIn * 100 / n0) / 100;
   return `<div class="modal-row" style="flex-wrap:wrap;gap:6px;align-items:center">
       <span>Add <b id="${prefix}Per">${money(per)}</b> a month for</span>
       <select class="inline" id="${prefix}N">${CATCH_UP_N.map((n) => `<option value="${n}" ${n === n0 ? 'selected' : ''}>${n}</option>`).join('')}</select>
@@ -810,7 +819,7 @@ function wireCatchUpChooser(root, prefix, onStart) {
   const carriedIn = Number(sel.dataset.carried || 0);
   const upd = () => {
     const n = Number(sel.value) || 1;
-    const per = money(r2(-carriedIn / n));
+    const per = money(Math.ceil(-carriedIn * 100 / n) / 100);
     $(`#${prefix}Per`, root).textContent = per;
     $(`#${prefix}Drop`, root).textContent = per;
     $(`#${prefix}S`, root).textContent = n === 1 ? '' : 's';
@@ -819,14 +828,14 @@ function wireCatchUpChooser(root, prefix, onStart) {
   $(`#${prefix}Go`, root).onclick = () => onStart(Number(sel.value) || 1);
 }
 function startCatchUp(month, f, carriedIn, n) {
-  if (!(carriedIn < 0) || !catchUpEligibleSetup(f.setup)) return;
+  if (!(carriedIn < 0) || !catchUpEligible(f)) return;
   f.setup = f.setup || { type: 'basic' };
   const isBuild = f.setup.type === 'savings' && f.setup.savingsMode === 'build';
   // Basic/Pacing: today's planned is the base (a typed override becomes the
   // base). A paused fund's base is the plan it paused. Build-up: its own auto.
   const base = isBuild ? null : (f.pausedPlanned != null ? f.pausedPlanned : f.planned);
   delete f.pausedPlanned;
-  const perMonth = r2(-carriedIn / n);
+  const perMonth = Math.ceil(-carriedIn * 100 / n) / 100; // W0: up to the cent, so the plan ends at or above zero
   f.setup.catchUp = { base, perMonth, until: monthAdd(month.id, n - 1) };
   f.rule = null;
   f.planned = autoPlanned(f, month.id);
@@ -850,7 +859,7 @@ function showCatchUpModal(month, fundName) {
   month.categories.forEach((c, ci) => c.funds.forEach((x, fi) => { if (normFund(x.fund) === k) { f = x; live = comp.categories[ci].funds[fi]; } }));
   if (!f || !live) return;
   const carriedIn = fundSplit(live).carriedIn;
-  if (!(carriedIn < 0) || activeCatchUp(f, month.id) || !catchUpEligibleSetup(f.setup)) return;
+  if (!(carriedIn < 0) || activeCatchUp(f, month.id) || !catchUpEligible(f)) return;
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.innerHTML = `
@@ -1063,7 +1072,7 @@ function renderFundPanel() {
             ${!isIncome && !f.retireAtClose && isGoal ? (f.setup.done
               ? `<button class="btn btn-sm" id="pnlGoalAgain" title="Take the goal out of 'done' — it asks again from next month; set a new target month above">Set a new target</button>`
               : `<button class="btn btn-sm" id="pnlGoalDone" title="The goal is finished: it asks $0 from next month and never rolls to next year. What's left stays here until you move it and remove the fund.">✓ Goal done</button>`) : ''}
-            ${!isIncome && !f.retireAtClose && catchUpEligibleSetup(f.setup) && !cuActive && cuCarried < 0
+            ${!isIncome && !f.retireAtClose && catchUpEligible(f) && !cuActive && cuCarried < 0
               ? `<button class="btn btn-sm" id="pnlCatchUp" title="Add a fixed amount to this fund's plan for a few months until the ${money(-cuCarried)} carried in is paid back">Make it back…</button>` : ''}
             ${f.retireAtClose
               ? `<button class="btn btn-sm" id="pnlKeep" title="Cancel the removal — the fund stays in ${esc(monthLabel(nextMonthId(month.id)))} too">Keep it after all</button>`
@@ -1361,7 +1370,7 @@ function movePanelFund(dir) {
  * The ⋯ on every category header — expanded or collapsed — opens this. Same
  * frame as the fund panel (and the same #fundPanel id, so closeFundPanel and
  * the Escape handler cover both). Rename applies to every month (a category
- * name is a label, not money — past numbers never move; Year Overview merges
+ * name is a label, not money — past numbers never move; Reports merges
  * categories by exact name, so a forward-only rename would show a seam).
  * Up/Down reorder this month only, like movePanelFund — buildNextMonth copies
  * the order forward at close. Remove keeps the header ✕'s guard and confirm.
@@ -1453,7 +1462,7 @@ function movePanelCategory(dir) {
   markDirty(`moving "${c.name}" ${dir < 0 ? 'up' : 'down'}`); render();
 }
 
-// Rename a category in every month. Matches the exact name (Year Overview
+// Rename a category in every month. Matches the exact name (Reports
 // merges by exact name, 1.2.0 Call 2) and refuses a name any month already uses
 // (case-insensitive). Returns an error string (nothing changed) or null
 // (renamed, markDirty filed the one undo step, toast shown). Callers re-render.
@@ -2237,7 +2246,7 @@ function renderBudget(main) {
     const carryRows = carryList.map((x) => {
       const sf = findExpenseFund(month, x.fund);
       const cu = sf ? activeCatchUp(sf, month.id) : null;
-      const offer = sf && !cu && !sf.retireAtClose && catchUpEligibleSetup(sf.setup);
+      const offer = sf && !cu && !sf.retireAtClose && catchUpEligible(sf);
       return `<tr>
       <td><a href="#" class="fund-name" data-review-fund="${esc(x.fund)}">${esc(x.fund)}</a>
         <span class="muted">· ${esc(x.category)}</span></td>
@@ -3222,128 +3231,260 @@ function renderImport(main) {
 }
 
 /* ---------------- Reports view ---------------- */
+/* ---------------- Reports (1.3.0 Sitting C, D2) ----------------
+ * Two tabs over src/reports.js: This Month (the recap's numbers, for any month)
+ * and This Year (a calendar year, or the last 12 months). The tab, the month
+ * and the range live in module variables — never in data. Every name that
+ * reaches the page goes through esc(); every number through money().
+ */
+const WIN_ICON = { pacing: ['rosette', 'win'], cats: ['bloom'], ahead: ['ni-chart'], goal: ['target'], stone: ['stone'], logged: ['ledger'] };
+const YEAR_WIN_ICON = { allocated: ['basket'], onplan: ['rosette'], grew: ['bloom'] };
+// A goal that hit its target keeps the recap's 'goal reached' alt — the module
+// carries a `hit` flag on that win, so no string is re-parsed here.
+const winIcon = (w) => icon(...(w.kind === 'goal' && w.hit ? ['target', 'goal reached'] : (WIN_ICON[w.kind] || YEAR_WIN_ICON[w.kind] || ['ledger'])));
+const DASH = '<span class="dim">—</span>';
+// ±$ for the vs-last / vs-average columns; null → —.
+const delta = (v) => v == null ? DASH : v > 0.004 ? `+${money(v)}` : v < -0.004 ? money(v, { paren: false }) : '$0.00';
+// The year grid prints whole dollars (12 months + Total + Average have to fit
+// 1,144 px without a scrollbar — A-24); cents are in each cell's tooltip.
+const fmtUSD0 = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0, maximumFractionDigits: 0 });
+const money0 = (n) => n < -0.004 ? `(${fmtUSD0.format(Math.abs(n))})` : fmtUSD0.format(Math.abs(n));
+// Spent as the grid shows it: money out positive, a net refund month as "+$".
+const spentCell = (v) => v < -0.004 ? '+' + money(-v) : money(v);
+const reportVendorTable = (rows, monthId) => `<table class="grid compact report-table"><thead><tr><th>Vendor</th><th>Count</th><th>Total</th></tr></thead><tbody>${rows.map((v) =>
+  `<tr><td><a href="#" class="fund-name" data-rvendor="${esc(v.label)}"${monthId ? ` data-rmonth="${esc(monthId)}"` : ''} title="Search Transactions for ${esc(v.label)}">${esc(v.label)}</a></td><td>${v.count}</td><td>${spentCell(-v.total)}</td></tr>`).join('')}</tbody></table>`;
+const exTNote = () => exT() ? '<p class="muted" style="font-size:.78rem;margin:-8px 0 10px">* fund-to-fund transfers excluded</p>' : '';
+
 function renderReports(main) {
-  const comps = data.months.map((m) => ({ m, c: computeMonth(m) }));
+  const today = todayISO();
+  if (!data.months.length) { main.innerHTML = `<h1 class="view-title">Reports</h1><p class="sub">Start a month and the reports fill in.</p>`; return; }
   // U16: once the timeline spans two calendar years, "Dec" alone is ambiguous —
   // qualify every column/chart label with the year ("Dec '25").
   const multiYear = new Set(data.months.map((m) => m.id.slice(0, 4))).size > 1;
-  const shortLabel = (m) => m.label.slice(0, 3) + (multiYear ? ` '${m.id.slice(2, 4)}` : '');
-  let html = `<h1 class="view-title">Year Overview</h1><p class="sub">What actually came in and went out, month by month. Pick a month from the Month menu in the sidebar to see its details.</p>`;
+  const shortLabel = (id) => MONTH_SHORT[Number(id.slice(5, 7)) - 1] + (multiYear ? ` '${id.slice(2, 4)}` : '');
+  const mount = [];
+  let html = `<h1 class="view-title">Reports</h1><p class="sub">Looking back: what a month did, and what a year adds up to.</p>
+    <div class="report-tabs" role="tablist">
+      <button class="btn${reportsTab === 'month' ? ' sel' : ''}" data-rtab="month" role="tab" aria-selected="${reportsTab === 'month'}">This Month</button>
+      <button class="btn${reportsTab === 'year' ? ' sel' : ''}" data-rtab="year" role="tab" aria-selected="${reportsTab === 'year'}">This Year</button>
+    </div>`;
+  html += reportsTab === 'month' ? reportsMonthHtml(today) : reportsYearHtml(main, today, shortLabel, mount);
+  main.innerHTML = `<div id="reportsRoot">${html}</div>`;
+  for (const fn of mount) fn();
+  wireReports(main);
+}
 
-  html += `<div class="section"><div class="section-head"><h2>Income vs spending</h2></div><div id="chartIncome"></div></div>`;
-  html += `<div class="section"><div class="section-head"><h2>Where the money went (year to date)</h2></div><div id="chartCats"></div></div>`;
+// ---- This Month (W9) ----
+function reportsMonthHtml(today) {
+  if (!reportsMonthId || !data.months.some((m) => m.id === reportsMonthId)) reportsMonthId = defaultReportMonth(data, today);
+  const rep = monthReport(data, reportsMonthId, today);
+  const h = rep.headline, p = rep.planVsReality, rf = rep.rolledForward;
+  const next = monthName(rf.nextId), here = monthName(rep.id);
+  let html = `<div class="report-range">
+      <button class="btn btn-sm" data-rmonth-go="${esc(rep.prevId || '')}"${rep.prevId ? '' : ' disabled'} title="Previous month">◀</button>
+      <b>${esc(monthLabel(rep.id))}</b>
+      <button class="btn btn-sm" data-rmonth-go="${esc(rep.nextId || '')}"${rep.nextId ? '' : ' disabled'} title="Next month">▶</button>
+      ${rep.done ? '' : '<span class="muted">· still under way — comparisons use finished months only</span>'}
+    </div>
+    <div class="recap-stats">
+      <div><span class="k">Income${exT() ? ' *' : ''}</span><span class="v pos">${money(h.income)}</span></div>
+      <div><span class="k">Spent${exT() ? ' *' : ''}</span><span class="v">${money(h.spent)}</span></div>
+      <div><span class="k">Net</span><span class="v ${h.net >= 0 ? 'pos' : 'neg'}">${money(h.net)}</span></div>
+    </div>${exTNote()}`;
+  const over = p.diff < -0.004;
+  html += `<p class="report-sentence">You planned <b>${money(p.planned)}</b>${p.carriedIn > 0.004 ? ` (incl. ${money(p.carriedIn)} carried in)` : ''} and spent <b>${money(p.spent)}</b> — <b${over ? ' class="neg"' : ''}>${money(Math.abs(p.diff))} ${over ? 'over' : 'under'}.</b></p>`;
 
-  html += `<div class="section report-wrap"><table class="grid compact"><thead><tr><th style="text-align:left">Category</th>`;
-  for (const { m } of comps) html += `<th>${shortLabel(m)}</th>`;
-  html += `<th>Total</th></tr></thead><tbody>`;
-
-  // Income row
-  html += `<tr><td><b>Income received</b>${exT() ? ' <span class="muted" style="font-weight:400">(excl. transfers)</span>' : ''}</td>`;
-  let incTot = 0;
-  for (const { c } of comps) { incTot = r2(incTot + actIncome(c)); html += `<td class="pos">${money(actIncome(c))}</td>`; }
-  html += `<td class="pos"><b>${money(incTot)}</b></td></tr>`;
-
-  // Category rows (spent shown as positive magnitude). Categories excluded from
-  // totals (Work) still get a table row, marked so the columns visibly don't
-  // feed the Net line.
-  const catNames = [];
-  const notCounted = new Set();
-  for (const { m } of comps) for (const c of m.categories) {
-    if (!catNames.includes(c.name)) catNames.push(c.name);
-    if (c.excludeFromTotals) notCounted.add(c.name);
-  }
-  for (const name of catNames) {
-    html += `<tr><td>${esc(name)}${notCounted.has(name) ? ' <span class="muted">· not counted in totals</span>' : ''}</td>`;
-    let tot = 0;
-    for (const { c } of comps) {
-      const cat = c.categories.find((x) => x.name === name);
-      const v = cat ? catSpentAbs(cat) : null;
-      if (v != null) tot = r2(tot + v);
-      html += v == null ? `<td class="dim">·</td>` : `<td>${v ? money(v) : '<span class="dim">—</span>'}</td>`;
+  // Funds, grouped by category, over rows first. Over means this month's own
+  // doing (fundSplit) — a fund carrying old red is not re-counted.
+  html += `<div class="section"><div class="section-head"><h2>Funds</h2><span class="muted">planned includes what carried in · over is this month's own doing</span></div>
+    <table class="grid compact report-table"><thead><tr><th>Fund</th><th>Planned</th><th>Spent</th><th>Left</th><th>vs last month</th><th>vs your average</th></tr></thead><tbody>`;
+  let lastCat = null;
+  for (const f of rep.funds) {
+    if (f.category !== lastCat) {
+      lastCat = f.category;
+      html += `<tr class="cat-row"><td colspan="6"><b>${esc(f.category)}</b>${f.excluded ? ' <span class="muted">· not counted in totals</span>' : ''}</td></tr>`;
     }
-    html += `<td><b>${money(tot)}</b></td></tr>`;
+    html += `<tr${f.over ? ' class="over"' : ''}><td><a href="#" class="fund-name" data-rfund="${esc(f.fund)}" title="Open ${esc(f.fund)} in ${esc(monthLabel(rep.id))}'s Budget">${esc(f.fund)}</a></td>
+      <td>${money(f.planned)}</td><td>${spentCell(f.spent)}</td><td class="left${f.over ? ' neg' : ''}">${money(f.left)}</td><td>${delta(f.vsLast)}</td><td>${delta(f.vsAvg)}</td></tr>`;
   }
-  // Net row
-  html += `<tr class="total"><td>Net (income − spending)</td>`;
-  let netTot = 0;
-  for (const { c } of comps) {
-    const v = actDiff(c);
-    netTot = r2(netTot + v);
-    html += `<td class="${moneyCls(v)}">${money(v)}</td>`;
-  }
-  html += `<td class="${moneyCls(netTot)}"><b>${money(netTot)}</b></td></tr>`;
   html += `</tbody></table></div>`;
 
-  // Fund drilldown
-  const allFunds = [];
-  for (const m of data.months) {
-    for (const c of m.categories) for (const f of c.funds) if (!allFunds.some((x) => normFund(x) === normFund(f.fund))) allFunds.push(f.fund);
+  if (rep.incomeFunds.length) {
+    html += `<div class="section"><div class="section-head"><h2>Income</h2><span class="muted">carry is what last month's close decided</span></div>
+      <table class="grid compact report-table"><thead><tr><th>Fund</th><th>Planned</th><th>Received</th><th>Carry</th><th>vs last month</th></tr></thead><tbody>
+      ${rep.incomeFunds.map((f) => `<tr><td>${esc(f.fund)}</td><td>${money(f.planned)}</td><td class="${moneyCls(f.received)}">${money(f.received)}</td>
+        <td>${money(f.carryOver)}${f.carryPending ? ' <span class="muted">pending</span>' : ''}</td><td>${delta(f.vsLast)}</td></tr>`).join('')}
+      </tbody></table></div>`;
   }
-  allFunds.sort((a, b) => a.localeCompare(b));
-  const sel = main.dataset.fundDrill || '';
-  html += `<div class="section"><div class="section-head"><h2>Fund history</h2>
-    <select class="inline" id="fundDrill"><option value="">— choose a fund —</option>
-    ${allFunds.map((f) => `<option ${normFund(f) === normFund(sel) ? 'selected' : ''}>${esc(f)}</option>`).join('')}</select></div>`;
-  if (sel) {
-    html += `<div id="chartFund"></div>`;
-    html += `<table class="grid compact"><thead><tr><th style="text-align:left">Month</th><th>Carry over</th><th>Planned</th><th>Spent</th><th>Leftover</th></tr></thead><tbody>`;
-    for (const { m, c } of comps) {
-      for (const cat of c.categories) {
-        const f = cat.funds.find((x) => normFund(x.fund) === normFund(sel));
-        if (f) {
-          html += `<tr><td>${monthLabel(m.id)}</td><td>${money(f.carryOver)}</td><td>${money(f.planned)}</td>
-            <td class="${moneyCls(f.expensed)}">${money(f.expensed)}</td><td class="${moneyCls(f.leftover)}">${money(f.leftover)}</td></tr>`;
-        }
-      }
+
+  // What changed — plain text from the module; the page adds the link and mutes
+  // the trailing clause (the "; over in n of the last m" / "— <fund> fund" part).
+  if (rep.changed.length) {
+    html += `<div class="section"><div class="section-head"><h2>What changed</h2></div><ul class="callouts">`;
+    for (const c of rep.changed) {
+      const cut = c.text.indexOf(' — ');
+      const head = cut >= 0 ? c.text.slice(0, cut) : c.text, rest = cut >= 0 ? c.text.slice(cut) : '';
+      const semi = rest.indexOf(';');
+      const body = semi >= 0 ? rest.slice(0, semi) : rest, tail = semi >= 0 ? rest.slice(semi) : '';
+      const link = c.kind === 'tx'
+        ? `data-rtx="${esc(c.fund)}" data-rmonth="${esc(rep.id)}" title="Open ${esc(c.fund)}'s transactions"`
+        : `data-rfund="${esc(c.fund)}" title="Open ${esc(c.fund)} in ${esc(monthLabel(rep.id))}'s Budget"`;
+      html += `<li class="callout"><a href="#" ${link}>${esc(head)}</a>${c.kind === 'tx' ? `<span class="muted">${esc(body)}</span>` : esc(body)}${tail ? `<span class="muted">${esc(tail)}</span>` : ''}</li>`;
     }
-    html += `</tbody></table>`;
+    html += `</ul></div>`;
   }
-  html += `</div>`;
-  main.innerHTML = html;
 
-  // ---- mount charts ----
-  const labels = comps.map(({ m }) => shortLabel(m));
-  $('#chartIncome').appendChild(groupedBars({
-    labels,
-    series: [
-      { name: 'Income', color: VIZ.s1, values: comps.map(({ c }) => actIncome(c)) },
-      { name: 'Spending', color: VIZ.s2, values: comps.map(({ c }) => Math.abs(actExpense(c))) },
-    ],
-  }));
-  // The chart shows household spending only — categories excluded from totals
-  // would overstate it.
-  const catRows = catNames
-    .filter((name) => !notCounted.has(name))
-    .map((name) => ({
-      label: name,
-      value: r2(comps.reduce((a, { c }) => {
-        const cat = c.categories.find((x) => x.name === name);
-        return a + (cat ? catSpentAbs(cat) : 0);
-      }, 0)),
-    }))
-    .filter((r) => r.value > 0.004)
-    .sort((a, b) => b.value - a.value);
-  $('#chartCats').appendChild(barList({ rows: catRows, color: VIZ.s1 }));
+  if (rep.vendors.length) html += `<div class="section"><div class="section-head"><h2>Top vendors</h2><span class="muted">grouped by name · transfers left out</span></div>${reportVendorTable(rep.vendors, rep.id)}</div>`;
 
-  if (sel) {
-    const months = [], planned = [], spent = [];
-    for (const { m, c } of comps) {
-      for (const cat of c.categories) {
-        const f = cat.funds.find((x) => normFund(x.fund) === normFund(sel));
-        if (f) { months.push(shortLabel(m)); planned.push(Math.max(0, f.planned)); spent.push(Math.abs(f.expensed)); }
-      }
-    }
-    $('#chartFund').appendChild(groupedBars({
-      labels: months, height: 190,
+  // What rolled forward — next month's opening carries (read when the month
+  // exists, computed from this month's leftovers when it doesn't).
+  const neg = rf.negatives;
+  const rolled = rf.count
+    ? `<b>${money(rf.total)}</b> carried into ${esc(next)} across ${rf.count} fund${rf.count === 1 ? '' : 's'}${neg.length
+      ? ` · ${neg.length} carried negative: ${neg.map((x) => `${esc(x.fund)} <span class="neg">${money(x.amount)}</span>`).join(', ')}` : ''}`
+    : `Nothing carried into ${esc(next)}.`;
+  const incLines = rf.income.map((x) => x.pending
+    ? `<b>${money(-x.amount)}</b> expected from ${esc(here)}, pending <span class="muted">— ${esc(x.fund)}</span>`
+    : x.amount > 0 ? `<b>+${money(x.amount)}</b> unassigned carried into ${esc(next)} on ${esc(x.fund)}`
+    : `<b>${money(x.amount)}</b> short carried into ${esc(next)} on ${esc(x.fund)}, counted`);
+  html += `<div class="section"><div class="section-head"><h2>What rolled forward</h2>${rf.computed ? `<span class="muted">${esc(next)} hasn't started — computed from ${esc(here)}'s leftovers</span>` : ''}</div>
+    <div class="section-body"><p>${rolled}</p>${incLines.map((l) => `<p>${l}</p>`).join('')}</div></div>`;
+
+  html += `<div class="section"><div class="section-head"><h2>Wins</h2><span class="muted">the same list the ${esc(here)} harvest shows</span></div>
+    <ul class="modal-list recap-wins section-body">${rep.wins.map((w) => `<li>${winIcon(w)} ${esc(w.text)}</li>`).join('')}</ul></div>`;
+  return html;
+}
+
+// ---- This Year (W10) ----
+function reportsYearHtml(main, today, shortLabel, mount) {
+  const years = yearsPresent(data);
+  const latest = data.months.map((m) => m.id).sort().pop();
+  if (!reportsRange || (reportsRange.kind === 'year' && !years.includes(String(reportsRange.year)))) {
+    // Default: the current calendar year; the latest year present when the data has none of it.
+    const cur = today.slice(0, 4);
+    reportsRange = { kind: 'year', year: Number(years.includes(cur) ? cur : years[0]) };
+  }
+  if (reportsRange.kind === 'last12') reportsRange = { kind: 'last12', uptoId: latest };
+  const rep = yearReport(data, reportsRange, today);
+  const h = rep.headline;
+  const rangeName = reportsRange.kind === 'year' ? String(reportsRange.year) : 'the last 12 months';
+  const open = rep.months.length - rep.doneMonths.length;
+  let html = `<div class="report-range"><label class="muted" for="rRange">Range</label>
+      <select class="inline" id="rRange">${years.map((y) => `<option value="y:${y}"${reportsRange.kind === 'year' && String(reportsRange.year) === y ? ' selected' : ''}>${y}</option>`).join('')}
+        <option value="l12"${reportsRange.kind === 'last12' ? ' selected' : ''}>Last 12 months</option></select>
+      <span class="muted">· ${rep.months.length} month${rep.months.length === 1 ? '' : 's'}${rep.months.length ? ` (${esc(monthLabel(rep.months[0]))} – ${esc(monthLabel(rep.months[rep.months.length - 1]))})` : ''}${open ? `, ${open} still under way` : ''}</span></div>`;
+  if (!rep.months.length) return html + `<p class="muted">No months in this range.</p>`;
+
+  const rate = h.savingsRate == null ? '—' : `${(h.savingsRate * 100).toFixed(1)}%`;
+  html += `<div class="recap-stats">
+      <div><span class="k">Income${exT() ? ' *' : ''}</span><span class="v pos">${money(h.income)}</span></div>
+      <div><span class="k">Spent${exT() ? ' *' : ''}</span><span class="v">${money(h.spent)}</span></div>
+      <div><span class="k">Net</span><span class="v ${h.net >= 0 ? 'pos' : 'neg'}">${money(h.net)}</span></div>
+      <div title="What's left of income after spending, as a share of income"><span class="k">Savings rate · net ÷ income</span><span class="v${h.savingsRate == null ? '' : h.savingsRate >= 0 ? ' pos' : ' neg'}">${rate}</span></div>
+      ${h.aumChange ? `<div title="First AUM snapshot in range (${esc(h.aumChange.from)}) to the last (${esc(h.aumChange.to)})"><span class="k">AUM change</span><span class="v ${h.aumChange.amount >= 0 ? 'pos' : 'neg'}">${h.aumChange.amount > 0.004 ? '+' : ''}${money(h.aumChange.amount)}</span></div>` : ''}
+    </div>${exTNote()}`;
+
+  html += `<div class="section"><div class="section-head"><h2>Income vs spending</h2><span class="muted">net under each month</span></div><div id="chartIncome"></div></div>`;
+  html += `<div class="section"><div class="section-head"><h2>Where the money went</h2><span class="muted">${esc(rangeName)} · share of spending</span></div><div id="chartCats"></div></div>`;
+  mount.push(() => {
+    $('#chartIncome').appendChild(groupedBars({
+      labels: rep.byMonth.map((b) => shortLabel(b.id)),
+      sublabels: rep.byMonth.map((b) => money(b.net, { paren: false })),
       series: [
-        { name: 'Planned', color: VIZ.s1, values: planned },
-        { name: 'Spent', color: VIZ.s2, values: spent },
+        { name: 'Income', color: VIZ.s1, values: rep.byMonth.map((b) => b.income) },
+        { name: 'Spending', color: VIZ.s2, values: rep.byMonth.map((b) => b.spent) },
       ],
     }));
-  }
+    // Household spending only — categories excluded from totals would overstate it.
+    $('#chartCats').appendChild(barList({ rows: rep.categories.map((c) => ({ label: `${c.name} · ${(c.pct * 100).toFixed(0)}% of total`, value: c.total })), color: VIZ.s1 }));
+  });
 
-  $('#fundDrill').onchange = (e) => { main.dataset.fundDrill = e.target.value; renderReports(main); };
-  main.dataset.fundDrill = sel;
+  // Category × month grid: ≤ 12 month columns + Total + Average (finished months only).
+  const g = rep.grid;
+  const cell = (v, cls = '') => v == null ? `<td class="dim">·</td>` : `<td${cls ? ` class="${cls}"` : ''} title="${money(v)}">${Math.abs(v) > 0.004 ? money0(v) : '<span class="dim">—</span>'}</td>`;
+  const avgCell = (v, cls = '') => `<td${cls ? ` class="${cls}"` : ''}${v == null ? '' : ` title="${money(v)}"`}>${v == null ? DASH : money0(v)}</td>`;
+  html += `<div class="section report-wrap"><table class="grid compact report-grid${g.months.length > 6 ? ' dense' : ''}"><thead><tr><th style="text-align:left">Category</th>${g.months.map((id) =>
+      `<th>${shortLabel(id)}${rep.doneMonths.includes(id) ? '' : '<span class="muted" title="Still under way — left out of the average">*</span>'}</th>`).join('')}<th>Total</th><th>Average</th></tr></thead><tbody>`;
+  html += `<tr><td><b>Income received</b>${exT() ? ' <span class="muted" style="font-weight:400">(excl. transfers)</span>' : ''}</td>${g.months.map((id) => cell(g.income[id], 'pos')).join('')}<td class="pos" title="${money(g.incomeTotal)}"><b>${money0(g.incomeTotal)}</b></td>${avgCell(g.incomeAvg, 'pos')}</tr>`;
+  for (const c of g.cats) {
+    html += `<tr><td>${esc(c.name)}${c.excluded ? ' <span class="muted">· not counted in totals</span>' : ''}</td>${g.months.map((id) => cell(g.cells[c.name][id])).join('')}<td title="${money(g.totals[c.name])}"><b>${money0(g.totals[c.name])}</b></td>${avgCell(g.averages[c.name])}</tr>`;
+  }
+  html += `<tr class="total"><td>Net (income − spending)</td>${g.months.map((id) => cell(g.net[id], moneyCls(g.net[id]))).join('')}<td class="${moneyCls(g.netTotal)}" title="${money(g.netTotal)}"><b>${money0(g.netTotal)}</b></td>${avgCell(g.netAvg, moneyCls(g.netAvg))}</tr>`;
+  html += `</tbody></table><p class="muted section-note">Whole dollars — hover a cell for cents. Average uses finished months only${open ? ' (* still under way)' : ''}.</p></div>`;
+
+  // Planned vs spent per fund — the report only an app that keeps planned per month can print.
+  html += `<div class="section"><div class="section-head"><h2>Planned vs spent per fund</h2><span class="muted">${esc(rangeName)} · over means the fund's own month, finished months only</span></div>
+    <table class="grid compact report-table"><thead><tr><th>Fund</th><th style="text-align:left">Category</th><th>Planned</th><th>Spent</th><th>Difference</th><th>Over in</th></tr></thead><tbody>
+    ${rep.perFund.map((f) => { const often = f.of && f.overIn * 2 > f.of; return `<tr${often ? ' class="over"' : ''}><td><a href="#" class="fund-name" data-rdrill="${esc(f.fund)}" title="Show ${esc(f.fund)}'s history below">${esc(f.fund)}</a></td><td style="text-align:left" class="muted">${esc(f.category)}</td>
+      <td>${money(f.planned)}</td><td>${spentCell(f.spent)}</td><td class="${moneyCls(f.diff)}">${money(f.diff)}</td><td${often ? ' class="neg"' : ''}>${f.of ? `${f.overIn} of ${f.of} month${f.of === 1 ? '' : 's'}` : DASH}</td></tr>`; }).join('')}
+    </tbody></table><p class="muted section-note">A fund that's over most months usually has an unrealistic planned amount, not a spending problem. Raise it, or split it.</p></div>`;
+
+  if (rep.vendors.length) html += `<div class="section"><div class="section-head"><h2>Top vendors</h2><span class="muted">${esc(rangeName)} · grouped by name · transfers left out</span></div>${reportVendorTable(rep.vendors, null)}</div>`;
+  if (rep.biggest.length) {
+    html += `<div class="section"><div class="section-head"><h2>Biggest transactions</h2></div><table class="grid compact report-table"><thead><tr><th>Date</th><th style="text-align:left">Vendor</th><th style="text-align:left">Fund</th><th>Amount</th></tr></thead><tbody>
+      ${rep.biggest.map((b) => `<tr><td>${fmtDate(b.date)}</td><td style="text-align:left">${b.vendor ? esc(b.vendor) : '<span class="muted">(no vendor)</span>'}</td><td style="text-align:left"><a href="#" class="fund-name" data-rtx="${esc(b.fund)}" data-rmonth="${esc(b.monthId)}" title="Open ${esc(b.fund)}'s transactions in ${esc(monthLabel(b.monthId))}">${esc(b.fund)}</a></td><td>${money(-b.amount)}</td></tr>`).join('')}</tbody></table></div>`;
+  }
+  const im = rep.incomeMonths;
+  if (im.highest) html += `<p class="report-sentence">Highest income month: <b>${esc(monthLabel(im.highest.id))}</b> (${money(im.highest.received)}) · lowest: <b>${esc(monthLabel(im.lowest.id))}</b> (${money(im.lowest.received)}) <span class="muted">— received, not planned</span></p>`;
+
+  // Fund history — the drilldown, now with income funds and the planned line.
+  const sel = main.dataset.fundDrill || '';
+  const selOk = rep.funds.some((f) => normFund(f.name) === normFund(sel)) ? sel : '';
+  html += `<div class="section"><div class="section-head"><h2>Fund history</h2>
+    <select class="inline" id="fundDrill"><option value="">— choose a fund —</option>
+    ${rep.funds.map((f) => `<option value="${esc(f.name)}"${normFund(f.name) === normFund(selOk) ? ' selected' : ''}>${esc(f.name)}${f.income ? ' (income)' : ''}</option>`).join('')}</select></div>`;
+  if (selOk) {
+    const rows = rep.fundHistory(selOk);
+    const inc = rows.length > 0 && rows[0].income;
+    html += `<div id="chartFund"></div>
+      <table class="grid compact report-table"><thead><tr><th>Month</th><th>Carry over</th><th>Planned</th><th>${inc ? 'Received' : 'Spent'}</th><th>Leftover</th><th>${inc ? '' : 'Own month'}</th></tr></thead><tbody>
+      ${rows.map((r) => `<tr${r.over ? ' class="over"' : ''}><td>${esc(monthLabel(r.id))}${r.done ? '' : ' <span class="muted">· under way</span>'}</td><td>${money(r.carryOver)}${r.carryPending ? ' <span class="muted">pending</span>' : ''}</td><td>${money(r.planned)}</td>
+        <td${inc ? ` class="${moneyCls(r.received)}"` : ''}>${inc ? money(r.received) : spentCell(r.spent)}</td><td class="${moneyCls(r.leftover)}">${money(r.leftover)}</td>
+        <td>${inc ? '' : r.over ? `<span class="neg">${money(r.overBy)} over</span>` : !r.done ? DASH : r.own > 0.004 ? `<span class="muted">${money(r.own)} under</span>` : '<span class="muted">on plan</span>'}</td></tr>`).join('')}
+      </tbody></table>`;
+    mount.push(() => {
+      const planned = rows.map((r) => Math.max(0, r.planned));
+      $('#chartFund').appendChild(groupedBars({
+        labels: rows.map((r) => shortLabel(r.id)), height: 190,
+        series: [
+          { name: 'Planned', color: VIZ.s1, values: planned },
+          { name: inc ? 'Received' : 'Spent', color: VIZ.s2, values: rows.map((r) => Math.max(0, inc ? r.received : r.spent)) },
+        ],
+        plannedLine: planned,
+      }));
+    });
+  }
+  html += `</div>`;
+
+  if (rep.wins.length) html += `<div class="section"><div class="section-head"><h2>Wins</h2><span class="muted">${esc(rangeName)}</span></div>
+    <ul class="modal-list recap-wins section-body">${rep.wins.map((w) => `<li>${winIcon(w)} ${esc(w.text)}</li>`).join('')}</ul></div>`;
+  return html;
+}
+
+function wireReports(main) {
+  const root = $('#reportsRoot', main);
+  root.addEventListener('click', (e) => {
+    const tab = e.target.closest('[data-rtab]');
+    if (tab) { reportsTab = tab.dataset.rtab; render(); return; }
+    const go = e.target.closest('[data-rmonth-go]');
+    if (go) { if (go.dataset.rmonthGo) { reportsMonthId = go.dataset.rmonthGo; render(); } return; }
+    const a = e.target.closest('a[data-rfund], a[data-rtx], a[data-rvendor], a[data-rdrill]');
+    if (!a) return;
+    e.preventDefault();
+    const d = a.dataset;
+    if (d.rdrill != null) { main.dataset.fundDrill = d.rdrill; renderReports(main); const fd = $('#fundDrill'); if (fd) fd.scrollIntoView({ block: 'center' }); return; }
+    if (d.rfund != null) { budgetFocus = { fund: d.rfund }; fundSearch = ''; flagPanel = null; currentMonthId = reportsMonthId; view = 'budget'; render(); return; }
+    if (d.rtx != null) { txFundFilter = d.rtx; txSearch = ''; txAccountFilter = ''; if (d.rmonth) currentMonthId = d.rmonth; view = 'transactions'; render(); return; }
+    if (d.rvendor != null) { txSearch = d.rvendor; txFundFilter = ''; txAccountFilter = ''; if (d.rmonth) currentMonthId = d.rmonth; view = 'transactions'; render(); }
+  });
+  const rr = $('#rRange', main);
+  if (rr) rr.onchange = (e) => {
+    const v = e.target.value;
+    reportsRange = v === 'l12' ? { kind: 'last12', uptoId: data.months.map((m) => m.id).sort().pop() } : { kind: 'year', year: Number(v.slice(2)) };
+    render();
+  };
+  const fd = $('#fundDrill', main);
+  if (fd) fd.onchange = (e) => { main.dataset.fundDrill = e.target.value; renderReports(main); };
 }
 
 /* ---------------- AUM walkthrough ----------------
@@ -4294,7 +4435,7 @@ function renderSettings(main) {
             <input class="money small-num" id="tithePct" value="${Math.round((data.settings.tithePercent ?? 0.15) * 100)}"> %</div>
           <p class="muted" style="font-size:.85rem">Applied to funds with the "auto: % of income" rule.
             Base = checks × titheable-per-check for Standard Income (set on the Budget page), plus Extra Income planned. Tithe-exempt funds are excluded — to make a fund exempt, click its name on the Budget page and tick “Exempt from tithe”.</p>
-          <div class="field-row"><label title="Fund-to-fund transfers stay visible inside each fund, but stop counting toward actual income and spending in the summary cards, Year Overview, and month recap.">Exclude transfers from income &amp; spending reporting</label>
+          <div class="field-row"><label title="Fund-to-fund transfers stay visible inside each fund, but stop counting toward actual income and spending in the summary cards, Reports, and month recap.">Exclude transfers from income &amp; spending reporting</label>
             <input type="checkbox" id="exTransfers" ${data.settings.excludeTransfers ? 'checked' : ''}></div>
           <p class="muted" style="font-size:.85rem">Moving money between funds isn't real income or spending — this keeps the totals honest.</p>
         </div></div>
@@ -4561,59 +4702,23 @@ function showMonthCloseWorkflow(last, nid, onCreated) {
   const carryList = flags.filter((x) => x.carriedIn < 0 && x.leftover < -0.004);
   const carryTotal = r2(carryList.reduce((a, x) => a + x.carriedIn, 0));
 
-  // Category breakdown (planned vs spent), skipping empty ones.
-  const catRows = comp.categories
-    .filter((c) => !c.excludeFromTotals)
-    .map((c) => ({ name: c.name, planned: r2(c.totals.carryOver + c.totals.planned), spent: catSpentAbs(c) }))
-    .filter((c) => c.planned > 0.004 || c.spent > 0.004);
-  const catsUnder = catRows.filter((c) => c.spent <= c.planned + 0.004).length;
-
-  // Pacing wins: of the pacing funds that saw activity, which finished at-or-under budget.
-  const pacingAll = [], pacingWins = [];
-  for (const c of comp.categories) {
-    if (c.excludeFromTotals) continue;
-    for (const f of c.funds) {
-      if ((f.setup?.type) !== 'pacing' || f.expensed >= -0.004) continue;
-      pacingAll.push(f);
-      if (f.leftover >= -0.004) pacingWins.push(f);
-    }
-  }
-  // Savings goals that matured this month.
-  const matured = [];
-  for (const c of comp.categories) {
-    for (const f of c.funds) {
-      if (f.setup?.type === 'savings' && f.setup.targetMonth === last.id) matured.push(f);
-    }
-  }
-
-  const wins = [];
-  if (pacingWins.length && pacingAll.length) {
-    const saved = r2(pacingWins.reduce((a, f) => a + Math.max(0, f.leftover), 0));
-    wins.push(`${icon('rosette', 'win')} ${pacingWins.length} of ${pacingAll.length} pacing fund${pacingAll.length > 1 ? 's' : ''} finished on pace${saved > 0.004 ? ` — ${money(saved)} unspent` : ''}: ${pacingWins.map((f) => esc(f.fund)).join(', ')}`);
-  }
-  if (catsUnder && catRows.length) wins.push(`${icon('bloom')} ${catsUnder} of ${catRows.length} categories came in at or under plan`);
-  if (actDiff(comp) > 0.004) wins.push(`${icon('ni-chart')} You ended ${money(actDiff(comp))} ahead — income beat spending`);
-  for (const f of matured) {
-    const set = r2(f.carryOver + f.planned);
-    // S16 (1.2.1): a goal that was spent past what it saved is not a win to
-    // celebrate — say what happened, neutrally. Met and unspent still cheers.
-    const spentHere = f.expensed < -0.004 ? -f.expensed : 0;
-    // 1.3.0 W6 (#15): was this a one-time goal? Done stops the ask and the +12
-    // roll; Again next year is today's behaviour (the pair just goes away).
-    const acts = f.setup.done ? '' : ` <span class="recap-goal-acts" style="white-space:nowrap">
-      <button class="btn btn-sm" data-goal-done="${esc(f.fund)}" title="A one-time goal: it asks $0 from next month and never rolls to next year. What's left stays until you move it and remove the fund.">Done — stop asking</button>
-      <button class="btn btn-sm" data-goal-again title="Keep saving for it — the target moves to ${esc(ymLabel(monthAdd(f.setup.targetMonth, 12)))} when ${esc(monthLabel(nid))} starts.">Again next year</button></span>`;
-    wins.push((f.leftover < -0.004
-      ? `${icon('target')} "${esc(f.fund)}" matured — ${money(spentHere)} spent against ${money(set)} saved`
-      : set >= f.setup.targetAmount - 0.004
-      ? `${icon('target', 'goal reached')} "${esc(f.fund)}" hit its ${money(f.setup.targetAmount)} goal — enjoy it!`
-      : `${icon('target')} "${esc(f.fund)}" matured with ${money(set)} of ${money(f.setup.targetAmount)} saved`) + acts);
-  }
-  // The garden's slow layer: a new all-time high in AUM lays a wall stone. A
-  // decline says nothing here — what you built stays built.
-  const laid = stonesLaidIn((data.aum || {}).snapshots, last.id);
-  if (laid) wins.push(`${icon('stone')} Your garden matured: +${laid} wall stone${laid === 1 ? '' : 's'} — what you manage reached a new high`);
-  if (!wins.length) wins.push(`${icon('ledger')} The month is logged and every dollar is accounted for — that's the win.`);
+  // 1.3.0 W11: the category table and the wins come from monthReport() — one
+  // source for the recap and the Reports page. The module hands back plain
+  // text; the icons, esc() and W6's Done / Again pair go on here. A goal that
+  // hit its target carries `hit` from the module, so no string is re-parsed.
+  const rep = monthReport(data, last.id, todayISO());
+  const catRows = rep.catRows;
+  const acts = (w) => {
+    if (w.kind !== 'goal') return '';
+    // W6 (#15): was this a one-time goal? Done stops the ask and the +12 roll;
+    // Again next year is today's behaviour (the pair just goes away).
+    const sf = findExpenseFund(last, w.fund);
+    if (!sf || !sf.setup || sf.setup.done) return '';
+    return ` <span class="recap-goal-acts" style="white-space:nowrap">
+      <button class="btn btn-sm" data-goal-done="${esc(w.fund)}" title="A one-time goal: it asks $0 from next month and never rolls to next year. What's left stays until you move it and remove the fund.">Done — stop asking</button>
+      <button class="btn btn-sm" data-goal-again title="Keep saving for it — the target moves to ${esc(ymLabel(monthAdd(sf.setup.targetMonth, 12)))} when ${esc(monthLabel(nid))} starts.">Again next year</button></span>`;
+  };
+  const wins = rep.wins.map((w) => `${winIcon(w)} ${esc(w.text)}${acts(w)}`);
   // A quiet streak of sown months — shown here in the recap only, never as a nag.
   const streak = sownStreak(data, last.id);
   const baskets = streak ? `<p class="recap-baskets muted" title="Months in a row where every dollar had a job">${Array(Math.min(streak, 12)).fill(icon('basket', '', 'sm')).join('')} ${streak} month${streak === 1 ? '' : 's'} sown in a row</p>` : '';

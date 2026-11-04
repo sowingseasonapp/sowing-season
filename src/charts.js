@@ -53,8 +53,14 @@ function makeTooltip(container) {
   };
 }
 
+// The planned-line ink (1.3.0 W13): VIZ.s1 in app.js / --viz-s1 in styles.css.
+const PLANNED_INK = '#3f7d96';
+
 // Grouped vertical bars. series: [{name, color, values:number[]}], labels: string[]
-export function groupedBars({ labels, series, height = 230 }) {
+// 1.3.0 W13: `plannedLine` (one value per group) draws a thin line at planned
+// over the bars, in the same scale; `sublabels` is a second row of x labels
+// (Reports writes each month's net under its pair).
+export function groupedBars({ labels, series, height = 230, plannedLine = null, sublabels = null }) {
   const wrap = document.createElement('div');
   wrap.className = 'viz-root';
 
@@ -73,10 +79,10 @@ export function groupedBars({ labels, series, height = 230 }) {
   plotWrap.style.position = 'relative';
   wrap.appendChild(plotWrap);
 
-  const M = { l: 46, r: 8, t: 8, b: 22 };
+  const M = { l: 46, r: 8, t: 8, b: sublabels ? 36 : 22 };
   const W = 900, H = height;
   const innerW = W - M.l - M.r, innerH = H - M.t - M.b;
-  const max = Math.max(1, ...series.flatMap((s) => s.values));
+  const max = Math.max(1, ...series.flatMap((s) => s.values), ...(plannedLine || []));
   const { step, top } = niceScale(max);
   const y = (v) => M.t + innerH - (v / top) * innerH;
 
@@ -107,10 +113,15 @@ export function groupedBars({ labels, series, height = 230 }) {
         svg.appendChild(el('path', { d: barPath(x0 + si * (barW + barGap), y(v), barW, y(0) - y(v)), fill: s.color }));
       }
     });
-    // x label
-    const txt = el('text', { x: gx + groupW / 2, y: H - 6, class: 'viz-tick', 'text-anchor': 'middle' });
+    // x label (and the sublabel row beneath it when given)
+    const txt = el('text', { x: gx + groupW / 2, y: sublabels ? H - 20 : H - 6, class: 'viz-tick', 'text-anchor': 'middle' });
     txt.textContent = lab;
     svg.appendChild(txt);
+    if (sublabels) {
+      const sub = el('text', { x: gx + groupW / 2, y: H - 6, class: 'viz-tick viz-sub', 'text-anchor': 'middle' });
+      sub.textContent = sublabels[i] ?? '';
+      svg.appendChild(sub);
+    }
     // hover hit target = whole group column
     const hit = el('rect', { x: gx, y: M.t, width: groupW, height: innerH, fill: 'transparent' });
     hit.addEventListener('mousemove', (e) => {
@@ -123,6 +134,14 @@ export function groupedBars({ labels, series, height = 230 }) {
     hit.addEventListener('mouseleave', () => { tooltip.hide(); hover.style.display = 'none'; });
     svg.appendChild(hit);
   });
+  // The planned line: one point per group, at the group's centre.
+  if (plannedLine) {
+    const pts = labels.map((_, i) => `${M.l + i * groupW + groupW / 2},${y(Math.max(0, plannedLine[i] || 0))}`);
+    svg.appendChild(el('polyline', {
+      points: pts.join(' '), fill: 'none', stroke: PLANNED_INK, 'stroke-width': 1.5,
+      'stroke-linejoin': 'round', 'stroke-linecap': 'round', 'pointer-events': 'none', class: 'viz-planned',
+    }));
+  }
   // hover wash behind the group (appended before hit rects would be ideal; use low opacity on top)
   const hover = el('rect', { y: M.t, width: groupW, height: innerH, fill: 'rgba(38,48,31,0.05)', 'pointer-events': 'none' });
   hover.style.display = 'none';

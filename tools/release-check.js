@@ -82,13 +82,13 @@ const notes = path.join(ROOT, 'releases', `v${version}.md`);
 report(fs.existsSync(notes) && fs.readFileSync(notes, 'utf8').trim().length > 0,
   `releases/v${version}.md exists and is non-empty`);
 
-// 6. the four suites
+// 6. the five suites
 // The compute suite checks the engine against the owner's real history
 // (data/seed.json, git-ignored, and the source workbook) — files that must
 // never reach the repo, so a CI checkout cannot run it. It is skipped there, out
 // loud; the local preflight in `npm run release` runs it before the tag exists.
 const hasSeed = fs.existsSync(path.join(ROOT, 'data', 'seed.json'));
-for (const script of ['test', 'test:csv', 'test:garden', 'test:migrate']) {
+for (const script of ['test', 'test:csv', 'test:garden', 'test:migrate', 'test:reports']) {
   if (CI && script === 'test' && !hasSeed) {
     console.log('– npm run test skipped — data/seed.json is not in the repo (runs in the local preflight)');
     continue;

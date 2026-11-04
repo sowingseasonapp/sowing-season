@@ -847,30 +847,30 @@ console.log(`\nCompute engine vs spreadsheet: ${ok} checks passed, ${bad} failed
   const clone = (x) => JSON.parse(JSON.stringify(x));
   const fundOf = (m, name) => m.categories[0].funds.find((f) => f.fund === name);
 
-  // W5 — Basic, carry −175, planned 400, N = 3 → 458.33 for three months, 400 after.
+  // W5 — Basic, carry −175, planned 400, N = 3 → 458.34 for three months (W0: perMonth rounds up to the cent), 400 after.
   {
     const f = { fund: 'Ess', carryOver: -175, planned: 400, rule: null,
-      setup: { type: 'basic', catchUp: { base: 400, perMonth: r2(175 / 3), until: monthAdd('2026-09', 2) } } };
-    t('W5 basic: autoPlanned 458.33 in month 1', autoPlanned(f, '2026-09') === 458.33, String(autoPlanned(f, '2026-09')));
-    t('W5 basic: 458.33 in month 2 and 3', autoPlanned(f, '2026-10') === 458.33 && autoPlanned(f, '2026-11') === 458.33);
+      setup: { type: 'basic', catchUp: { base: 400, perMonth: 58.34, until: monthAdd('2026-09', 2) } } };
+    t('W5 basic: autoPlanned 458.34 in month 1', autoPlanned(f, '2026-09') === 458.34, String(autoPlanned(f, '2026-09')));
+    t('W5 basic: 458.34 in month 2 and 3', autoPlanned(f, '2026-10') === 458.34 && autoPlanned(f, '2026-11') === 458.34);
     t('W5 basic: null again after until', autoPlanned(f, '2026-12') === null);
-    t('W5 basic: isOverridden false at the auto', isOverridden({ ...f, planned: 458.33 }, '2026-09') === false);
+    t('W5 basic: isOverridden false at the auto', isOverridden({ ...f, planned: 458.34 }, '2026-09') === false);
     t('W5 basic: isOverridden true when typed', isOverridden({ ...f, planned: 500 }, '2026-09') === true);
-    // Walk it through buildNextMonth: each month spends exactly its base, so the carry climbs by 58.33 a month.
-    const sep = mk('2026-09', [{ ...f, planned: 458.33 }], [tx('2026-09-10', -400, 'Ess')]);
+    // Walk it through buildNextMonth: each month spends exactly its base, so the carry climbs by 58.34 a month.
+    const sep = mk('2026-09', [{ ...f, planned: 458.34 }], [tx('2026-09-10', -400, 'Ess')]);
     const oct = buildNextMonth(sep, 0.1);
     const fo = fundOf(oct, 'Ess');
-    t('W5 basic: Oct carry −116.67, planned 458.33, plan kept', fo.carryOver === -116.67 && fo.planned === 458.33 && fo.setup.catchUp && fo.setup.catchUp.until === '2026-11', JSON.stringify(fo));
+    t('W5 basic: Oct carry −116.66, planned 458.34, plan kept', fo.carryOver === -116.66 && fo.planned === 458.34 && fo.setup.catchUp && fo.setup.catchUp.until === '2026-11', JSON.stringify(fo));
     oct.transactions.push(tx('2026-10-10', -400, 'Ess'));
     const nov = buildNextMonth(oct, 0.1);
     const fn = fundOf(nov, 'Ess');
-    t('W5 basic: Nov (the until month) still on plan', fn.carryOver === -58.34 && fn.planned === 458.33 && !!fn.setup.catchUp, JSON.stringify(fn));
+    t('W5 basic: Nov (the until month) still on plan', fn.carryOver === -58.32 && fn.planned === 458.34 && !!fn.setup.catchUp, JSON.stringify(fn));
     nov.transactions.push(tx('2026-11-10', -400, 'Ess'));
     const dec = buildNextMonth(nov, 0.1);
     const fd = fundOf(dec, 'Ess');
-    t('W5 basic: Dec past until → base 400, catchUp gone, carry −0.01 (rounding)', fd.planned === 400 && fd.setup.catchUp === undefined && fd.carryOver === -0.01, JSON.stringify(fd));
+    t('W5 basic: Dec past until → base 400, catchUp gone, carry +0.02 — the plan ends at or above zero', fd.planned === 400 && fd.setup.catchUp === undefined && fd.carryOver === 0.02, JSON.stringify(fd));
     // Early end: the carry is back to +10 in month 2 → month 2 opens at base and the plan is gone.
-    const sep2 = mk('2026-09', [{ ...f, planned: 458.33 }], [tx('2026-09-10', -273.33, 'Ess')]);
+    const sep2 = mk('2026-09', [{ ...f, planned: 458.34 }], [tx('2026-09-10', -273.34, 'Ess')]);
     const oct2 = fundOf(buildNextMonth(sep2, 0.1), 'Ess');
     t('W5 basic: early end — carry +10 → base 400, catchUp gone', oct2.carryOver === 10 && oct2.planned === 400 && oct2.setup.catchUp === undefined, JSON.stringify(oct2));
     // A typed override on the until month is not carried: Dec opens at base either way.

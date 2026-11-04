@@ -13,6 +13,99 @@ so entries before that are dated by when the work happened, not by commit.
 
 Headline for the release (filled in sitting by sitting): income carry-over becomes a month-close decision (fix / late / use actual); unassigned income carries counted; Start next month is disabled while the closing month is over-allocated (D6, Invariant 17); catch-up plans for carried-in red; Reports replaces Year Overview; goal done; next charge month + already saved; vendor key fallback. `data.version` **7 unchanged**; optional keys only; `carryForward` no longer read.
 
+### 2026-11-03 — Reports: This Month + This Year on `reports.js`, the recap reads one source, `vendorKey`; catch-up eligibility + rounding (sitting C: W0, W8–W13)
+
+Sitting C of the 1.3.0 work order (`_cowork/work-order-1.3.0.md`, items W8–W13 — proposal §3.2–3.6, D2 — plus W0,
+two fixes to Sitting B's W5 that Cowork's own spec left open; `_cowork/research-reporting.md`; three-year report
+friction A-24 and the "over in n of m" trap). `src/compute.js` and `src/garden.js` are byte-identical to `f1b8e4e`;
+`data.version` stays 7 and **no new data keys** — the Reports tab, month and range live in module variables.
+Suites: csv **606 → 611** (+5) · migrate 17 · garden 177 (one §11 guard re-pointed) · compute 1251 (the W5 fixture's
+values moved, not its count) · **new `test-reports` 90**, 0 failed; `release-check.js` runs five suites.
+Recap gate: `recap gate: 92 months, 0 differences`.
+
+- **W0 — two W5 fixes (Cowork's spec, verified on `f1b8e4e`).** (a) A rule-bearing fund is never offered a
+  catch-up plan: `catchUpEligible(f) = !f.rule && catchUpEligibleSetup(f.setup)` gates the panel button, Review's
+  carried-in row, `showCatchUpModal` and `startCatchUp` — Dustin's Tithe (`basic` + `rule tithe`) keeps ⇄ only,
+  so `startCatchUp`'s `f.rule = null` can no longer stop the tithe following income. (b) `perMonth` rounds **up**
+  to the cent (`Math.ceil(−carriedIn × 100 ÷ N) ÷ 100`) in `startCatchUp`, `catchUpChooserHtml` and
+  `wireCatchUpChooser`, so −175 over 3 asks $58.34 and the fund opens the month after the plan at **+$0.02**, not
+  −$0.01 with a `carrying ($0.01)` chip that never clears. The compute fixture follows (458.34 / −116.66 / −58.32 /
+  +0.02; the early-end case spends $273.34 so its carry stays +$10 exactly).
+- **W12 — `vendorKey` in `csv.js`.** The Reports grouping key: the first word of `normVendor()` that isn't bank
+  boilerplate (`KEY_STOP`: TFR, WITHDRAWAL, DEPOSIT, TRANSFER, CHECK, … THE). `buildVendorMap` / `suggestFund`
+  are untouched (Sitting D uses the key as a fallback). +5 csv checks, including the accent fold (`Café Du Monde`
+  → `CAFE`).
+- **W8 — `src/reports.js` + `tools/test-reports.mjs`.** A pure module (the `garden.js` pattern: imports
+  `compute.js`, `monthContext`/`stonesLaidIn` from `garden.js`, `vendorKey` from `csv.js`; no DOM, no writes).
+  `monthReport(data, monthId, todayISO)` → headline (the exact `actIncome`/`actExpense`/`actDiff` arithmetic, so
+  the transfer setting matches Budget and the recap), plan vs reality (planned = Σ carry + planned, spent =
+  Σ `catSpentAbs`), the funds table (grouped by category, over rows first; `over` is `fundSplit().overThisMonth`,
+  never raw leftover; `vsLast` / `vsAvg` as ±$; the average uses only **finished** months in the trailing 12,
+  never the report month, and is null with fewer than 2), the income table (`carryPending` carried through),
+  What changed (≤ 3: biggest own-month overspend with "over in n of the last m" counted over the previous ≤ 4
+  finished months the fund was in, biggest underspend — savings funds excluded, not spending is their job —
+  and the biggest single expense transaction), top 5 vendors by `vendorKey` (transfers out via `isTransferTx`,
+  refunds reduce the total, label = the most frequent raw string's first word, title-cased), what rolled forward
+  (the next month's stored carries when it exists, else `buildNextMonth`; income carries as pending / counted),
+  and the recap's `wins` / `catRows` / `catsUnder`. `yearReport(data, range, todayISO)` with
+  `{ kind: 'year', year } | { kind: 'last12', uptoId }` → headline with savings rate (net ÷ income) and AUM change
+  (first vs last snapshot in range, ≥ 2), by-month nets, ranked categories with % of total, the category × month
+  grid (≤ 12 columns + Total + Average, average over finished months only), planned vs spent per fund with
+  `Over in n of m` (finished months only, the fund's own month), top 10 vendors, biggest 5 transactions,
+  highest / lowest income month (received), `fundHistory(name)` including income funds, and three year wins
+  (`N of M months fully allocated`, `<fund> on plan n of m months`, `<fund> grew $X`). Work (`excludeFromTotals`)
+  is out of every headline, ranking and average; it still appears in the funds table and the grid, marked.
+  `compute.js`'s `monthAdd` is forward-only, so the module carries its own two-way `addMonths` for the trailing
+  windows. **The suite runs on a synthetic three-month fixture built through `buildNextMonth`** (two counted
+  categories + Work, two income funds with one pending carry, a cross-category transfer pair, a refund, one vendor
+  under two raw strings, a fund over on its own in month 2 and carrying into month 3) plus a 14-month fixture for
+  the ≤ 12-column rule — not the seed, so it runs in CI where the compute suite can't. 90 checks.
+- **W11 — the recap reads `monthReport()`.** `showMonthCloseWorkflow`'s inline category table, pacing wins,
+  matured goals and wins list are gone; it renders `rep.wins` as `icon(…ICON[kind]) + ' ' + esc(text)` with
+  W6's Done / Again pair attached to `kind === 'goal'` lines by `w.fund` (`findExpenseFund`). The hit-its-goal
+  line keeps `icon('target', 'goal reached')` through a `hit` flag the module sets — no string is re-parsed.
+  Everything else in the modal (Income check, unassigned line, vignette, `recap-stats`, baskets, carried-in
+  list, AUM stone text, import lapse) is where it was. Cowork's gate (`recap-gate.mjs` against the f1b8e4e
+  baseline, 92 months of three files) prints 0 differences on `catRows`, `catsUnder` and every win's text.
+- **W9 — This Month.** `renderReports` is rewritten: two tabs (`reportsTab`), `◀ Month ▶` within `data.months`,
+  default = the most recent finished month. Headline in the `recap-stats` block with the `*` transfer note; the
+  plan-vs-reality sentence (`(incl. … carried in)` only when the carry sum is positive); the funds table grouped
+  by category with Fund · Planned · Spent · Left · vs last month · vs your average (`neg` on over rows only, no
+  chips); the income table with the muted `pending` word; What changed as links (fund → Budget with
+  `budgetFocus` on that month; transaction → Transactions filtered to the fund); top 5 vendors (click → Transactions
+  with `txSearch` = the label); What rolled forward (`$X carried into October across N funds · k carried
+  negative: Fund ($41.00), …` — `money()` parentheses, one pair; the income line `$2,000.00 expected from
+  September, pending` / `+$64.47 unassigned carried into October on Dustin Checks`, absent when nothing
+  carries; a note when the next month doesn't exist yet and the carries are computed); Wins with the recap's
+  icons, no buttons.
+- **W10 — This Year.** Range selector: the calendar years present + `Last 12 months`; default the current
+  calendar year (the latest year present when the data has none of it). Headline tiles Income · Spent · Net ·
+  `Savings rate · net ÷ income` · `AUM change` (when ≥ 2 snapshots fall in range); income vs spending by month
+  with each month's net written under its pair; where the money went with `% of total`; the category × month
+  grid scoped to the range (≤ 12 columns + Total + Average; `·` for a month without the category, `—` for zero;
+  `Income received` and `Net` rows as before; a `*` on a month still under way). **The grid prints whole dollars
+  with cents in each cell's tooltip** — 12 months + Total + Average at the compact size did not fit 1,144 px
+  with cents (A-24), and the cents live in the fund tables anyway. Planned vs spent per fund (Fund · Category ·
+  Planned Σ · Spent Σ · Difference · Over in n of m months, sorted by over-in desc then name, the work order's
+  copy line under it; a fund name opens its history); top 10 vendors; biggest 5 transactions (click → that
+  month's Transactions filtered to the fund); highest / lowest income month (received); Fund history including
+  income funds, scoped, with the planned line over the bars and an `Own month` column (over / under / on plan)
+  so "over in n of m" can be hand-counted; wins for the year. The `multiYear` short-label rule (`Dec '25`) stays.
+- **W13 — nav, charts, styles.** Sidebar `Year Overview` → `Reports` (icon unchanged) in `index.html` and
+  `dev.html`; the Settings transfer copy and two comments say Reports. `charts.js` `groupedBars` gains
+  `plannedLine` (a 1.5 px polyline in the s1 ink at planned, included in the scale) and `sublabels` (a second
+  x-label row — the least code for the net-under-each-month label); `barList` / `lineArea` untouched.
+  `styles.css` adds `.report-tabs`, `.btn.sel`, `.report-range`, `.report-sentence`, `.callout`,
+  `.report-table` (category rows, `over` rows), `.report-grid.dense` and `.section-body` / `.section-note`, all on
+  the existing tokens. README names Reports where it named Year Overview.
+- **Leads, not changed.** (1) With the transfer setting off, the plan-vs-reality `spent` (Σ `catSpentAbs`, the
+  recap's arithmetic, per the work order) can exceed the headline's Spent: a category whose month nets to money
+  in (a big transfer into Savings) is counted by its absolute value. With the setting on — Dustin's file — the two
+  agree ($7,474.62 in September). (2) `vendorKey` keeps "WALMART.COM" and "WAL-MART" apart (`WALMART` vs `WAL`),
+  by design; the label follows the raw string (`Walmart.com`). (3) The acceptance guess "top 5 vendors begin
+  with Walmart/Amazon/Publix" doesn't hold on September's export copy by total: the mortgage (`Imt`, $3,280.62)
+  and the tithe ($1,167.70) come first, then `Walmart.com`, `Wal-mart`, `Sams`.
+
 ### 2026-11-01 — Catch-up plans, goal done, next charge month; late-over and truedUp touch-ups (sitting B: W0, W5–W7)
 
 Sitting B of the 1.3.0 work order (`_cowork/work-order-1.3.0.md`, items W5–W7 with §0 Defaults 4–6, plus W0 —
