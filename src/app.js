@@ -5520,7 +5520,8 @@ async function boot() {
   const bootFixes = resyncCarryOvers(data);
   if (bootFixes.length) {
     data.settings.lastCarryFix = { at: todayISO(), changes: bootFixes };   // same shape migrateV7 writes
-    if (window.budgetAPI.keepBackup) await window.budgetAPI.keepBackup('before-1.3.0-carry-reset');
+    // main.js accepts labels of [a-z0-9-] only, so the version is dashed.
+    if (window.budgetAPI.keepBackup) await window.budgetAPI.keepBackup('before-1-3-0-carry-reset');
     migrated = true;
   }
   // Record the re-typed list before saving so it survives a restart — the
