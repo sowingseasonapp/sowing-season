@@ -13,6 +13,18 @@ so entries before that are dated by when the work happened, not by commit.
 
 Headline for the release (filled in sitting by sitting): income carry-over becomes a month-close decision (fix / late / use actual); unassigned income carries counted; Start next month is disabled while the closing month is over-allocated (D6, Invariant 17); catch-up plans for carried-in red; Reports replaces Year Overview; goal done; next charge month + already saved; vendor key fallback. `data.version` **7 unchanged**; optional keys only; `carryForward` no longer read.
 
+### 2026-11-09 — W16: income carries from before 1.3.0 reset at boot, listed once (the 1.3.0 upgrade path)
+
+- **What.** `boot()` runs `resyncCarryOvers` right after the migration chain and before the first paint; when it changes anything, the
+  list is stashed in `settings.lastCarryFix` (the v7 shape), the on-disk file is copied to `backups/keep-before-1.3.0-carry-reset-…json`,
+  and the Carry-over check notice lists it once with an income paragraph when any change carries `income: true`. Healthy files are
+  untouched — the resync returns 0 changes on all three data copies at `20ec283`, so the notice never shows there.
+- **Why.** A 1.2.x "Start next month" with the `carryForward` tick wrote `carryOver = leftover` on an income fund (never counted then);
+  1.3.0's `countedCarry` counts every income `carryOver` without `carryPending`, and the resync used to run only at the first edit
+  (`markDirty` / `silentDirty` / `restoreSnapshot`) — so such a file opened with Left to allocate moved by that amount and snapped back
+  at the first keystroke (Cowork's repro: first open `($1,271.57)`, first edit `($611.27)`). Dustin's real file has one: Bonuses $1.19
+  in October and November 2026. Nothing in `compute.js`; suites unchanged (csv 618 · migrate 17 · garden 177 · compute 1251 · reports 93).
+
 ### 2026-11-09 — Importer: vendor-key best guess with "check it", sign guard, within-file follow; Reports sentence + income months, `vendorKey` hyphens (sitting D: W0, W14–W15)
 
 Sitting D of the 1.3.0 work order (`_cowork/work-order-1.3.0.md`, items W14–W15 — proposal #28, Default 7 — plus

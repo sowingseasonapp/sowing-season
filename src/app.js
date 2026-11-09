@@ -5513,6 +5513,16 @@ async function boot() {
   // v7: carry-overs become derived; the one-time history resync runs inside
   // the migration and stashes what it corrected in settings.lastCarryFix.
   migrated = migrateV7(data, todayISO()) || migrated;
+  // 1.3.0: income carry-over is decided at month close now. A carry an older
+  // build wrote from the carryForward tick (never counted then, counted now)
+  // is reset here, at boot, and listed once — not at the first edit, where it
+  // would otherwise move Left to allocate under the user's hands.
+  const bootFixes = resyncCarryOvers(data);
+  if (bootFixes.length) {
+    data.settings.lastCarryFix = { at: todayISO(), changes: bootFixes };   // same shape migrateV7 writes
+    if (window.budgetAPI.keepBackup) await window.budgetAPI.keepBackup('before-1.3.0-carry-reset');
+    migrated = true;
+  }
   // Record the re-typed list before saving so it survives a restart — the
   // migration only runs once, and the user should be able to review it later.
   if (v5.retyped.length) data.settings.lastRetype = v5.retyped;
@@ -5554,13 +5564,20 @@ function showCarryFixNotice() {
   const isPenny = (c) => Math.abs(r2(c.to - c.from)) < 0.05;
   const big = fix.changes.filter((c) => !isPenny(c));
   const pennies = fix.changes.filter(isPenny);
+  // 1.3.0 (W16): an income carry reset at boot gets the income rule, not the
+  // expense one — the list shape is the same.
+  const intro = fix.changes.some((c) => c.income)
+    ? `Income carry-over is decided when you close a month now. An amount an earlier
+        version had carried on an income line was reset — it was never counted toward
+        what you had to allocate, and now it would have been:`
+    : `Sowing Season now keeps every month's carry-over equal to the previous
+        month's leftover, automatically. Checking your history found and fixed:`;
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.innerHTML = `
     <div class="modal" style="width:520px">
       <h2>Carry-over check</h2>
-      <p class="muted">Sowing Season now keeps every month's carry-over equal to the previous
-        month's leftover, automatically. Checking your history found and fixed:</p>
+      <p class="muted">${intro}</p>
       ${big.length ? `<ul style="margin:8px 0 4px;padding-left:20px;max-height:38vh;overflow:auto">${big.map(line).join('')}</ul>` : ''}
       ${pennies.length ? `<details style="margin:6px 0 4px"><summary class="muted" style="cursor:pointer">${big.length ? 'and ' : ''}${pennies.length} penny rounding correction${pennies.length === 1 ? '' : 's'} from the spreadsheet import</summary>
         <ul style="margin:8px 0 4px;padding-left:20px;max-height:38vh;overflow:auto">${pennies.map(line).join('')}</ul></details>` : ''}
