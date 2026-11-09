@@ -185,15 +185,17 @@ export function monthReport(data, monthId, todayISO) {
 
   const headline = { income: actIncome(data, comp), spent: Math.abs(actExpense(data, comp)), net: actDiff(data, comp), exT: exT(data) };
 
-  // Plan vs reality over the counted expense funds.
-  let planned = 0, carriedIn = 0, spentAll = 0;
+  // Plan vs reality over the counted expense funds. "Spent" is the headline's
+  // Spent (W0 a, Sitting D): the counted, signed total under the transfer
+  // setting — so the sentence and the tile never disagree. catRows keep the
+  // per-category absolute spend.
+  let planned = 0, carriedIn = 0;
   for (const c of comp.categories) {
     if (c.excludeFromTotals) continue;
     planned = r2(planned + c.totals.carryOver + c.totals.planned);
     carriedIn = r2(carriedIn + c.totals.carryOver);
-    spentAll = r2(spentAll + catSpentAbs(data, c));
   }
-  const planVsReality = { planned, carriedIn, spent: spentAll, diff: r2(planned - spentAll) };
+  const planVsReality = { planned, carriedIn, spent: headline.spent, diff: r2(planned - headline.spent) };
 
   // Funds table: grouped by category, over rows first (most over first), the rest
   // in budget order. Work funds ride along, marked, as the grid marks them.
@@ -395,10 +397,14 @@ export function yearReport(data, range, todayISO) {
   biggest.sort((a, b) => a.amount - b.amount);
   const biggest5 = biggest.slice(0, 5);
 
+  // Finished months only (W0 b, Sitting D) — a month under way would always
+  // read as the lowest. A file with no finished month in range still gets a
+  // sentence from whatever is there.
   let highest = null, lowest = null;
-  for (const b of byMonth) {
-    if (!highest || b.income > highest.received) highest = { id: b.id, label: b.label, received: b.income };
-    if (!lowest || b.income < lowest.received) lowest = { id: b.id, label: b.label, received: b.income };
+  const incomeSrc = (doneComps.length ? doneComps : comps).map(({ m, c }) => ({ id: m.id, label: m.label, received: actIncome(data, c) }));
+  for (const b of incomeSrc) {
+    if (!highest || b.received > highest.received) highest = { id: b.id, label: b.label, received: b.received };
+    if (!lowest || b.received < lowest.received) lowest = { id: b.id, label: b.label, received: b.received };
   }
   const incomeMonths = { highest, lowest };
 

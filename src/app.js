@@ -2977,17 +2977,33 @@ async function loadCsvForImport(fileName, fileData, answers) {
     const month = data.months.find((m) => m.id === monthId);
     const dup = month ? dups[i] : null;
     const duplicate = !!dup && dup.score >= 0.9;
-    let fund = '', suggestNote = '';
+    let fund = '', suggestNote = '', guess = false;
     if (month) {
       // The memo often holds the real merchant string (credit-union exports
       // put a type code in Description) — try it when the vendor is unknown.
       const sug = suggestFund(vendorMap, rec.vendor, rec.account)
         || (rec.memo ? suggestFund(vendorMap, rec.memo, rec.account) : null);
-      if (sug) {
+      // W14 (Sitting D): a key-fallback guess never crosses the fund's side — a
+      // deposit can't land on an expense fund, a debit can't land on income.
+      // The row stays "pick a fund" instead.
+      const signOk = !sug || !sug.viaKey || (() => {
+        const exp = isExpenseFund(month, sug.fund);
+        return !((rec.amount > 0 && exp) || (rec.amount < 0 && !exp));
+      })();
+      if (sug && signOk) {
         const canon = canonicalFund(month, sug.fund);
         // S13: a retiring fund is never suggested — the row lands on "pick a
         // fund" instead, so nothing new quietly accrues to a fund on its way out.
-        if (canon && !retiringFund(month, canon)) { fund = canon; suggestNote = `auto-matched (seen ${sug.n}×)`; }
+        if (canon && !retiringFund(month, canon)) {
+          fund = canon;
+          if (sug.viaKey) {
+            const label = sug.viaKey[0] + sug.viaKey.slice(1).toLowerCase();
+            suggestNote = `best guess — ${label} rows have gone to ${canon} ${sug.n}×`;
+            guess = true;
+          } else {
+            suggestNote = `auto-matched (seen ${sug.n}×)`;
+          }
+        }
       }
     }
     return {
@@ -2996,7 +3012,7 @@ async function loadCsvForImport(fileName, fileData, answers) {
       // row still posts where its date says; the badge and notice just make
       // the consequence visible. Carry-overs follow automatically (v7).
       earlierMonth: !!month && monthId < data.months[data.months.length - 1].id,
-      possibleDup: !!dup && dup.score < 0.9, dup, fund, suggestNote,
+      possibleDup: !!dup && dup.score < 0.9, dup, fund, suggestNote, guess,
       include: !blocked && !!month && !duplicate && !rec.isCardPayment,
     };
   });
@@ -3133,7 +3149,8 @@ function renderImport(main) {
       if (!row.monthExists) badges.push(`<span class="badge warn" title="Dated in a month that doesn't exist in the app yet, so it can't be imported right now.">month not started</span>`);
       if (row.earlierMonth) badges.push(`<span class="badge warn" title="Dated in a month you've already moved past. It posts there, and every later month's carry-over follows automatically.">earlier month</span>`);
       if (row.include && !row.fund) badges.push('<span class="badge warn">pick a fund</span>');
-      if (row.include && row.fund && !row.duplicate && !row.possibleDup && !rec.isCardPayment && !row.earlierMonth) badges.push('<span class="badge new">ready</span>');
+      if (row.include && row.fund && row.guess) badges.push('<span class="badge warn" title="Matched on the vendor\'s first word, not the exact name — a new bank writes it differently. Check the fund before importing.">check it</span>');
+      if (row.include && row.fund && !row.guess && !row.duplicate && !row.possibleDup && !rec.isCardPayment && !row.earlierMonth) badges.push('<span class="badge new">ready</span>');
       const month = row.monthExists ? data.months.find((m) => m.id === row.monthId) : null;
       html += `<tr class="${row.include ? '' : 'import-row-off'}">
         <td><input type="checkbox" data-imp-inc="${i}" ${row.include ? 'checked' : ''} ${row.monthExists ? '' : 'disabled'}></td>
@@ -3143,7 +3160,7 @@ function renderImport(main) {
           ${rec.memo ? `<div class="fund-note">${esc(rec.memo.length > 44 ? rec.memo.slice(0, 44) + '…' : rec.memo)}</div>` : ''}</td>
         <td class="${moneyCls(rec.amount)}">${money(rec.amount)}</td>
         <td>${monthLabel(row.monthId)}${row.earlierMonth ? ' <span class="muted">(closed)</span>' : ''}</td>
-        <td>${month ? `<select class="inline ${row.include && !row.fund ? 'missing' : ''}" data-imp-fund="${i}">${fundOptions(month, row.fund, undefined, { retiring: true })}</select>` : '<span class="muted">—</span>'}
+        <td>${month ? `<select class="inline ${row.include && !row.fund ? 'missing' : ''} ${row.guess ? 'guess' : ''}" data-imp-fund="${i}">${fundOptions(month, row.fund, undefined, { retiring: true })}</select>` : '<span class="muted">—</span>'}
           ${row.suggestNote ? `<div class="fund-note">${esc(row.suggestNote)}</div>` : ''}</td>
         <td>${badges.join(' ')}</td></tr>`;
     });
@@ -3222,8 +3239,29 @@ function renderImport(main) {
       const fs = e.target.closest('[data-imp-fund]');
       if (fs) {
         const row = importState.rows[Number(fs.dataset.impFund)];
-        row.fund = fs.value; row.suggestNote = '';
+        // W15 (Sitting D): a fund picked on a row that had no suggestion at all
+        // follows to the file's other blank rows from the same vendor. A guessed
+        // row ("check it") isn't blank, so picking on it drags nothing.
+        const wasBlank = !row.suggestNote && !row.guess && !row.fund;
+        row.fund = fs.value; row.suggestNote = ''; row.guess = false;
         if (fs.value && !row.rec.isCardPayment && !row.duplicate) row.include = true;
+        if (wasBlank && fs.value) {
+          // Same vendor: the memo when both rows carry one (credit-union exports
+          // put a type code in Description and the merchant in the memo), else
+          // the vendor string — both through normVendor.
+          const sameVendor = (a, b) => (a.memo && b.memo)
+            ? normVendor(a.memo) === normVendor(b.memo)
+            : normVendor(a.vendor) === normVendor(b.vendor);
+          let n = 0;
+          for (const r of importState.rows) {
+            if (r === row || r.fund || r.suggestNote || r.guess) continue;
+            if (r.duplicate || r.rec.isCardPayment || !r.monthExists) continue;
+            if (!sameVendor(r.rec, row.rec)) continue;
+            r.fund = fs.value; r.suggestNote = 'same vendor as the row you set'; r.include = true; n++;
+          }
+          // toast() sets textContent, so the fund name needs no escaping here.
+          if (n) toast(`Applied "${fs.value}" to ${n} more row${n === 1 ? '' : 's'} from the same vendor.`);
+        }
         render(); return;
       }
     };
@@ -3425,7 +3463,7 @@ function reportsYearHtml(main, today, shortLabel, mount) {
       ${rep.biggest.map((b) => `<tr><td>${fmtDate(b.date)}</td><td style="text-align:left">${b.vendor ? esc(b.vendor) : '<span class="muted">(no vendor)</span>'}</td><td style="text-align:left"><a href="#" class="fund-name" data-rtx="${esc(b.fund)}" data-rmonth="${esc(b.monthId)}" title="Open ${esc(b.fund)}'s transactions in ${esc(monthLabel(b.monthId))}">${esc(b.fund)}</a></td><td>${money(-b.amount)}</td></tr>`).join('')}</tbody></table></div>`;
   }
   const im = rep.incomeMonths;
-  if (im.highest) html += `<p class="report-sentence">Highest income month: <b>${esc(monthLabel(im.highest.id))}</b> (${money(im.highest.received)}) · lowest: <b>${esc(monthLabel(im.lowest.id))}</b> (${money(im.lowest.received)}) <span class="muted">— received, not planned</span></p>`;
+  if (im.highest) html += `<p class="report-sentence">Highest income month: <b>${esc(monthLabel(im.highest.id))}</b> (${money(im.highest.received)}) · lowest: <b>${esc(monthLabel(im.lowest.id))}</b> (${money(im.lowest.received)}) <span class="muted">— received, finished months only</span></p>`;
 
   // Fund history — the drilldown, now with income funds and the planned line.
   const sel = main.dataset.fundDrill || '';

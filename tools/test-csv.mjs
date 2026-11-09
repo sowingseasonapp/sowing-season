@@ -709,6 +709,44 @@ for (const [file, expected] of Object.entries(baseline)) {
     viaImporter({ vendor: 'POS DEBIT', memo: 'PUBLIX SUPER MARKET 0412', account: '1872' })?.fund === 'Groceries');
 }
 
+// ---- 1.3.0 W14 (Sitting D): the vendor-key fallback in suggestFund — Default 7, gated n ≥ 3 and share ≥ 0.8 ----
+{
+  let seq = 0;
+  const tx = (vendor, fund, account = '') => ({ id: 'k' + (++seq), date: '2028-01-05', vendor, amount: -10, fund, description: '', account });
+  const rows = [];
+  for (let i = 0; i < 5; i++) rows.push(tx('WALMART COM', 'Essentials'));                  // key WALMART, 5/5 → share 1.0
+  const ten = ['Household', 'Fun Money', 'Groceries', 'Gifts', 'Pets', 'Kids', 'Tools', 'Books', 'Garden', 'Car'];
+  for (let i = 0; i < 56; i++) rows.push(tx('AMAZON MKTPL*' + i, ten[i % 10]));             // key AMAZON, 56 rows over 10 funds → top 6/56
+  rows.push(tx('GEICO AUTO', 'Car Insurance'), tx('GEICO AUTO', 'Car Insurance'));          // key GEICO, 2 rows → under the gate
+  rows.push(tx('CAPITAL ONE MEMBER FEE', 'Venture X', '1872'), tx('CAPITAL ONE MEMBER FEE', 'Venture X', '1872'), tx('CAPITAL ONE MEMBER FEE', 'Quicksilver', '6620'));
+  for (let i = 0; i < 4; i++) rows.push(tx('TARGET COM', 'Household'));
+  rows.push(tx('TARGET COM', 'Fun Money'));                                                 // key TARGET, 4 of 5 → 0.8
+  for (let i = 0; i < 3; i++) rows.push(tx('COSTCO WHSE', 'Groceries'));
+  rows.push(tx('COSTCO WHSE', 'Household'), tx('COSTCO WHSE', 'Household'));                // key COSTCO, 3 of 5 → 0.6
+  const map = buildVendorMap([{ id: '2028-01', transactions: rows }]);
+  // (1) the new bank's spelling: no exact, no prefix (WAL MART BOCA ↔ WALMART COM) → the key.
+  const w = suggestFund(map, 'WAL-MART #1234 BOCA');
+  check('W14 [WAL-MART #1234 BOCA → Essentials via key WALMART, n 5]', w && w.fund === 'Essentials' && w.n === 5 && w.viaKey === 'WALMART', JSON.stringify(w));
+  // (2) a key spread over ten funds never passes the share gate.
+  check('W14 [AMAZON PRIME VIDEO → null: key AMAZON is 6 of 56]', suggestFund(map, 'AMAZON PRIME VIDEO') === null && map.byKey.get('AMAZON').n === 6 && Math.abs(map.byKey.get('AMAZON').share - 6 / 56) < 1e-12,
+    JSON.stringify([suggestFund(map, 'AMAZON PRIME VIDEO'), map.byKey.get('AMAZON')]));
+  // (3) two rows is under the n ≥ 3 gate, however unanimous.
+  check('W14 [GEICO INSURANCE CO → null: key GEICO has 2 rows]', suggestFund(map, 'GEICO INSURANCE CO') === null && map.byKey.get('GEICO').n === 2 && map.byKey.get('GEICO').share === 1,
+    JSON.stringify([suggestFund(map, 'GEICO INSURANCE CO'), map.byKey.get('GEICO')]));
+  // (4) the exact pass still answers first — no viaKey on it.
+  const ex = suggestFund(map, 'WALMART COM');
+  check('W14 [exact WALMART COM → the exact entry, no viaKey]', ex && ex.fund === 'Essentials' && ex.n === 5 && ex.viaKey === undefined, JSON.stringify(ex));
+  // (5) the account pass still answers first — no viaKey on it.
+  const ac = suggestFund(map, 'CAPITAL ONE MEMBER FEE', '1872');
+  check('W14 [CAPITAL ONE MEMBER FEE on 1872 → Venture X by account, no viaKey]', ac && ac.fund === 'Venture X' && ac.viaKey === undefined, JSON.stringify(ac));
+  // (6) byKey carries share: 1.0 passes, 4-of-5 (0.8) passes, 3-of-5 (0.6) fails.
+  const tg = suggestFund(map, 'TARGET STORES 0412'), cc = suggestFund(map, 'COSTCO GAS 0412');
+  check('W14 [byKey share: WALMART 1.0; TARGET 0.8 → Household via key; COSTCO 0.6 → null]',
+    map.byKey.get('WALMART').share === 1 && map.byKey.get('TARGET').share === 0.8 && tg && tg.fund === 'Household' && tg.n === 4 && tg.viaKey === 'TARGET'
+    && map.byKey.get('COSTCO').share === 0.6 && cc === null,
+    JSON.stringify([map.byKey.get('WALMART'), map.byKey.get('TARGET'), tg, map.byKey.get('COSTCO'), cc]));
+}
+
 // ---- 1.3.0 W12: vendorKey — the Reports grouping key (first non-boilerplate word of normVendor) ----
 {
   check('W12 [WALMART COM SW TH ST → WALMART]', vendorKey('WALMART COM SW TH ST') === 'WALMART', vendorKey('WALMART COM SW TH ST'));
@@ -719,6 +757,10 @@ for (const [file, expected] of Object.entries(baseline)) {
     normVendor('Café Du Monde') === 'CAFE DU MONDE' && vendorKey('Café Du Monde') === normVendor('Café Du Monde').split(' ')[0] && vendorKey('Café Du Monde') === 'CAFE',
     normVendor('Café Du Monde') + ' / ' + vendorKey('Café Du Monde'));
   check('W12 [empty → empty]', vendorKey('') === '' && vendorKey(null) === '' && vendorKey(undefined) === '');
+  // W0 c (Sitting D): a hyphen between letters joins, so WALMART.COM and WAL-MART are one row.
+  check('W0 c [WAL-MART #5911 BOCA → WALMART; T-MOBILE → TMOBILE; CHICK-FIL-A → CHICKFILA]',
+    vendorKey('WAL-MART #5911 BOCA') === 'WALMART' && vendorKey('T-MOBILE') === 'TMOBILE' && vendorKey('CHICK-FIL-A') === 'CHICKFILA',
+    [vendorKey('WAL-MART #5911 BOCA'), vendorKey('T-MOBILE'), vendorKey('CHICK-FIL-A')].join(' / '));
 }
 
 console.log(`\nCSV importer: ${pass} passed, ${fail} failed`);

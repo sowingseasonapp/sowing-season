@@ -226,7 +226,10 @@ export function normVendor(s) {
 // buildVendorMap / suggestFund still match on normVendor first.
 const KEY_STOP = new Set(['TFR', 'WITHDRAWAL', 'DEPOSIT', 'TRANSFER', 'CHECK', 'CHECKING', 'PAYMENT', 'COMPANY', 'DES', 'DESC', 'POS', 'DEBIT', 'CREDIT', 'CARD', 'PURCHASE', 'ONLINE', 'ACH', 'WEB', 'ID', 'TO', 'FROM', 'THE']);
 export function vendorKey(vendor) {
-  const toks = normVendor(vendor).split(' ').filter(Boolean);
+  // W0 c (Sitting D): a hyphen between letters joins ("WAL-MART" → WALMART,
+  // "T-MOBILE" → TMOBILE) so one vendor isn't two rows. normVendor itself is
+  // untouched — the duplicate scorer and the exact/prefix passes keep their strings.
+  const toks = normVendor(String(vendor || '').replace(/([A-Za-z])-(?=[A-Za-z])/g, '$1')).split(' ').filter(Boolean);
   const i = toks.findIndex((t) => !KEY_STOP.has(t) && t.length >= 2);
   return i >= 0 ? toks[i] : (toks[0] || '');
 }
@@ -256,11 +259,25 @@ export function buildVendorMap(months) {
     e.n++;
     per.set(k, e);
   };
+  // W14 (1.3.0 Sitting D): a second counter keyed by vendorKey(), the fallback
+  // when neither the exact nor the prefix pass knows the string — a new bank
+  // writes "WAL-MART #5911" where the old one wrote "WALMART.COM".
+  const keyCounts = new Map(); // vendorKey -> Map(normFund -> {n, fund})
+  const bumpKey = (key, fund) => {
+    if (!key) return;
+    if (!keyCounts.has(key)) keyCounts.set(key, new Map());
+    const per = keyCounts.get(key);
+    const k = normFund(fund);
+    const e = per.get(k) || { n: 0, fund };
+    e.n++;
+    per.set(k, e);
+  };
   const learn = (vendor, fund, account) => {
     const v = normVendor(vendor);
     if (!v) return;
     bump(v, fund);
     if (account) bump(account + ACCT_SEP + v, fund);
+    bumpKey(vendorKey(vendor), fund);
   };
   for (const m of months) {
     for (const t of m.transactions) {
@@ -279,6 +296,15 @@ export function buildVendorMap(months) {
     if (best) (key.includes(ACCT_SEP) ? byAccount : map).set(key, { fund: best.fund, n: best.n });
   }
   map.byAccount = byAccount;
+  // byKey: the top fund per key, with its share of every row under that key —
+  // suggestFund's gate (n ≥ 3, share ≥ 0.8) reads both.
+  const byKey = new Map();
+  for (const [key, per] of keyCounts) {
+    let best = null, total = 0;
+    for (const e of per.values()) { total += e.n; if (!best || e.n > best.n) best = e; }
+    if (best && total) byKey.set(key, { fund: best.fund, n: best.n, share: best.n / total });
+  }
+  map.byKey = byKey;
   return map;
 }
 
@@ -318,6 +344,13 @@ export function suggestFund(vendorMap, vendor, account = '') {
       if (prefixMatch(key, v)) return val;
     }
   }
+  // W14 (Sitting D): the vendor-key fallback — Default 7. Only when the string
+  // is unknown to both passes above; only when the key's history is decisive
+  // (three rows or more, four in five to one fund). The answer carries viaKey so
+  // the importer can badge it "check it" and apply the sign guard.
+  const k = vendorKey(vendor) || vendorKey(afterMemo(vendor) || '');
+  const g = k && vendorMap.byKey ? vendorMap.byKey.get(k) : null;
+  if (g && g.n >= 3 && g.share >= 0.8) return { fund: g.fund, n: g.n, viaKey: k };
   return null;
 }
 

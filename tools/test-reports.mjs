@@ -296,6 +296,35 @@ const IN_APRIL = '2026-04-15';   // everything done
   check('monthReport carries prev/next ids and done', r.prevId === '2026-01' && r.nextId === '2026-03' && r.done === true && monthReport(data, '2026-03', IN_MARCH).done === false);
 }
 
+// ---- 11. 1.3.0 Sitting D, W0 a/b — the sentence's spent is the headline's; income months use finished months ----
+{
+  // (a) A refund in a fourth counted category: the headline's Spent is the counted,
+  // signed total (1310 − 80 = 1230); catRows keep the absolute per-category spend.
+  const marR = { ...mar,
+    categories: [...mar.categories, { name: 'Odds', excludeFromTotals: false, funds: [basic('Deposit Back', 0)] }],
+    transactions: [...mar.transactions, tx('Deposit Back', 80, 'LANDLORD DEPOSIT REFUND', '2026-03-20')] };
+  const dataRefund = { ...mkData(), months: [jan, feb, marR] };
+  const dataRefundExT = { ...mkData({ excludeTransfers: true }), months: [jan, feb, marR] };
+  const r = monthReport(dataRefund, '2026-03', IN_APRIL);
+  const x = monthReport(dataRefundExT, '2026-03', IN_APRIL);
+  check('W0 a: planVsReality.spent === headline.spent === 1230 (1310 − 80 refund), transfers counted; diff follows',
+    r.planVsReality.spent === r.headline.spent && r.headline.spent === 1230 && r.planVsReality.diff === r2(r.planVsReality.planned - 1230), j([r.planVsReality, r.headline]));
+  check('W0 a: the same with transfers excluded; catRows Odds keeps the absolute 80',
+    x.planVsReality.spent === x.headline.spent && x.headline.spent === 1230 && r.catRows.find((c) => c.name === 'Odds').spent === 80, j([x.planVsReality, x.headline, r.catRows]));
+  // (b) March without its Pay row receives 500: while March is under way the lowest is
+  // still February (2000); once it is done, March (500). No finished month → all months.
+  const marLow = { ...mar, transactions: mar.transactions.filter((t) => t.fund !== 'Pay') };
+  const dataLow = { ...mkData(), months: [jan, feb, marLow] };
+  const inMar = yearReport(dataLow, { kind: 'year', year: 2026 }, IN_MARCH).incomeMonths;
+  const inApr = yearReport(dataLow, { kind: 'year', year: 2026 }, IN_APRIL).incomeMonths;
+  const none = yearReport(dataLow, { kind: 'year', year: 2026 }, '2026-01-10').incomeMonths;
+  check('W0 b: lowest income month is February (2000) while March is under way, March (500) once done; no finished month → all months',
+    inMar.lowest.id === '2026-02' && inMar.lowest.received === 2000 && inMar.highest.id === '2026-01'
+    && inApr.lowest.id === '2026-03' && inApr.lowest.received === 500 && inApr.highest.id === '2026-01'
+    && none.highest.id === '2026-01' && none.lowest.id === '2026-03' && none.lowest.received === 500, j([inMar, inApr, none]));
+}
+
 console.log(`\ntest-reports: ${pass} passed, ${fail} failed`);
+
 if (failures.length) { console.log('\nFailures:'); for (const f of failures) console.log('  ✗ ' + f); }
 process.exit(fail ? 1 : 0);

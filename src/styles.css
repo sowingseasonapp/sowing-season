@@ -335,6 +335,7 @@ select.inline {
   font-size: .85rem; background: #fff; max-width: 200px;
 }
 select.inline.missing { border-color: var(--amber); background: var(--amber-tint); }
+select.inline.guess { border-color: var(--amber); }
 input.inline-text {
   border: 1px solid transparent; background: transparent; font: inherit; border-radius: 6px;
   padding: 3px 6px; width: 100%;

@@ -13,6 +13,49 @@ so entries before that are dated by when the work happened, not by commit.
 
 Headline for the release (filled in sitting by sitting): income carry-over becomes a month-close decision (fix / late / use actual); unassigned income carries counted; Start next month is disabled while the closing month is over-allocated (D6, Invariant 17); catch-up plans for carried-in red; Reports replaces Year Overview; goal done; next charge month + already saved; vendor key fallback. `data.version` **7 unchanged**; optional keys only; `carryForward` no longer read.
 
+### 2026-11-09 — Importer: vendor-key best guess with "check it", sign guard, within-file follow; Reports sentence + income months, `vendorKey` hyphens (sitting D: W0, W14–W15)
+
+Sitting D of the 1.3.0 work order (`_cowork/work-order-1.3.0.md`, items W14–W15 — proposal #28, Default 7 — plus
+W0, three fixes to Sitting C, all Cowork's spec, verified 2026-11-03 on `0c2ef8a`). The last sitting before the
+1.3.0 release. `src/compute.js`, `src/garden.js` and `src/charts.js` are byte-identical to `0c2ef8a`; `data.version`
+stays 7 and **no new data keys** — `viaKey` lives on `suggestFund`'s answer and `guess` on the preview row, never on
+a saved transaction. Suites: csv **611 → 618** (+1 W0 c, +6 W14) · migrate 17 · garden 177 · compute 1251 ·
+reports **90 → 93** (+3), 0 failed; `release-check.js` still runs five suites.
+Recap gate: `recap gate: 92 months, 0 differences`.
+
+- **W0 — three Sitting C fixes (Cowork's spec).** (a) `monthReport`'s plan-vs-reality sentence used Σ `catSpentAbs`
+  while the tile used `actExpense`, so a refund or the transfer setting made them disagree (September on the
+  export copy: tile $8,141.62, sentence $9,399.84). `planVsReality.spent` is now `headline.spent` and `diff`
+  follows; `catRows` keep `catSpentAbs` (the gate pins them). (b) Highest / lowest income month iterate the
+  **finished** months only (`doneComps`; all months when none is finished, so a one-month file still gets a
+  sentence) — a month under way always read as the lowest. The trailing clause reads `— received, finished months
+  only`. (c) `vendorKey` joins a hyphen between letters before `normVendor` (`WAL-MART` → `WALMART`, `T-MOBILE` →
+  `TMOBILE`, `CHICK-FIL-A` → `CHICKFILA`), so `WALMART.COM` and `WAL-MART` are one Top-vendors row (September: 8 rows,
+  $616.13). `normVendor` itself is untouched — the duplicate scorer and the map's exact / prefix passes keep today's
+  strings.
+- **W14 — the key fallback in `suggestFund` (Default 7 + the sign guard).** `buildVendorMap` keeps a second counter
+  keyed by `vendorKey()` (vendor and memo-stripped form, as `learn` already indexes both) and hangs `map.byKey`
+  (`key → { fund, n, share }`, the top fund and its share of every row under the key). `suggestFund` tries it only
+  after the exact and prefix passes (account first) return nothing, and only when the key is decisive: **n ≥ 3 and
+  share ≥ 0.8**; the answer carries `viaKey`. Nothing above that line changed — every row that matched before
+  matches the same way. The importer applies the **sign guard** to `viaKey` answers before `canonicalFund`: a
+  deposit never lands on an expense fund and a debit never on income (`isExpenseFund`), so the row stays
+  `pick a fund`. A surviving guess prefills the fund with an amber **`check it`** badge (never the green `ready`),
+  the `<select>` gets the `guess` class (amber border) and the note reads `best guess — Geico rows have gone to Car
+  Insurance 13×`; picking any fund clears it. Persona A's switch to a credit union (`2027-11-21_cu.csv` on the
+  `persona-a-oct2027.json` fixture): 7 guesses / 0 wrong / 3 `pick a fund` — GEICO 13×, APPLE 13×, LAKELAND 13×,
+  PUBLIX 79×, COOL 36×, NELNET 13×, GOOGLE 12× guessed; `DEPOSIT FROM CHASE BANK` +$300 (key CHASE → Card Payment,
+  an expense fund) and `LAKELAND FAMILY DENTISTRY PAYROLL` +$1,415 (key LAKELAND → Electricity) held by the guard;
+  `NEW MEMBER BONUS` has no history. +6 csv checks (the key hit, the share gate on AMAZON 6-of-56, the n gate on a
+  2-row key, exact and account passes still first with no `viaKey`, `share` 1.0 / 0.8 passes / 0.6 fails).
+- **W15 — within-file follow.** Picking a fund on a preview row that had **no suggestion at all** (no note, no
+  guess, no fund) applies it to the file's other such rows from the same vendor — the memo when both rows carry
+  one (credit-union exports put a type code in Description and the merchant in the memo), else the vendor string,
+  both through `normVendor` — skipping duplicates, card payments and rows whose month doesn't exist; each follower
+  reads `same vendor as the row you set` and is ticked. Toast only when at least one followed:
+  `Applied "Maya Checks" to 1 more row from the same vendor.` A guessed (`check it`) or auto-matched row isn't
+  blank, so picking on it drags nothing. Nothing is written until Import, as before.
+
 ### 2026-11-03 — Reports: This Month + This Year on `reports.js`, the recap reads one source, `vendorKey`; catch-up eligibility + rounding (sitting C: W0, W8–W13)
 
 Sitting C of the 1.3.0 work order (`_cowork/work-order-1.3.0.md`, items W8–W13 — proposal §3.2–3.6, D2 — plus W0,
