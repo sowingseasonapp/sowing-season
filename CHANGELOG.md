@@ -9,14 +9,18 @@ so entries before that are dated by when the work happened, not by commit.
 
 ---
 
-## Unreleased — 1.3.0 — income true-up at close, D6 hard block, catch-up plans, Reports
+## 1.3.0 — 2026-11-09 — income true-up at close, catch-up plans, Reports
+
+Four sittings from the 1.3.0 work order plus W16 at release. First `compute.js` line rewrite since 1.1.1 (`leftToAllocate` counts recorded income carry; `buildNextMonth` carries only what the close decided); no `data.version` bump; seven optional keys; `carryForward` no longer read. Expense side and Left to allocate verified identical on 92 simulated months with income carry at $0; a legacy income carry is reset and listed at first launch.
 
 Headline for the release (filled in sitting by sitting): income carry-over becomes a month-close decision (fix / late / use actual); unassigned income carries counted; Start next month is disabled while the closing month is over-allocated (D6, Invariant 17); catch-up plans for carried-in red; Reports replaces Year Overview; goal done; next charge month + already saved; vendor key fallback. `data.version` **7 unchanged**; optional keys only; `carryForward` no longer read.
+
+**Invariants (1.3.0 wording — the project instructions carry the same four).** **#2** Left to allocate = Σ income (planned + counted carry) − Σ expense planned; a pending income carry stays out. **#6** On a new month, expense funds roll leftover → carryOver; income funds carry only what the month-close true-up recorded: a late amount (`carryPending`, outside Left to allocate), a counted amount (an unassigned surplus — only out of a month stamped `trueUp` — or a late amount the grace month gave up on), or nothing — never derived after the fact beyond that record. **#14** Savings target dates roll +12 months once passed, unless the goal is marked done; a fixed fund's `nextChargeMonth` rolls +`everyMonths`. **#17 (new)** A month cannot be started while the previous month is over-allocated after its income true-up, or while an income row is unresolved — no "anyway" for that state.
 
 ### 2026-11-09 — W16: income carries from before 1.3.0 reset at boot, listed once (the 1.3.0 upgrade path)
 
 - **What.** `boot()` runs `resyncCarryOvers` right after the migration chain and before the first paint; when it changes anything, the
-  list is stashed in `settings.lastCarryFix` (the v7 shape), the on-disk file is copied to `backups/keep-before-1.3.0-carry-reset-…json`,
+  list is stashed in `settings.lastCarryFix` (the v7 shape), the on-disk file is copied to `backups/keep-before-1-3-0-carry-reset-…json` (dashed: the main-process label check allows `[a-z0-9-]` only — the dotted label the spec named was refused silently on the smoke build, caught at the live check),
   and the Carry-over check notice lists it once with an income paragraph when any change carries `income: true`. Healthy files are
   untouched — the resync returns 0 changes on all three data copies at `20ec283`, so the notice never shows there.
 - **Why.** A 1.2.x "Start next month" with the `carryForward` tick wrote `carryOver = leftover` on an income fund (never counted then);
