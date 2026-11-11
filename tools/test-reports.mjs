@@ -176,6 +176,16 @@ const IN_APRIL = '2026-04-15';   // everything done
   check('WALMART label is the most frequent raw string\'s first word, title-cased', w.label === 'Walmart', w.label);
   const t = monthReport(data, '2026-01', IN_MARCH);
   check('Jan vendors: the transfer pair is not a vendor', t.vendors.every((v) => !/transfer/i.test(v.key)) && t.vendors.length === 4, j(t.vendors));
+  // 1.3.1 W1 (Default 2): a type-code bank stores vendor = "DEBIT CARD PURCHASE" and the merchant in description.
+  const marB = { ...mar, transactions: [
+    tx('Groceries', -80, 'DEBIT CARD PURCHASE', '2026-03-03', { description: 'WHOLEFDS MKT 10123' }),
+    tx('Gas', -40, 'DEBIT CARD PURCHASE', '2026-03-04', { description: 'SHELL OIL 57444' }),
+    tx('Groceries', -60, 'DEBIT CARD PURCHASE', '2026-03-05', { description: 'WHOLEFDS MKT 10123' }),
+  ] };
+  const dB = { ...mkData(), months: [jan, feb, marB] };
+  const b = monthReport(dB, '2026-03', IN_APRIL);
+  check('W1 (1.3.1): boilerplate vendor rows group by memo — Wholefds 2, Shell 1, no Debit',
+    j(b.vendors.map((v) => v.key)) === j(['WHOLEFDS', 'SHELL']) && b.vendors[0].count === 2 && b.vendors[1].count === 1 && b.vendors[0].label === 'Wholefds' && !b.vendors.some((v) => v.key === 'DEBIT'), j(b.vendors));
 }
 
 // ---- 6. rolled forward ----

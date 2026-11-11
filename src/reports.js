@@ -21,7 +21,7 @@ import {
   computeMonth, buildNextMonth, fundSplit, isTransferTx, normFund, r2, monthAdd, MONTH_NAMES,
 } from './compute.js';
 import { monthContext, stonesLaidIn } from './garden.js';
-import { vendorKey } from './csv.js';
+import { vendorKey, isBoilerplate } from './csv.js';
 
 // app.js money(): "$1,234.56", negatives in parentheses. The recap gate compares
 // these strings, so the format is copied, not shared.
@@ -73,13 +73,15 @@ function vendorRows(data, comps, limit) {
     for (const t of m.transactions) {
       if (isTransferTx(t)) continue;
       if (!expenseOf.has(normFund(t.fund))) continue;
-      const key = vendorKey(t.vendor);
+      const memo = String(t.description || '').trim();
+      const src = isBoilerplate(t.vendor) && memo ? memo : t.vendor;   // 1.3.1 W1 (Default 2)
+      const key = vendorKey(src);
       if (!key) continue;
       let g = groups.get(key);
       if (!g) { g = { key, total: 0, count: 0, raws: new Map() }; groups.set(key, g); }
       g.total = r2(g.total + t.amount);
       g.count++;
-      const raw = String(t.vendor || '').trim();
+      const raw = String(src || '').trim();
       g.raws.set(raw, (g.raws.get(raw) || 0) + 1);
     }
   }

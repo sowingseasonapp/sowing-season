@@ -28,8 +28,8 @@ jobs:
     outputs:
       version: ${{ steps.v.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -48,7 +48,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       TAG: ${{ github.ref_name }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Create the draft release (idempotent)
         run: |
           if gh release view "$TAG" >/dev/null 2>&1; then
@@ -70,8 +70,8 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       TAG: ${{ github.ref_name }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -112,7 +112,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       TAG: ${{ github.ref_name }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Fail fast if the Apple secrets aren't set
         env:
           P12: ${{ secrets.MAC_CERT_P12 }}
@@ -120,7 +120,7 @@ jobs:
         run: |
           [ -n "$P12" ] || { echo "::error::MAC_CERT_P12 secret is empty — see _cowork/mac-ci-workflow.md Part 1"; exit 1; }
           [ -n "$KEY" ] || { echo "::error::APPLE_API_KEY secret is empty — see _cowork/mac-ci-workflow.md Part 1"; exit 1; }
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -201,7 +201,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       TAG: ${{ github.ref_name }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Publish the release and mark it latest
         run: gh release edit "$TAG" --draft=false --latest
       - name: Verify what the updaters will read

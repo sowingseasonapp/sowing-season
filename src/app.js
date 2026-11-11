@@ -10,7 +10,7 @@ import { gardenState, incomeCheckIns, stonesLaidIn, sownStreak, monthContext, re
 import { sceneSvg, stripSvg, plantSprite, butterflySymbol, PALETTE_TOKENS, GARDEN_MILESTONE_LABELS } from './garden-scene.js';
 import {
   parseBankFile, buildVendorMap, suggestFund, matchDuplicates,
-  suggestStarterFunds, starterFundFor, normVendor,
+  suggestStarterFunds, starterFundFor, normVendor, isBoilerplate,
 } from './csv.js';
 import { groupedBars, barList, lineArea } from './charts.js';
 import { monthReport, yearReport, yearsPresent, defaultReportMonth } from './reports.js';
@@ -213,6 +213,7 @@ function surfaceUncaught(message) {
   } catch { /* the error surface itself must never throw */ }
 }
 window.addEventListener('error', (e) => {
+  if (/ResizeObserver loop/.test(String(e.message || ''))) return;   // 1.3.1 W2: benign Chromium notice, not an exception
   console.error(e.error || e.message);
   surfaceUncaught(e.message || 'unknown error');
 });
@@ -2981,8 +2982,14 @@ async function loadCsvForImport(fileName, fileData, answers) {
     if (month) {
       // The memo often holds the real merchant string (credit-union exports
       // put a type code in Description) — try it when the vendor is unknown.
-      const sug = suggestFund(vendorMap, rec.vendor, rec.account)
-        || (rec.memo ? suggestFund(vendorMap, rec.memo, rec.account) : null);
+      // 1.3.1 W1: on a bank whose Description is bank boilerplate, the memo is
+      // the vendor — match on it alone; an unknown memo stays "pick a fund"
+      // rather than inheriting the type code's most frequent fund.
+      const memo = String(rec.memo || '').trim();
+      const sug = (isBoilerplate(rec.vendor) && memo)
+        ? suggestFund(vendorMap, memo, rec.account)
+        : (suggestFund(vendorMap, rec.vendor, rec.account)
+          || (memo ? suggestFund(vendorMap, memo, rec.account) : null));
       // W14 (Sitting D): a key-fallback guess never crosses the fund's side — a
       // deposit can't land on an expense fund, a debit can't land on income.
       // The row stays "pick a fund" instead.
@@ -3345,7 +3352,7 @@ function reportsMonthHtml(today) {
     html += `<tr${f.over ? ' class="over"' : ''}><td><a href="#" class="fund-name" data-rfund="${esc(f.fund)}" title="Open ${esc(f.fund)} in ${esc(monthLabel(rep.id))}'s Budget">${esc(f.fund)}</a></td>
       <td>${money(f.planned)}</td><td>${spentCell(f.spent)}</td><td class="left${f.over ? ' neg' : ''}">${money(f.left)}</td><td>${delta(f.vsLast)}</td><td>${delta(f.vsAvg)}</td></tr>`;
   }
-  html += `</tbody></table></div>`;
+  html += `</tbody></table>${data.settings.excludeTransfers ? `<p class="muted" style="font-size:.85rem;margin:6px 0 0">Fund rows include money moved between funds; the totals above leave it out.</p>` : ''}</div>`;   // 1.3.1 W5 (Default 4)
 
   if (rep.incomeFunds.length) {
     html += `<div class="section"><div class="section-head"><h2>Income</h2><span class="muted">carry is what last month's close decided</span></div>
@@ -5519,7 +5526,10 @@ async function boot() {
   // would otherwise move Left to allocate under the user's hands.
   const bootFixes = resyncCarryOvers(data);
   if (bootFixes.length) {
-    data.settings.lastCarryFix = { at: todayISO(), changes: bootFixes };   // same shape migrateV7 writes
+    // 1.3.1 W3: merge with a record the user hasn't seen yet (a pre-v7 file that
+    // reaches 1.3.x in one boot has migrateV7's list in the same launch).
+    const prior = data.settings.lastCarryFix && !data.settings.lastCarryFix.seen ? (data.settings.lastCarryFix.changes || []) : [];
+    data.settings.lastCarryFix = { at: todayISO(), changes: [...prior, ...bootFixes] };
     // main.js accepts labels of [a-z0-9-] only, so the version is dashed.
     if (window.budgetAPI.keepBackup) await window.budgetAPI.keepBackup('before-1-3-0-carry-reset');
     migrated = true;
@@ -5544,6 +5554,7 @@ async function boot() {
   // before the save below. Guarded on the version, not on `migrated`: the
   // appName rewrite above sets migrated without changing the format.
   if (migrated && data.version > fromVersion && window.budgetAPI.keepBackup) {
+    // main.js accepts labels of [a-z0-9-] only, so the version is dashed.
     await window.budgetAPI.keepBackup(`before-v${data.version}`);
   }
   if (migrated) await window.budgetAPI.saveData(data);
@@ -5563,25 +5574,31 @@ function showCarryFixNotice() {
   if (!fix || fix.seen || !(fix.changes || []).length) return;
   const line = (c) => `<li>${monthLabel(c.month)} — ${esc(c.fund)}: <span class="${moneyCls(c.from)}">${money(c.from)}</span> → <span class="${moneyCls(c.to)}">${money(c.to)}</span></li>`;
   const isPenny = (c) => Math.abs(r2(c.to - c.from)) < 0.05;
-  const big = fix.changes.filter((c) => !isPenny(c));
-  const pennies = fix.changes.filter(isPenny);
+  // 1.3.1 W3: the list is split by kind — expense corrections first (with the
+  // penny-rounding collapse), then income resets under their own intro. With
+  // one kind present the output is 1.3.0's.
+  const inc = fix.changes.filter((c) => c.income);
+  const exp = fix.changes.filter((c) => !c.income);
+  const big = exp.filter((c) => !isPenny(c));
+  const pennies = exp.filter(isPenny);   // income carries are never spreadsheet pennies
   // 1.3.0 (W16): an income carry reset at boot gets the income rule, not the
   // expense one — the list shape is the same.
-  const intro = fix.changes.some((c) => c.income)
-    ? `Income carry-over is decided when you close a month now. An amount an earlier
+  const incIntro = `Income carry-over is decided when you close a month now. An amount an earlier
         version had carried on an income line was reset — it was never counted toward
-        what you had to allocate, and now it would have been:`
-    : `Sowing Season now keeps every month's carry-over equal to the previous
+        what you had to allocate, and now it would have been:`;
+  const expIntro = `Sowing Season now keeps every month's carry-over equal to the previous
         month's leftover, automatically. Checking your history found and fixed:`;
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.innerHTML = `
     <div class="modal" style="width:520px">
       <h2>Carry-over check</h2>
-      <p class="muted">${intro}</p>
+      ${exp.length ? `<p class="muted">${expIntro}</p>
       ${big.length ? `<ul style="margin:8px 0 4px;padding-left:20px;max-height:38vh;overflow:auto">${big.map(line).join('')}</ul>` : ''}
       ${pennies.length ? `<details style="margin:6px 0 4px"><summary class="muted" style="cursor:pointer">${big.length ? 'and ' : ''}${pennies.length} penny rounding correction${pennies.length === 1 ? '' : 's'} from the spreadsheet import</summary>
-        <ul style="margin:8px 0 4px;padding-left:20px;max-height:38vh;overflow:auto">${pennies.map(line).join('')}</ul></details>` : ''}
+        <ul style="margin:8px 0 4px;padding-left:20px;max-height:38vh;overflow:auto">${pennies.map(line).join('')}</ul></details>` : ''}` : ''}
+      ${inc.length ? `<p class="muted">${incIntro}</p>
+      <ul style="margin:8px 0 4px;padding-left:20px;max-height:38vh;overflow:auto">${inc.map(line).join('')}</ul>` : ''}
       <div class="modal-actions">
         <button class="btn btn-accent" id="cfOk">Got it</button>
       </div>

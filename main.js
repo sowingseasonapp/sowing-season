@@ -219,6 +219,7 @@ app.whenReady().then(() => {
   // the rolling prune never touches it (keep-{label}-{stamp}.json). The
   // renderer calls this after the migration chain and before its first save,
   // so what's on disk is still the old format. A failed keep never blocks boot.
+  // Label rule: [a-z0-9-]{1,40} only — anything else returns false WITHOUT logging (1.3.0 shipped a dotted label and wrote no keep file; 1.3.1 W4).
   ipcMain.handle('data:keep-backup', (_e, label) => {
     try {
       if (typeof label !== 'string' || !/^[a-z0-9-]{1,40}$/.test(label)) return false;

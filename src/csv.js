@@ -234,6 +234,15 @@ export function vendorKey(vendor) {
   return i >= 0 ? toks[i] : (toks[0] || '');
 }
 
+// 1.3.1 W1: a vendor string that is nothing but bank boilerplate ("DEBIT CARD
+// PURCHASE", "ACH CREDIT", "TRANSFER TO CHECKING") — on a bank that puts the
+// merchant in a memo column, the memo is the real vendor. "PAYMENT - THANK
+// YOU" is not boilerplate (THANK is a word); '' is not.
+export function isBoilerplate(vendor) {
+  const toks = normVendor(vendor).split(' ').filter(Boolean);
+  return toks.length > 0 && toks.every((t) => KEY_STOP.has(t));
+}
+
 // Checking-account descriptions can carry a free-text memo prefix
 // ("I love you kiddo - Withdrawal to Sophias Account ..."). The stable,
 // matchable part is what follows the memo.
@@ -277,14 +286,19 @@ export function buildVendorMap(months) {
     if (!v) return;
     bump(v, fund);
     if (account) bump(account + ACCT_SEP + v, fund);
-    bumpKey(vendorKey(vendor), fund);
+    if (!isBoilerplate(vendor)) bumpKey(vendorKey(vendor), fund);   // 1.3.1 W1: byKey never carries a type code
   };
   for (const m of months) {
     for (const t of m.transactions) {
       if (!t.vendor || !t.fund) continue;
       const account = String(t.account || '').trim();
-      learn(t.vendor, t.fund, account);
-      const rest = afterMemo(t.vendor);
+      // 1.3.1 W1 (Default 1): a boilerplate vendor with a memo is learned by its
+      // memo and the type code is not indexed at all — otherwise the exact pass
+      // would answer every later "DEBIT CARD PURCHASE" with one fund.
+      const memo = String(t.description || '').trim();
+      const src = isBoilerplate(t.vendor) && memo ? memo : t.vendor;
+      learn(src, t.fund, account);
+      const rest = afterMemo(src);
       if (rest) learn(rest, t.fund, account); // index the memo-stripped form too
     }
   }

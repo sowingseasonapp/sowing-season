@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 import {
   parseCsv, parseBankCsv, parseBankFile, scoreDuplicate, findDuplicateScored,
   findDuplicate, matchDuplicates, suggestStarterFunds, starterFundFor,
-  buildVendorMap, suggestFund, normVendor, vendorKey,
+  buildVendorMap, suggestFund, normVendor, vendorKey, isBoilerplate,
 } from '../src/csv.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -761,6 +761,29 @@ for (const [file, expected] of Object.entries(baseline)) {
   check('W0 c [WAL-MART #5911 BOCA → WALMART; T-MOBILE → TMOBILE; CHICK-FIL-A → CHICKFILA]',
     vendorKey('WAL-MART #5911 BOCA') === 'WALMART' && vendorKey('T-MOBILE') === 'TMOBILE' && vendorKey('CHICK-FIL-A') === 'CHICKFILA',
     [vendorKey('WAL-MART #5911 BOCA'), vendorKey('T-MOBILE'), vendorKey('CHICK-FIL-A')].join(' / '));
+}
+
+// ---- 1.3.1 W1: boilerplate vendors learn and match on the memo (Default 1) ----
+{
+  check('W1 isBoilerplate [DEBIT CARD PURCHASE, ACH CREDIT, POS DEBIT, TRANSFER TO CHECKING → true; PAYMENT - THANK YOU, "" → false]',
+    isBoilerplate('DEBIT CARD PURCHASE') && isBoilerplate('ACH CREDIT') && isBoilerplate('POS DEBIT') && isBoilerplate('TRANSFER TO CHECKING')
+      && !isBoilerplate('PAYMENT - THANK YOU') && !isBoilerplate('') && !isBoilerplate(null));
+  // stored the way app.js stores a 22-cu-comments.csv import: vendor = type code, description = memo
+  let seq = 0;
+  const tx = (vendor, memo, fund, amount = -10) => ({ id: 'b' + (++seq), date: '2027-01-05', vendor, description: memo, amount, fund, account: '' });
+  const rows = [
+    tx('DEBIT CARD PURCHASE', 'WHOLEFDS MKT 10123', 'Groceries'), tx('DEBIT CARD PURCHASE', 'SHELL OIL 57444444444', 'Gas'),
+    tx('DEBIT CARD PURCHASE', 'NETFLIX.COM', 'Everything Else'), tx('ACH CREDIT', 'ACME INC PAYROLL', 'Dustin Checks', 4231),
+    tx('DEBIT CARD PURCHASE', 'TRADER JOES #482 PORTLAND OR', 'Groceries'), tx('DEBIT CARD PURCHASE', 'AMAZON MKTPL*RT4G82KL1', 'Everything Else'),
+    tx('DEBIT CARD PURCHASE', 'CITY WATER BILL PAYMENT', 'Everything Else'), tx('TRANSFER TO CHECKING', '', 'Transfer'),
+  ];
+  const map = buildVendorMap([{ id: '2027-01', transactions: rows }]);
+  check('W1 map [has WHOLEFDS MKT, has no DEBIT CARD PURCHASE / ACH CREDIT, byKey has no DEBIT/ACH; no-memo TRANSFER TO CHECKING still learned]',
+    map.has('WHOLEFDS MKT') && !map.has('DEBIT CARD PURCHASE') && !map.has('ACH CREDIT') && !map.byKey.has('DEBIT') && !map.byKey.has('ACH') && map.has('TRANSFER TO CHECKING'),
+    JSON.stringify([...map.keys()]));
+  const a = suggestFund(map, 'WHOLEFDS MKT 10123'), b = suggestFund(map, 'DEBIT CARD PURCHASE'), c = suggestFund(map, 'TRADER JOES #482 PORTLAND OR');
+  check('W1 suggest [WHOLEFDS → Groceries; DEBIT CARD PURCHASE → null; TRADER JOES → Groceries]',
+    a && a.fund === 'Groceries' && b === null && c && c.fund === 'Groceries', JSON.stringify([a, b, c]));
 }
 
 console.log(`\nCSV importer: ${pass} passed, ${fail} failed`);

@@ -9,6 +9,58 @@ so entries before that are dated by when the work happened, not by commit.
 
 ---
 
+### 2026-11-10 — 1.3.1 Sitting A (W1–W6): memo-first importer for type-code banks, ResizeObserver, carry-fix merge, label rule, Reports footnote, CI v5
+
+The only sitting of the 1.3.1 work order (`_cowork/work-order-1.3.1.md`, approved 2026-11-10 with all four §0 defaults),
+from `4f1f7ee` (v1.3.0). A patch: no `compute.js`, no `garden.js`, `data.version` stays 7, no new keys, no migration.
+`compute.js`, `garden.js`, `charts.js`, `preload.js`, `styles.css`, `index.html` and `dev.html` are byte-identical to
+`4f1f7ee`; `main.js` differs by W4's comment line only. Suites: csv **618 → 621** (+3 W1) · reports **93 → 94** (+1 W1) ·
+garden 177 · migrate 17 · compute 1251, 0 failed. Recap gate: `recap gate: 92 months, 0 differences`; `w14-replay` on the
+three data copies (5,819 stored rows): 0 regressions, 0 downgrades. The `## 1.3.1` heading, version bump and tag are the
+release sitting's.
+
+- **W1 — the type-code bank: memo first when the vendor is boilerplate.** The one real defect. `tools/fixtures/22-cu-comments.csv`
+  (a credit-union shape: Description is `DEBIT CARD PURCHASE` / `ACH CREDIT`, the merchant is in Comments) stores the type code
+  as every row's vendor, and `buildVendorMap` learned `t.vendor` only — so from the second file on, the exact pass answered every
+  `DEBIT CARD PURCHASE` row with the bank's single most frequent fund, green `ready`, ticked: 3 of 8 rows wrong on the fixture,
+  silently (`typecode-repro.mjs`: `3 of 8 rows would be auto-matched to the wrong fund` before, `0 of 8` after). Not Dustin's banks
+  (merchant in Description on all of his; 0 boilerplate-vendor rows in the three copies), which is why nothing showed. New
+  `csv.js` export `isBoilerplate(vendor)` — every token of `normVendor()` is in `KEY_STOP` (`PAYMENT - THANK YOU` is not boilerplate,
+  THANK is a word; `''` is not). **Default 1:** `buildVendorMap` learns a boilerplate-vendor row by its `description` (the memo) and
+  does not index the type code at all; a boilerplate vendor with no memo (`TRANSFER TO CHECKING`) is learned as before; `learn`
+  skips `bumpKey` for a boilerplate string so W14's `byKey` never carries `DEBIT` / `ACH`. `loadCsvForImport` matches a
+  boilerplate-vendor row on its memo **alone** — an unknown memo stays `pick a fund` rather than inheriting the type code's fund;
+  every other row keeps the vendor-then-memo order. The W14 sign guard, `check it` and W15's same-vendor follow are untouched and
+  apply to the memo answer. **Default 2:** `reports.js` `vendorRows` keys and labels a boilerplate-vendor row from the same source
+  string, so a type-code bank's Top vendors reads Wholefds · Shell · Netflix instead of one line `Debit`. dev.html walk on the
+  export copy: the fixture imported twice → every row `auto-matched (seen 1×)` to the fund picked for *that memo*, `PAYMENT - THANK
+  YOU` to what was picked for it, no row inherits a neighbour's fund.
+- **W2 — the ResizeObserver toast.** Maximizing the window raised `Something went wrong: ResizeObserver loop completed with
+  undelivered notifications…` (seen twice on the live 1.3.0 check). It is a benign Chromium notice, not an exception: the global
+  `error` listener now returns first on `/ResizeObserver loop/`; nothing logged, `unhandledrejection` untouched. A synthetic
+  `boom` error still toasts.
+- **W3 — `boot()` merges `lastCarryFix`; the notice intro follows the list.** Theoretical today (every known install is v7): a
+  pre-v7 file reaching 1.3.x in one boot had `migrateV7`'s expense-correction list overwritten by the boot resync's income list,
+  and `showCarryFixNotice` picked the income intro when *any* change was income, so a mixed list sat under the wrong paragraph.
+  `boot()` now concatenates an unseen prior record's changes before its own; the notice splits the list by kind — the expense
+  paragraph, its list and the penny-rounding `<details>` first (pennies are computed from expense lines only; income carries are
+  never spreadsheet pennies), then the income paragraph as a second `<p class="muted">` above a plain list. One kind present →
+  exactly 1.3.0's output (the W16 copy: one income paragraph, `September 2026 — Dustin Checks: ($100.00) → $0.00`, hero $64.47).
+  Both intro strings unchanged character for character.
+- **W4 — the keep-backup label rule, written where the next person will read it.** No behaviour. The rule, in its own sentence:
+  a `keepBackup` label is `[a-z0-9-]{1,40}` — lowercase letters, digits and hyphens only, versions dashed — and `main.js` returns
+  `false` on anything else *without logging* (1.3.0's spec wrote a dotted label and the smoke build wrote no keep file). A comment
+  on the `data:keep-backup` handler (the only `main.js` hunk in this release) and the same one-line comment above both
+  `keepBackup(` calls in `boot()`.
+- **W5 — Reports funds-table footnote (Default 4).** Under the This Month funds table, when `excludeTransfers` is on: *Fund rows
+  include money moved between funds; the totals above leave it out.* — the Sitting C lead (fund rows show raw `expensed`, the
+  headline honours the setting). Static text, one muted line, nothing on This Year, nothing when the setting is off.
+- **W6 — CI housekeeping.** `actions/checkout@v4` → `@v5` and `actions/setup-node@v4` → `@v5` in `.github/workflows/release.yml`
+  (eight refs), nothing else in the workflow. Every run since 1.2.0 warned that v4 targets Node 20; the release sitting proves the
+  bump (five jobs green, no warning). If `setup-node@v5`'s cache change breaks `npm ci` on the `windows` job, revert that one bump.
+
+---
+
 ## 1.3.0 — 2026-11-09 — income true-up at close, catch-up plans, Reports
 
 Four sittings from the 1.3.0 work order plus W16 at release. First `compute.js` line rewrite since 1.1.1 (`leftToAllocate` counts recorded income carry; `buildNextMonth` carries only what the close decided); no `data.version` bump; seven optional keys; `carryForward` no longer read. Expense side and Left to allocate verified identical on 92 simulated months with income carry at $0; a legacy income carry is reset and listed at first launch.
