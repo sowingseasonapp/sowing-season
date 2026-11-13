@@ -20,6 +20,25 @@ export function fundSums(month) {
 export function isTransferTx(t) {
   return t.isTransfer === true || /^transfer (to|from) /i.test(String(t.vendor || ''));
 }
+// 1.4.0 (D1): a giving fund. The wizard's Tithe fund carries rule.type 'tithe',
+// which is a free "this is giving" signal; an explicit setup.giving (true or
+// false, written by the fund panel to every month) wins over it. Independent
+// of setup.excludeInsights — a quiet fund can still be a giving fund.
+export function isGivingFund(f) {
+  if (f && f.setup && f.setup.giving != null) return !!f.setup.giving;
+  return !!(f && f.rule && f.rule.type === 'tithe');
+}
+// Net giving from one fund in one month: money out minus money back, transfers
+// excluded (funding the envelope is not giving — Invariant 11). Positive = gave.
+export function givenIn(month, fund) {
+  const k = normFund(fund.fund);
+  let s = 0;
+  for (const t of month.transactions || []) {
+    if (isTransferTx(t) || normFund(t.fund) !== k) continue;
+    s += t.amount;
+  }
+  return r2(-s);
+}
 
 function transferSums(month) {
   const sums = {};

@@ -23,7 +23,7 @@
 //    the real tool it opens (Transfer…, Open Budget, Review N unassigned), and
 //    `phrase` is the one-line plain state for tooltips. Garden phrasing
 //    survives only in status-only text (season note, the calm affirmation).
-import { computeMonth, fundFlags, fundSplit, normFund, r2, isTransferTx, fundDeposits } from './compute.js';
+import { computeMonth, fundFlags, fundSplit, normFund, r2, isTransferTx, fundDeposits, isGivingFund, givenIn } from './compute.js';
 
 // ---- tunables (first guesses — revisit after a month of living with it) ----
 export const SEASON_WINDOW_DAYS = 90;   // compare the latest AUM snapshot to ~this far back
@@ -43,9 +43,19 @@ export const MATURITY_MILESTONES = [
   { months: 12, id: 'arbor', label: 'an arbor' },
   { months: 18, id: 'pond', label: 'a pond' },
   { months: 24, id: 'hive', label: 'a bee hive' },
+  { months: 30, id: 'greenhouse', label: 'a greenhouse' },
+  { months: 36, id: 'bench', label: 'a stone bench and lantern' },
+  { months: 48, id: 'brook', label: 'a brook' },
+  { months: 60, id: 'willow', label: 'a willow' },
+  { months: 72, id: 'orchard', label: 'an orchard row' },
 ];
 // Border tree size (0–4) steps with the count of closed months.
 export const TREE_STEPS = [1, 3, 6, 12];
+// 1.4.0: a plant's age — lifetime months the fund finished on plan and was
+// active (Default 1). Thresholds reached = age 0–3; sizes the base the scene
+// draws, never the plant's state. Carried-in red is ignored (D-P4): a month
+// counts when the fund wasn't over in its own month.
+export const AGE_THRESHOLDS = [3, 9, 18];
 
 // Species per fund family. A fund keeps its species for life: the pick is a
 // hash of its normalized name, never Math.random().
@@ -124,7 +134,9 @@ export const ACTION_LABELS = {
 
 // One fund → one plant. `f` is a computed fund (computeMonth), `flag` its
 // fundFlags entry (or undefined), `txCount` its negative-amount transactions.
-export function plantFor(f, category, flag, ctx, txCount) {
+// `age` is lifetime months on plan (fundAges); it sizes the base the scene
+// draws, never the state.
+export function plantFor(f, category, flag, ctx, txCount, age = 0) {
   const s = f.setup || {};
   const { family, species } = speciesFor(f.fund, s);
   const spent = f.expensed < 0 ? r2(-f.expensed) : 0;
@@ -197,7 +209,7 @@ export function plantFor(f, category, flag, ctx, txCount) {
     fund: f.fund, category, family, species, state, stage, progress: r2(progress),
     caption, phrase, action, jump, type: s.type || 'basic',
     planned: f.planned, carryOver: f.carryOver, spent, leftover: f.leftover, budget,
-    overThisMonth, carriedIn,
+    overThisMonth, carriedIn, age,
   };
 }
 
@@ -274,7 +286,7 @@ export function seasonFor(snapshots) {
       note: 'A growing season — what you manage has grown over the last few months. The light is on your side.' };
   }
   return { kind: 'lean', delta, from: ref.date, to: last.date,
-    note: 'A lean season — they happen to every garden. Keep tending; roots grow deepest in winter.' };
+    note: 'A quieter season — what you manage is down from a few months ago. A big change settles over a season; keep tending.' };
 }
 
 // ---- maturity (permanent; only ever grows) ----
@@ -309,7 +321,80 @@ export function maturityFor(data, todayISO) {
   const fixtures = MATURITY_MILESTONES.filter((m) => monthsTended >= m.months).map((m) => m.id);
   const stones = allTimeHighs(data.aum && data.aum.snapshots);
   const next = MATURITY_MILESTONES.find((m) => monthsTended < m.months) || null;
-  return { monthsTended, monthsClosed, treeSize, fixtures, stones, level: fixtures.length + treeSize, next };
+  const early = earlyFixtures(data, todayISO);
+  const giving = givingMonths(data);
+  return { monthsTended, monthsClosed, treeSize, fixtures, stones, level: fixtures.length + treeSize, next,
+    early, giving: { count: giving.count, lifetime: giving.lifetime, months: giving.months } };
+}
+
+export function fundAges(data, todayISO) {
+  const out = new Map();
+  for (const m of data.months) {
+    if (!monthContext(m.id, todayISO).monthDone) continue;
+    const comp = computeMonth(m);
+    for (const c of comp.categories) {
+      if (c.excludeFromTotals) continue;
+      for (const f of c.funds) {
+        if (f.setup && f.setup.excludeInsights) continue;
+        const k = normFund(f.fund);
+        const e = out.get(k) || { onPlan: 0, present: 0, age: 0 };
+        e.present++;
+        const active = Math.abs(f.planned) > 0.004 || Math.abs(f.carryOver) > 0.004 || Math.abs(f.expensed) > 0.004;
+        if (active && fundSplit(f).overThisMonth >= -0.004) e.onPlan++;
+        out.set(k, e);
+      }
+    }
+  }
+  for (const e of out.values()) e.age = AGE_THRESHOLDS.filter((t) => e.onPlan >= t).length;
+  return out;
+}
+
+// Giving by month across every giving fund in a counted category. Quiet
+// (excludeInsights) giving funds count — the meadow is not the plant layer.
+export function givingMonths(data) {
+  const byMonth = new Map();
+  const months = [];
+  let lifetime = 0;
+  for (const m of data.months) {
+    const comp = computeMonth(m);
+    let given = 0, planned = 0, any = false;
+    for (const c of comp.categories) {
+      if (c.excludeFromTotals) continue;
+      for (const f of c.funds) {
+        if (!isGivingFund(f)) continue;
+        any = true;
+        given = r2(given + givenIn(m, f));
+        planned = r2(planned + f.planned);
+      }
+    }
+    if (!any) continue;
+    byMonth.set(m.id, { given, planned });
+    lifetime = r2(lifetime + given);
+    if (given > 0.004) months.push(m.id);
+  }
+  return { count: months.length, months, lifetime, byMonth };
+}
+
+export const EARLY_FIXTURES = [
+  { id: 'wheelbarrow', label: 'a wheelbarrow' },   // the first month every dollar had a job
+  { id: 'birdbath', label: 'a birdbath' },         // the first month closed
+  { id: 'rainbarrel', label: 'a rain barrel' },    // the first close with every fund on plan and nothing unassigned
+];
+export function earlyFixtures(data, todayISO) {
+  const nowMonth = todayISO.slice(0, 7);
+  let sown = false, closed = false, clean = false;
+  for (const m of data.months) {
+    const comp = computeMonth(m);
+    const isSown = Math.abs(comp.summary.leftToAllocate) <= SOWN_TOLERANCE;
+    if (isSown) sown = true;
+    if (m.id < nowMonth) closed = true;
+    if (!clean && isSown && comp.unassigned.length === 0 && monthContext(m.id, todayISO).monthDone) {
+      const anyOver = comp.categories.some((c) => !c.excludeFromTotals
+        && c.funds.some((f) => !(f.setup && f.setup.excludeInsights) && fundSplit(f).overThisMonth < -0.004));
+      if (!anyOver) clean = true;
+    }
+  }
+  return EARLY_FIXTURES.map((e) => e.id).filter((id) => (id === 'wheelbarrow' && sown) || (id === 'birdbath' && closed) || (id === 'rainbarrel' && clean));
 }
 
 // Consecutive sown months ending at `uptoId` (inclusive).
@@ -376,12 +461,13 @@ export function gardenState(data, { monthId, todayISO }) {
 
   const beds = [];
   const plants = [];
+  const ages = fundAges(data, todayISO);
   comp.categories.forEach((c, ci) => {
     if (c.excludeFromTotals) return; // Work: no plants, same as every other insight surface
     const bed = { category: c.name, ci, plants: [] };
     c.funds.forEach((f, fi) => {
       if (f.setup && f.setup.excludeInsights) return; // quiet funds simply don't grow plants
-      const p = plantFor(f, c.name, flagMap[normFund(f.fund)], ctx, txCount[normFund(f.fund)] || 0);
+      const p = plantFor(f, c.name, flagMap[normFund(f.fund)], ctx, txCount[normFund(f.fund)] || 0, (ages.get(normFund(f.fund)) || { age: 0 }).age);
       p.ci = ci; p.fi = fi;
       bed.plants.push(p); plants.push(p);
     });

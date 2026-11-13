@@ -315,6 +315,49 @@ function symbolMarkup(p, id) {
   return `<symbol id="${id}" overflow="visible">${P.emit()}</symbol>`;
 }
 
+// 1.4.0 (W3): the age base — a layer UNDER the plant, one symbol per family ×
+// age 1–3. Age never changes a plant's height or its symbol; it draws the
+// ground it stands in: fuller, woodier, more rooted. Soil point at 0,0;
+// nothing above y = −20 (the plant's own silhouette starts there), nothing
+// below y = +4, width ≤ 48 units at age 3 (inside PLANT_MIN_GAP).
+function ageSymbol(family, age) {
+  const P = new Painter(age);
+  // Bases are drawn as short stroke paths per wash pass (the fence's technique),
+  // not through leaf()/stem(): a dozen symbols at ≈ 350 B beats ≈ 1.5 KB each.
+  if (family === 'rowcrop') {
+    // a fuller row of small leaf lobes either side of the mound: 3 / 5 / 7, wider each age
+    const n = 1 + 2 * age, w = 10 + age * 3;
+    let d = '';
+    for (let i = 0; i < n; i++) {
+      const x = n1(-w + (i * 2 * w) / (n - 1)), y = -2 - (i % 2) * 2;
+      d += `M${n1(x - 3.5)},${y} q3.5,-7 7,0 `;
+    }
+    P.path(d.trim(), null, .5, 0, LEAF.l, 3.4).path(d.trim(), null, .6, 1, LEAF.m, 1.6);
+  } else if (family === 'shrub') {
+    // a woody crown at the stem foot; then a low skirt of foliage; then two low branches
+    P.path('M-4,0 L-1.5,-7 M4,0 L1.5,-7 M0,0 L0,-8', null, .7, 2, WOOD.d, 1.6).ell(0, -1, 5, 2.6, WOOD.m, .6, 1);
+    if (age >= 2) P.path('M-20,-1 Q-14,-8 -7,-3 Q0,-7 7,-3 Q14,-8 20,-1 Z', LEAF.l, .5, 0).path('M-15,-1 Q-9,-6 -3,-2 Q3,-6 10,-2 Q14,-5 15,-1 Z', LEAF.m, .5, 1);
+    if (age >= 3) P.path('M0,-4 C-7,-8 -12,-10 -18,-12 M0,-5 C6,-9 11,-12 16,-14', null, .75, 1, WOOD.m, 1.8).path('M-22,-13 q4,-5 6,-1 M14,-16 q3,-5 6,-1', null, .6, 2, LEAF.d, 3);
+  } else if (family === 'fruit') {
+    // root flare and a wider trunk base; then a ring of fallen-leaf washes; then a low sucker shoot
+    P.path('M-5,1 L-2,-6 L2,-6 L5,1 Z', WOOD.m, .7, 1).path('M-5,1 L-10,3 M5,1 L10,3 M-2,1 L-4,3.5 M2,1 L4,3.5', null, .7, 2, WOOD.d, 1.4);
+    if (age >= 2) P.path('M-15,2 q4,-3 7,0 M9,2.4 q4,-3 7,0 M1,2.8 q3,-2.5 5.5,0', null, .6, 0, DRY.l, 2.6).path('M-14,2 q3,-2 5,0 M10,2.4 q3,-2 5,0', null, .55, 2, DRY.m, 1.4);
+    if (age >= 3) P.path('M6,0 C7,-5 9,-10 11,-14', null, .8, 1, LEAF.m, 1.3).path('M7,-11 q-4,-4 -1,-6 M12,-13 q4,-4 2,-7', null, .6, 0, LEAF.l, 3);
+  } else {
+    // evergreen: a wider skirt tier; a second; exposed roots
+    P.path('M-16,-2 Q0,0 16,-2 L0,-14 Z', LEAF.l, .5, 0).path('M-13,-2.5 Q0,-1 13,-2.5 L0,-12 Z', LEAF.m, .5, 1);
+    if (age >= 2) P.path('M-22,0 Q0,2 22,0 L0,-16 Z', LEAF.l, .45, 0).path('M-17,-0.5 Q0,1 17,-0.5 L0,-13 Z', LEAF.d, .35, 2);
+    if (age >= 3) P.path('M-2,0 L-9,3 M2,0 L9,3 M0,0 L-4,3.5 M1,0 L5,3.2', null, .75, 2, WOOD.d, 1.6);
+  }
+  return `<symbol id="a-${family}-${age}" overflow="visible">${P.emit()}</symbol>`;
+}
+// The plant's drawing inside its hover-lift group: the age base (if any) under
+// the plant's own symbol, so the lift and the was-* transitions carry both.
+// Age 0 prints exactly what it printed before 1.4.0.
+function liftMarkup(p, id) {
+  return `<g class="lift">${p.age > 0 ? `<use href="#a-${p.family}-${p.age}"/>` : ''}<use href="#${id}"/></g>`;
+}
+
 // One plant instance: outer positioning <g> (attribute transform), inner
 // groups for the CSS state lean / sway (.body) and the hover lift (.lift).
 export function plantMarkup(p, x, y, scale, opts = {}) {
@@ -322,7 +365,7 @@ export function plantMarkup(p, x, y, scale, opts = {}) {
   const cls = ['plant', `st-${p.state}`, `fam-${p.family}`, opts.sway ? 'sway' : '', opts.changed ? `was-${opts.changed}` : ''].filter(Boolean).join(' ');
   return `<g class="${cls}" data-plant="${p.ci}:${p.fi}" transform="translate(${n1(x)},${n1(y)}) scale(${scale})" tabindex="0" role="button" aria-label="${esc(p.fund)} — ${esc(p.phrase || p.state)}">
     <rect class="hit" x="-28" y="-76" width="56" height="84" fill="transparent"/>
-    <g class="body"><g class="lift"><use href="#${id}"/></g></g></g>`;
+    <g class="body">${liftMarkup(p, id)}</g></g>`;
 }
 
 // A LIVE SPRITE: one plant in its own small <svg>, positioned by percent of
@@ -336,8 +379,8 @@ export function plantSprite(entry, sceneHeight, cls = '') {
   const pct = (v, of) => n1((v / of) * 100);
   const classes = ['plant', `st-${p.state}`, `fam-${p.family}`, cls].filter(Boolean).join(' ');
   return `<svg class="garden-live" data-live="${p.ci}:${p.fi}" viewBox="0 0 ${n1(bw)} ${n1(bh)}" style="left:${pct(x - 32 * scale, W)}%;top:${pct(y - 82 * scale, sceneHeight)}%;width:${pct(bw, W)}%" aria-hidden="true">
-    <defs>${filterDefs()}${symbolMarkup(p, id)}</defs>
-    <g transform="translate(${n1(32 * scale)},${n1(82 * scale)}) scale(${scale})"><g class="${classes}"><g class="body"><g class="lift"><use href="#${id}"/></g></g></g></g></svg>`;
+    <defs>${filterDefs()}${symbolMarkup(p, id)}${p.age > 0 ? ageSymbol(p.family, p.age) : ''}</defs>
+    <g transform="translate(${n1(32 * scale)},${n1(82 * scale)}) scale(${scale})"><g class="${classes}"><g class="body">${liftMarkup(p, id)}</g></g></g></svg>`;
 }
 
 /* ---------- fixtures (each a few wash groups, never per-element filters) ---------- */
@@ -365,6 +408,23 @@ function wall(stones) {
   }
   return `<g class="fx fx-wall"><title>The garden wall — ${stones} stone${stones === 1 ? '' : 's'}, one for every new high in what you manage. Stones are never taken away.</title>${P.emit()}${
     stones > shown ? `<text x="${x0 + perRow * (sw + 2) + 4}" y="${y0 + 9}" class="g-label">+${stones - shown}</text>` : ''}</g>`;
+}
+// 1.4.0 (D1): one wildflower per month that gave, on the hill behind the fence.
+// Position and species come from the month id's hash — the same flower every
+// render, never Math.random. Visible cap 36; beyond it the band reads full and
+// a label says how many more.
+const MEADOW_CAP = 36;
+function meadow(ids, symbols) {
+  if (!ids.length) return '';
+  let out = `<g class="fx fx-meadow"><title>The meadow — one wildflower for every month you gave. They stay.</title>`;
+  for (const id of ids.slice(0, MEADOW_CAP)) {
+    const h = hashName(id);
+    const x = 194 + (h % 253), y = HORIZON - 10 - ((h >>> 8) % 21), k = (h >>> 16) % 4;
+    if (!symbols.has(`mf${k}`)) symbols.set(`mf${k}`, meadowSymbol(k));
+    out += `<use href="#mf${k}" x="${x}" y="${y}"/>`;
+  }
+  if (ids.length > MEADOW_CAP) out += `<text class="g-label" x="452" y="${HORIZON - 14}" text-anchor="end">+${ids.length - MEADOW_CAP}</text>`;
+  return out + `</g>`;
 }
 function fence() {
   const P = new Painter(0);
@@ -477,6 +537,27 @@ function fallenLeaves(state, height) {
 // flight path (measured: a scene-sized ambient layer idled at 1.7 cores; a
 // sprite is ~free). Deterministic placement: hash the month id; sky band only.
 // Sprite symbols besides the butterfly (all procedural, tiny).
+// 1.4.0 (W3): the meadow's four wildflowers — daisy, poppy, cornflower,
+// buttercup. Soil point at 0,0; a short stem, one or two petal washes through
+// the Painter (the same three wash classes as everything else), a centre dot.
+function meadowSymbol(k) {
+  const P = new Painter(k);
+  const stalk = (d) => P.path(d, null, .8, 1, LEAF.m, 1.3); // one thin mid-tone stroke — a wildflower stem, not a crop's
+  if (k === 0) {        // daisy: white petals, gold centre
+    stalk('M0,0 C0,-4 0,-8 0,-12');
+    P.circ(0, -13, 3.4, ACCENT.beans.petal.l, .7, 0).circ(0, -13, 2.6, ACCENT.beans.petal.m, .6, 1).circ(0, -13, 1.1, PETAL.c, .8, 2);
+  } else if (k === 1) { // poppy: a red cup, dark heart
+    stalk('M0,0 C0,-4 1,-8 0,-11');
+    P.ell(0, -12, 3.4, 2.8, ACCENT.tomato.fruit.l, .65, 0).circ(0, -12.5, 2.5, ACCENT.tomato.fruit.d, .65, 1).circ(0, -12.5, .9, ACCENT.cherry.fruit.d, .85, 2);
+  } else if (k === 2) { // cornflower: a blue tuft
+    stalk('M0,0 C0,-5 -1,-9 0,-14');
+    P.circ(0, -15, 3.2, ACCENT.rosemary.petal.l, .65, 0).ell(0, -15, 2.6, 2, ACCENT.rosemary.petal.m, .65, 1).circ(0, -15, .9, ACCENT.rosemary.petal.c, .8, 2);
+  } else {              // buttercup: the garden's own petal gold
+    stalk('M0,0 C0,-3 0,-7 0,-10');
+    P.circ(0, -11, 2.8, PETAL.l, .7, 0).circ(0, -11, 2, PETAL.m, .65, 1).circ(0, -11, .8, PETAL.c, .85, 2);
+  }
+  return `<symbol id="mf${k}" overflow="visible">${P.emit()}</symbol>`;
+}
 function beeSymbol() {
   return `<g id="bee">
       <ellipse class="wc3" cx="0" cy="-3" rx="3.2" ry="1.8" fill="#e8eef5" opacity=".7"/>
@@ -595,6 +676,7 @@ export function sceneSvg(state, opts = {}) {
     bed.visible.forEach((p, k) => {
       const id = symbolId(p);
       if (!symbols.has(id)) symbols.set(id, symbolMarkup(p, id));
+      if (p.age > 0) { const aid = `a-${p.family}-${p.age}`; if (!symbols.has(aid)) symbols.set(aid, ageSymbol(p.family, p.age)); }
       const sway = p.state === 'blooming' && swayed < swayBudget && ++swayed > 0;
       const changed = opts.changed && opts.changed.get(`${p.ci}:${p.fi}`);
       const x = startX + k * gap;
@@ -638,7 +720,7 @@ export function sceneSvg(state, opts = {}) {
   if (fx.includes('path')) bg += pathBand(height - EDGE_H + 10);
   bg += tree(state.maturity.treeSize);
   if (fx.includes('hive')) bg += hive();
-  if (fx.includes('fence')) bg += fence();
+  bg += meadow(state.maturity.giving ? state.maturity.giving.months : [], symbols); if (fx.includes('fence')) bg += fence();
   if (fx.includes('arbor')) bg += arbor();
   bg += wall(state.maturity.stones);
   if (fx.includes('pond')) bg += pond();

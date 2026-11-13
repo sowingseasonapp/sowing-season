@@ -7,8 +7,9 @@ import {
   gardenState, plantFor, speciesFor, familyOf, hashName, seasonFor, allTimeHighs,
   stonesLaidIn, maturityFor, sownStreak, layoutBeds, incomeCheckIns, monthContext, recentPerCheckAvg, fundDeposits,
   SPECIES, PLANT_STATES, VISIBLE_PLANT_CAP, MATURITY_MILESTONES, ACTION_LABELS,
+  fundAges, givingMonths, earlyFixtures, AGE_THRESHOLDS, EARLY_FIXTURES,
 } from '../src/garden.js';
-import { sceneSvg, stripSvg, filterDefs, plantSprite, PALETTE_TOKENS, applyPalette, ambientPlan } from '../src/garden-scene.js';
+import { sceneSvg, stripSvg, filterDefs, plantSprite, plantMarkup, PALETTE_TOKENS, applyPalette, ambientPlan } from '../src/garden-scene.js';
 
 let pass = 0, fail = 0;
 const failures = [];
@@ -233,7 +234,7 @@ function makeMonth(id, { categories, income, transactions = [] }) {
   const rising = seasonFor([snap('2026-05-01', 10000), snap('2026-06-01', 10500), snap('2026-08-01', 12000)]);
   check('rising → growing, compares to the snapshot nearest 90 days back', rising.kind === 'growing' && rising.from === '2026-05-01' && rising.delta === 2000, JSON.stringify(rising));
   const falling = seasonFor([snap('2026-05-01', 12000), snap('2026-08-01', 9000)]);
-  check('falling → lean with the winter note', falling.kind === 'lean' && /roots grow deepest in winter/.test(falling.note));
+  check('falling → lean with the quieter-season note', falling.kind === 'lean' && /A big change settles over a season/.test(falling.note));
   check('flat within $100 → steady', seasonFor([snap('2026-05-01', 12000), snap('2026-08-01', 12080)]).kind === 'steady');
   check('flat within 1% → steady', seasonFor([snap('2026-05-01', 100000), snap('2026-08-01', 99200)]).kind === 'steady');
   check('−1.5% of 100k → lean', seasonFor([snap('2026-05-01', 100000), snap('2026-08-01', 98500)]).kind === 'lean');
@@ -257,7 +258,8 @@ function makeMonth(id, { categories, income, transactions = [] }) {
   check('9 months (the owner) → path,fence; 8 closed → tree 3', mk(9).fixtures.join() === 'path,fence' && mk(9).monthsClosed === 8 && mk(9).treeSize === 3, JSON.stringify(mk(9)));
   check('12 → arbor', mk(12).fixtures.includes('arbor') && mk(12).treeSize === 3);
   check('13 months, all closed (Jan 2027) → tree 4', mk(13, [], '2027-01-15').treeSize === 4 && mk(13, [], '2027-01-15').monthsClosed === 13);
-  check('24 → every milestone', mk(24).fixtures.length === MATURITY_MILESTONES.length && mk(24).next === null);
+  check('24 → the first five; next is the greenhouse at 30', mk(24).fixtures.join() === 'path,fence,arbor,pond,hive' && mk(24).next.id === 'greenhouse');
+  check('72 → every milestone, nothing next', mk(72).fixtures.length === MATURITY_MILESTONES.length && mk(72).next === null);
   check('level = fixtures + tree', mk(9).level === 5);
   const before = mk(9, [snap('2026-06-01', 100), snap('2026-07-01', 200)]);
   const after = mk(9, [snap('2026-06-01', 100), snap('2026-07-01', 200), snap('2026-08-01', 50)]);
@@ -405,6 +407,75 @@ function makeMonth(id, { categories, income, transactions = [] }) {
   check('S9: result is rounded to cents', recentPerCheckAvg(months(payMonth('2027-01', 3, [1000, 1000, 1001])), MAYA, '2027-02') === 1000.33);
 }
 
+// ---- 9c. 1.4.0 W2: ages, giving months, early fixtures ----
+{
+  // 20 done months (2024-12 .. 2026-07) plus the open 2026-08 (TODAY = 2026-08-15).
+  const ids = [];
+  for (let y = 2024, m = 12, i = 0; i < 21; i++) { ids.push(`${y}-${String(m).padStart(2, '0')}`); m++; if (m > 12) { m = 1; y++; } }
+  const SLIP_IDX = [2, 7, 13];                  // Slips over its own plan in 3 of the 20 done months
+  const IDLE_IDX = [0, 4, 8, 12, 16];           // Idle planned + spent in 5 of the 20 done months
+  const ZERO_NET_IDX = 10;                      // Tithe: −200 and +200 the same month
+  const build = (opts = {}) => ({ version: 7, settings: {}, aum: { snapshots: [] }, months: ids.map((id, i) => {
+    const idle = IDLE_IDX.includes(i);
+    const funds = [
+      fund('Steady', 100),
+      fund('Slips', 100),
+      fund('Carrying', 100, 'basic', { fund: { carryOver: -500 } }),
+      fund('Idle', idle ? 100 : 0),
+      fund('Quiet', 100, 'basic', { setup: { excludeInsights: opts.quietTithe ? false : true } }),
+      fund('Tithe', 200, 'basic', { fund: { rule: { type: 'tithe', percent: 0.1 } }, setup: { ...(opts.titheGiving != null ? { giving: opts.titheGiving } : {}), ...(opts.quietTithe ? { excludeInsights: true } : {}) } }),
+    ];
+    if (opts.compassion) funds.push(fund('Compassion', 50, 'basic', { setup: { giving: true } }));
+    const d = `${id}-10`;
+    const txs = [
+      tx('Steady', -80, d), tx('Slips', SLIP_IDX.includes(i) ? -130 : -80, d), tx('Carrying', -80, d),
+      tx('Quiet', -80, d), tx('Payroll', -80, d), tx('Tithe', -200, d),
+    ];
+    if (idle) txs.push(tx('Idle', -50, d));
+    if (i === ZERO_NET_IDX) txs.push(tx('Tithe', 200, d, { vendor: 'Refund' }));
+    if (opts.compassion && [1, 5, 9, 15].includes(i)) txs.push(tx('Compassion', -50, d));
+    return makeMonth(id, {
+      income: [{ fund: 'Pay', carryOver: 0, planned: 2000, rule: null, group: 'bonus' }],
+      categories: [
+        { name: 'Everyday', excludeFromTotals: false, funds },
+        { name: 'Work', excludeFromTotals: true, funds: [fund('Payroll', 100)] },
+      ],
+      transactions: txs,
+    });
+  }) });
+  const data = build();
+  const ages = fundAges(data, TODAY);
+  const a = (n) => ages.get(n.toLowerCase());
+  check('W2 ages: Steady → onPlan 20, age 3', a('Steady').onPlan === 20 && a('Steady').age === 3, JSON.stringify(a('Steady')));
+  check('W2 ages: Slips (over 3 of 20) → onPlan 17, age 2', a('Slips').onPlan === 17 && a('Slips').age === 2, JSON.stringify(a('Slips')));
+  check('W2 ages: Carrying (−500 carried, inside its own plan) → onPlan 20, age 3 (D-P4)', a('Carrying').onPlan === 20 && a('Carrying').age === 3, JSON.stringify(a('Carrying')));
+  check('W2 ages: Idle (resting 15 of 20) → onPlan 5, age 1 (Default 1)', a('Idle').onPlan === 5 && a('Idle').present === 20 && a('Idle').age === 1, JSON.stringify(a('Idle')));
+  check('W2 ages: Quiet and Payroll absent from the map', !ages.has('quiet') && !ages.has('payroll'), [...ages.keys()].join(','));
+  const openOver = build(); openOver.months[20].transactions.push(tx('Steady', -500, '2026-08-12'));
+  check('W2 ages: the open month does not count — −500 on Steady in 2026-08 → still onPlan 20', fundAges(openOver, TODAY).get('steady').onPlan === 20);
+  const gm = givingMonths(data);
+  // 21 months carry the Tithe fund: 20 done + the open one. Each gave 200 except the $0-net month → 20 months, 20 × 200 = 4000.00.
+  check('W2 giving: count 20 (21 Tithe months, the $0-net month skipped, the open month counted), lifetime 4000.00', gm.count === 20 && gm.lifetime === 4000 && !gm.months.includes(ids[ZERO_NET_IDX]) && gm.months.includes('2026-08'), JSON.stringify([gm.count, gm.lifetime]));
+  check('W2 giving: byMonth 2026-08 → planned 200, given 200', gm.byMonth.get('2026-08').planned === 200 && gm.byMonth.get('2026-08').given === 200, JSON.stringify(gm.byMonth.get('2026-08')));
+  const plus = givingMonths(build({ compassion: true }));
+  const only = givingMonths(build({ compassion: true, titheGiving: false }));
+  check('W2 giving: a setup.giving basic fund adds its dollars (4200.00, same 20 months); Tithe giving:false → the 4 Compassion months, 200.00', plus.count === 20 && plus.lifetime === 4200 && only.count === 4 && only.lifetime === 200, JSON.stringify([plus.count, plus.lifetime, only.count, only.lifetime]));
+  check('W2 giving: a quiet (excludeInsights) tithe-rule fund still counts — 20', givingMonths(build({ quietTithe: true })).count === 20);
+  // earlyFixtures on a 1-month fixture, then a second month.
+  const one = (planned, txs = [], id = '2026-08') => makeMonth(id, { income: [{ fund: 'Pay', carryOver: 0, planned: 1000, rule: null, group: 'bonus' }], categories: [{ name: 'C', excludeFromTotals: false, funds: [fund('F', planned)] }], transactions: txs });
+  const ef = (months, today = TODAY) => earlyFixtures({ months, aum: { snapshots: [] } }, today).join();
+  check('W2 early: 1 month, open, not sown → nothing; sown → wheelbarrow', ef([one(900)]) === '' && ef([one(1000)]) === 'wheelbarrow', ef([one(900)]) + ' | ' + ef([one(1000)]));
+  check('W2 early: a closed month adds the birdbath; a clean close adds the rain barrel; a fund over its own plan in that month → no rain barrel',
+    ef([one(900, [tx('F', -950, '2026-07-10')], '2026-07'), one(1000)]) === 'wheelbarrow,birdbath'
+    && ef([one(1000, [tx('F', -900, '2026-07-10')], '2026-07'), one(1000)]) === 'wheelbarrow,birdbath,rainbarrel'
+    && ef([one(1000, [tx('F', -1100, '2026-07-10')], '2026-07'), one(1000)]) === 'wheelbarrow,birdbath',
+    [ef([one(900, [tx('F', -950, '2026-07-10')], '2026-07'), one(1000)]), ef([one(1000, [tx('F', -900, '2026-07-10')], '2026-07'), one(1000)]), ef([one(1000, [tx('F', -1100, '2026-07-10')], '2026-07'), one(1000)])].join(' | '));
+  const mat = maturityFor(data, TODAY);
+  check('W2 maturityFor carries early (array), giving.count (number), and no early id in fixtures', Array.isArray(mat.early) && typeof mat.giving.count === 'number' && mat.giving.count === 20 && !mat.fixtures.some((id) => EARLY_FIXTURES.some((e) => e.id === id)) && AGE_THRESHOLDS.join() === '3,9,18', JSON.stringify(mat));
+  const gs = gardenState(data, { monthId: '2026-08', todayISO: TODAY });
+  check('W2 gardenState: plants carry age (Steady 3, Slips 2, Idle 1)', Object.fromEntries(gs.plants.map((p) => [p.fund, p.age])).Steady === 3 && gs.plants.find((p) => p.fund === 'Slips').age === 2 && gs.plants.find((p) => p.fund === 'Idle').age === 1, JSON.stringify(gs.plants.map((p) => [p.fund, p.age])));
+}
+
 // ---- 10. The scene: watercolor rules from §4 ----
 {
   // 64-plant fixture: 8 categories × 8 funds, every family, most states, 2 weeds
@@ -430,16 +501,17 @@ function makeMonth(id, { categories, income, transactions = [] }) {
   const data = { version: 6, settings: {}, months: history.concat([month]), aum: { snapshots: [{ date: '2026-05-01', aum: 100 }, { date: '2026-08-01', aum: 200 }] } };
   const g = gardenState(data, { monthId: '2026-08', todayISO: TODAY });
   check('scene fixture has 64 plants and 2 weeds', g.plants.length === 64 && g.weeds === 2, g.plants.length + '/' + g.weeds);
-  check('scene fixture: 24 months → every fixture, growing season', g.maturity.fixtures.length === MATURITY_MILESTONES.length && g.season.kind === 'growing');
+  check('scene fixture: 24 months → every fixture, growing season', g.maturity.fixtures.join() === 'path,fence,arbor,pond,hive' && g.season.kind === 'growing');
   const { svg, height, symbols } = sceneSvg(g, { monthLabel: 'August 2026' });
-  check('scene markup ≤ 80 KB with 60+ plants', svg.length <= 80 * 1024, (svg.length / 1024).toFixed(1) + ' KB');
+  check('scene markup ≤ 96 KB with 60+ plants', svg.length <= 96 * 1024, (svg.length / 1024).toFixed(1) + ' KB');
+  console.log(`  §10 scene: ${(svg.length / 1024).toFixed(1)} KB, ${symbols} symbols`);
   check('exactly four filter defs (wc1, wc2, wc3, paper)', (svg.match(/<filter id=/g) || []).length === 4 && /id="wc1"/.test(svg) && /id="wc2"/.test(svg) && /id="wc3"/.test(svg) && /id="paper"/.test(svg));
   check('filter defs are the POC defs verbatim', svg.includes(filterDefs()) && /baseFrequency="0\.055" numOctaves="4" seed="7"/.test(filterDefs()) && /seed="23"/.test(filterDefs()) && /seed="41"/.test(filterDefs()));
   const filterAttrs = svg.match(/filter="url\(#[^)]+\)"/g) || [];
   check('the only filter attribute is the paper grain on the background rect', filterAttrs.length === 1 && filterAttrs[0] === 'filter="url(#paper)"', filterAttrs.join(','));
   const noButterfly = svg.replace(/<g id="butterfly">[\s\S]*?<\/g>/, '');
   check('wash classes sit on <g> groups, never on tiny elements', !/<(ellipse|circle|path|rect)[^>]*class="wc[123]"/.test(noButterfly));
-  check('symbols are reused via <use>', symbols > 0 && symbols < 40 && (svg.match(/<use href="#p-/g) || []).length >= 40, symbols + ' symbols');
+  check('symbols are reused via <use>', symbols > 0 && symbols < 60 && (svg.match(/<use href="#p-/g) || []).length >= 40, symbols + ' symbols');
   check('every plant carries its click id and an accessible label', (svg.match(/data-plant="/g) || []).length === (svg.match(/role="button" aria-label="F/g) || []).length);
   check('ambient animation rides on the sprite <svg> element (compositor thread); its drawing keeps an attribute transform; no animated inner <g>',
     /<svg class="garden-ambient flutter"[^>]*>[\s\S]*<g transform="translate\(/.test(svg) && !/<g class="(flutter|leaf-fall)">/.test(svg));
@@ -470,7 +542,7 @@ function makeMonth(id, { categories, income, transactions = [] }) {
     (bm.hit.match(/data-plant="/g) || []).length === bm.placed.length && (bm.hit.match(/data-more="/g) || []).length === (svg.match(/class="more-sign"/g) || []).length && /data-weeds="1"/.test(bm.hit) && (bm.hit.match(/tabindex="0" role="button"/g) || []).length === bm.hits.length && /aria-label="Review 2 unassigned"/.test(bm.hit));
   check('bitmap: hit layer is transparent (no filters, no washes)', !/filter=|class="wc/.test(bm.hit));
   const sp = plantSprite(bm.placed[0], bm.height, 'sway');
-  check('live sprite: own svg with defs, positioned by percent, plant classes inside', /^<svg class="garden-live" data-live="0:0"/.test(sp) && /style="left:[\d.]+%;top:[\d.]+%;width:[\d.]+%"/.test(sp) && (sp.match(/<filter id=/g) || []).length === 4 && /class="plant st-\w+ fam-\w+ sway"/.test(sp) && /<g class="body"><g class="lift"><use href="#p-/.test(sp));
+  check('live sprite: own svg with defs, positioned by percent, plant classes inside', /^<svg class="garden-live" data-live="0:0"/.test(sp) && /style="left:[\d.]+%;top:[\d.]+%;width:[\d.]+%"/.test(sp) && (sp.match(/<filter id=/g) || []).length === 4 && /class="plant st-\w+ fam-\w+ sway"/.test(sp) && /<g class="body"><g class="lift">(<use href="#a-[^"]+"\/>)?<use href="#p-/.test(sp)); // 1.4.0 W3: the fixture's plants are aged, so the base <use> may precede the plant's
   check('ambient sprite: animation class on the HTML svg element, not an inner <g>', /<svg class="garden-ambient flutter"/.test(bm.ambient) && !/<g class="flutter">/.test(bm.ambient));
   check('applyPalette leaves unknown tokens alone', applyPalette('fill="var(--g-leaf-l)" x="var(--g-nope)"', { 'leaf-l': '#111' }) === 'fill="#111" x="var(--g-nope)"');
 
@@ -490,6 +562,77 @@ function makeMonth(id, { categories, income, transactions = [] }) {
 
   const strip = stripSvg([{ fund: 'a', family: 'rowcrop', species: 'tomato', state: 'blooming', stage: 3 }]);
   check('intro/vignette strip uses the same defs and symbols', (strip.match(/<filter id=/g) || []).length === 4 && /<use href="#p-rowcrop-tomato-blooming-0"/.test(strip));
+}
+
+// ---- 12. 1.4.0 W3: meadow and age bases ----
+{
+  const monthIds = (n, y0 = 2026, m0 = 1) => { const out = []; let y = y0, m = m0; for (let i = 0; i < n; i++) { out.push(`${y}-${String(m).padStart(2, '0')}`); m++; if (m > 12) { m = 1; y++; } } return out; };
+  const stateFor = (months) => ({ monthId: '2026-08', beds: [], plants: [], weeds: 0, season: { kind: 'steady', note: '' }, sown: true,
+    maturity: { fixtures: ['path', 'fence'], treeSize: 1, stones: 0, giving: { months, count: months.length, lifetime: 0 } } });
+  const ten = sceneSvg(stateFor(monthIds(10)));
+  check('meadow: 10 giving months → exactly 10 flowers inside fx-meadow, no +N label',
+    (ten.svg.match(/<use href="#mf/g) || []).length === 10 && /<g class="fx fx-meadow"><title>The meadow — one wildflower for every month you gave\. They stay\.<\/title>(<use href="#mf\d" x="\d+" y="\d+"\/>){10}<\/g>/.test(ten.bg) && !/>\+\d+<\/text>/.test(ten.bg),
+    String((ten.svg.match(/<use href="#mf/g) || []).length));
+  const forty = sceneSvg(stateFor(monthIds(40)));
+  check('meadow: 40 ids → 36 flowers and a g-label reading +4', (forty.bg.match(/<use href="#mf/g) || []).length === 36 && /<text class="g-label" x="452" y="136" text-anchor="end">\+4<\/text>/.test(forty.bg));
+  check('meadow: 0 ids → no fx-meadow', !/fx-meadow/.test(sceneSvg(stateFor([])).svg) && !/fx-meadow/.test(sceneSvg({ ...stateFor([]), maturity: { fixtures: [], treeSize: 0, stones: 0 } }).svg));
+  check('meadow: deterministic — same ids → identical bg', sceneSvg(stateFor(monthIds(10))).bg === ten.bg);
+  const flowers = [...forty.bg.matchAll(/<use href="#mf\d" x="(\d+)" y="(\d+)"\/>/g)].map((m) => [Number(m[1]), Number(m[2])]);
+  check('meadow: every flower sits behind the fence — y < 142, x within 194..446', flowers.length === 36 && flowers.every(([x, y]) => y < 150 - 8 && x >= 194 && x <= 446), JSON.stringify(flowers.slice(0, 5)));
+  // 36 ids starting 2026-01 reach all four species (a 2027-01 start misses the daisy — checked while writing the test).
+  const thirtySix = sceneSvg(stateFor(monthIds(36)));
+  check('meadow: all four species across 36 hashed ids (2026-01..2028-12), each symbol once in the defs', ['mf0', 'mf1', 'mf2', 'mf3'].every((k) => (thirtySix.fg.match(new RegExp(`<symbol id="${k}" overflow="visible">`, 'g')) || []).length === 1), String(thirtySix.symbols));
+  check('meadow: fence draws after the meadow (pickets in front)', ten.bg.indexOf('fx-meadow') < ten.bg.indexOf('fx-fence'));
+  // Age 0 is byte-identical to 4978a59: the §1 Groceries plant, output pinned before the change.
+  const groc = { ci: 0, fi: 0, fund: 'Groceries', family: 'rowcrop', species: speciesFor('Groceries', { type: 'pacing' }).species, state: 'thirsty', stage: 2, phrase: 'on pace to go over', age: 0 };
+  const pinned = '<g class="plant st-thirsty fam-rowcrop" data-plant="0:0" transform="translate(100,200) scale(1)" tabindex="0" role="button" aria-label="Groceries — on pace to go over">\n    <rect class="hit" x="-28" y="-76" width="56" height="84" fill="transparent"/>\n    <g class="body"><g class="lift"><use href="#p-rowcrop-lettuce-thirsty-0"/></g></g></g>';
+  check('age 0: plantMarkup is byte-identical to its 4978a59 output', plantMarkup(groc, 100, 200, 1) === pinned && groc.species === 'lettuce', plantMarkup(groc, 100, 200, 1));
+  const aged = plantMarkup({ ...groc, fund: 'Rent', family: 'shrub', species: 'sage', state: 'blooming', stage: 3, phrase: 'finished on plan', age: 3 }, 100, 200, 1.25);
+  check('age 3 shrub: base <use> inside .lift before the plant; hit rect unchanged', /<g class="lift"><use href="#a-shrub-3"\/><use href="#p-shrub-sage-blooming-0"\/><\/g>/.test(aged) && aged.includes('<rect class="hit" x="-28" y="-76" width="56" height="84" fill="transparent"/>'), aged);
+  const sprite = plantSprite({ p: { ci: 1, fi: 2, fund: 'Trip', family: 'fruit', species: 'pear', state: 'growing', stage: 2, phrase: 'on plan', age: 2 }, x: 300, y: 270, scale: 1.05 }, 600);
+  check('plantSprite for an age-2 fruit plant carries id="a-fruit-2" in its defs, base <use> before the plant <use>', /<defs>[\s\S]*<symbol id="a-fruit-2" overflow="visible">[\s\S]*<\/defs>/.test(sprite) && /<g class="lift"><use href="#a-fruit-2"\/><use href="#p-fruit-pear-growing-2"\/><\/g>/.test(sprite));
+  // §13: the all-on fixture — §10's 64 plants over 72 months (history 71 + the open month), Tithe in 36 history months, 45 stones.
+  const cats = [];
+  const types = ['pacing', 'basic', 'fixed', 'savings'];
+  const txs = [];
+  for (let c = 0; c < 8; c++) {
+    const funds = [];
+    for (let f = 0; f < 8; f++) {
+      const name = `F${c}-${f}`;
+      const type = types[(c + f) % 4];
+      funds.push(fund(name, 100, type, type === 'savings' && f % 2 ? { setup: { savingsMode: 'build', monthlyAmount: 50 } } : {}));
+      if (f % 4 === 1) txs.push(tx(name, -30));
+      if (f % 4 === 2) txs.push(tx(name, -120));
+      if (f % 4 === 3 && type === 'pacing') txs.push(tx(name, -90, '2026-08-12'));
+    }
+    cats.push({ name: 'Cat ' + c, excludeFromTotals: false, funds });
+  }
+  txs.push(tx('Nobody', -5), tx('Nobody2', -6));
+  const month = makeMonth('2026-08', { income: [{ fund: 'Pay', carryOver: 0, planned: 6400, rule: null, group: 'bonus' }], categories: cats, transactions: txs });
+  const ids72 = monthIds(72, 2020, 9); // 2020-09 .. 2026-08
+  const history = ids72.slice(0, 71).map((id, i) => {
+    const m = { ...month, id, categories: cats.map((c) => ({ ...c, funds: [...c.funds] })), transactions: [...txs] };
+    if (i >= 35) { // the last 36 history months carry a tithe-rule fund that gives $200
+      m.categories[0] = { ...m.categories[0], funds: [...m.categories[0].funds, fund('Tithe', 200, 'basic', { fund: { rule: { type: 'tithe', percent: 0.1 } } })] };
+      m.transactions.push(tx('Tithe', -200));
+    }
+    return m;
+  });
+  const snaps = Array.from({ length: 45 }, (_, i) => ({ date: ids72[i + 20] + '-01', aum: i + 1 }));
+  const data13 = { version: 7, settings: {}, months: history.concat([month]), aum: { snapshots: snaps } };
+  const g13 = gardenState(data13, { monthId: '2026-08', todayISO: TODAY });
+  const s13 = sceneSvg(g13, { monthLabel: 'August 2026' });
+  const insidePlan = g13.plants.filter((p) => p.leftover >= -0.004);
+  check('§13 all-on: every milestone, 36 giving months, 45 stones, every inside-plan plant at age 3, 64 plants',
+    g13.maturity.fixtures.length === MATURITY_MILESTONES.length && g13.maturity.giving.count === 36 && g13.maturity.stones === 45
+    && insidePlan.length > 0 && insidePlan.every((p) => p.age === 3) && g13.plants.filter((p) => p.leftover < -0.004).every((p) => p.age === 0) && g13.plants.length === 64,
+    JSON.stringify([g13.maturity.fixtures.length, g13.maturity.giving.count, g13.maturity.stones, insidePlan.length, g13.plants.length]));
+  check('§13 all-on: scene markup ≤ 96 KB and symbols < 60 (before Sitting B)', s13.svg.length <= 96 * 1024 && s13.symbols < 60, (s13.svg.length / 1024).toFixed(1) + ' KB, ' + s13.symbols + ' symbols');
+  console.log(`  §13 scene (before Sitting B): ${(s13.svg.length / 1024).toFixed(1)} KB, ${s13.symbols} symbols, ${(s13.svg.match(/<use href="#a-/g) || []).length} age-base uses, ${(s13.svg.match(/<use href="#mf/g) || []).length} flowers`);
+  const bm13 = sceneSvg(g13, { bitmap: true, palette: Object.fromEntries(PALETTE_TOKENS.map((k) => [k, k === 'light-op' ? '0.1' : '#abcdef'])) });
+  check('§13 bitmap: the single <defs> holds each flower and base symbol once; bg slice carries the 36 flowers', (bm13.svg.match(/<defs>/g) || []).length === 1
+    && ['mf0', 'mf1', 'mf2', 'mf3', 'a-rowcrop-3', 'a-shrub-3', 'a-fruit-3', 'a-evergreen-3'].every((k) => (bm13.svg.match(new RegExp(`<symbol id="${k}" `, 'g')) || []).length === 1)
+    && (bm13.svg.match(/<use href="#mf/g) || []).length === 36);
 }
 
 // ---- 11. Acceptance guards: working views stay literal; motion honours reduced-motion ----

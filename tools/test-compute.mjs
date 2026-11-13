@@ -7,6 +7,7 @@ import {
   migrateV6, migrateV7, resyncCarryOvers, aumTotals, upsertSnapshot, aumLastUpdated,
   fundSplit,
   applyChecksRules, incomeTrueUp, setIncomeActual, incomePlanFor, fundDeposits,
+  isGivingFund, givenIn,
 } from '../src/compute.js';
 import { parseBankCsv, buildVendorMap, suggestFund, findDuplicate } from '../src/csv.js';
 import fs from 'fs';
@@ -984,6 +985,33 @@ console.log(`\nCompute engine vs spreadsheet: ${ok} checks passed, ${bad} failed
     t('W0: late and landed exactly → resolved, row kept to clear the flag', rd.length === 1 && rd[0].resolved === true && rd[0].diff === 0);
   }
   console.log(`1.3.0 sitting B: assertions folded into the pass/fail totals above (now ${ok} ok / ${bad} bad)`);
+}
+
+// ---- 1.4.0 W1: isGivingFund / givenIn ----
+{
+  const t = (label, cond, detail = '') => {
+    if (cond) ok++; else { bad++; console.log(`FAIL 1.4.0A ${label}${detail ? ` — ${detail}` : ''}`); }
+  };
+  t('W1: isGivingFund — tithe rule → true; explicit false beats the rule; setup.giving true on a basic fund → true; neither → false; null → false',
+    isGivingFund({ rule: { type: 'tithe' }, setup: {} }) === true
+    && isGivingFund({ rule: { type: 'tithe' }, setup: { giving: false } }) === false
+    && isGivingFund({ rule: null, setup: { giving: true } }) === true
+    && isGivingFund({ rule: null, setup: {} }) === false
+    && isGivingFund(null) === false);
+  const month = { id: '2026-09', transactions: [
+    { fund: 'Tithe', amount: -100 },
+    { fund: 'Tithe', amount: 25 },                                   // a refund
+    { fund: 'tithe ', amount: -10 },                                 // normFund match
+    { fund: 'Tithe', amount: 50, vendor: 'Transfer from Safety Net' }, // transfer by vendor — ignored
+    { fund: 'Tithe', amount: -20, isTransfer: true },                // transfer by flag — ignored
+    { fund: 'Groceries', amount: -40 },                              // another fund — ignored
+  ] };
+  const g = givenIn(month, { fund: 'Tithe' });
+  t('W1: givenIn → 85.00 (−100 + 25 − 10; both transfers and the other fund ignored)', g === 85, String(g));
+  const thirds = givenIn({ transactions: [{ fund: 'T', amount: -33.333 }, { fund: 'T', amount: -33.333 }, { fund: 'T', amount: -33.333 }] }, { fund: 'T' });
+  t('W1: givenIn rounds three −33.333 rows → 100.00 (r2)', thirds === 100, String(thirds));
+  t('W1: givenIn on a month with no transactions key → 0', givenIn({ id: '2026-09' }, { fund: 'Tithe' }) === 0);
+  console.log(`1.4.0 W1: assertions folded into the pass/fail totals above (now ${ok} ok / ${bad} bad)`);
 }
 
 if (!process.env.CHECKING_CSV) {

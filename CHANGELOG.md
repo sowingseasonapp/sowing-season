@@ -9,6 +9,53 @@ so entries before that are dated by when the work happened, not by commit.
 
 ---
 
+### 2026-11-13 — 1.4.0 Sitting A (W1–W3): giving funds in the engine, plant ages, giving months, early fixtures, late milestones, the meadow
+
+First of three sittings from the 1.4.0 work order (`_cowork/work-order-1.4.0.md`, on its eight §0 defaults), from `4978a59`
+(v1.3.1). `compute.js` changes by W1's two exports and their comments and nothing else; `csv.js`, `main.js`, `preload.js`,
+`app.js`, `reports.js`, `charts.js`, `styles.css`, `index.html`, `dev.html` are byte-identical to `4978a59`. `data.version`
+stays 7; nothing new is written (this sitting only *reads* `setup.giving` — Sitting C writes it). Suites: compute **1251 → 1255**
+(+4 W1) · garden **177 → 205** (+1 §6, +14 §9c, +13 §12) · csv 621 · migrate 17 · reports 94, 0 failed. The `## 1.4.0` heading,
+version bump and tag are the release sitting's.
+
+- **W1 — `isGivingFund` and `givenIn` (compute.js).** `isGivingFund(f)`: an explicit `setup.giving` (true | false) wins; otherwise
+  `rule.type === 'tithe'` — the wizard's Tithe fund is giving for free. Independent of `excludeInsights`: a quiet fund can still be a
+  giving fund (Dustin's is). `givenIn(month, fund)`: net giving from one fund in one month — money out minus money back, transfers
+  excluded (Invariant 11), `r2`, positive = gave. Nothing in `compute.js` calls either; Cowork's seven-function identity is unchanged.
+- **W2 — ages, giving months, early fixtures, late milestones, the lean note (garden.js).** A plant's **age** is the lifetime count
+  of done months the fund finished on plan *in its own month* (`fundSplit().overThisMonth ≥ −0.004`, carried-in red ignored — D-P4)
+  *and* was active (planned, carry or spending non-zero — a resting month doesn't age the plant); thresholds `AGE_THRESHOLDS = [3, 9, 18]`
+  → age 0–3. Computed once per `gardenState` in `fundAges`, passed into `plantFor` as a sixth argument; it sizes the base the scene
+  draws, never the state. Work and quiet funds are absent from the map. `givingMonths(data)` → `{ count, months, lifetime, byMonth }`
+  over every month, giving funds in counted categories, quiet ones included; a month counts when its net is > $0.004. `earlyFixtures`
+  (Default 3, derived, nothing stored): wheelbarrow = some month was ever sown, birdbath = a month is closed (the tree's first step
+  arrives with it), rain barrel = some done month was sown with nothing unassigned and no counted, non-quiet fund over its own plan.
+  `MATURITY_MILESTONES` gains greenhouse 30, bench 36, brook 48, willow 60, orchard 72; `maturityFor` returns `early` and
+  `giving: { count, lifetime, months }` beside the old shape (`fixtures` and `level` keep their meaning — early ids are not in them).
+  The lean note is softened (Default 7): *A quieter season — what you manage is down from a few months ago. A big change settles over
+  a season; keep tending.* — `kind: 'lean'` and the rule untouched. On the export copy at 2026-09-28: lifetime given 15,146.59 ·
+  10/10 months · ages 4 / 25 / 25 / 0, matching Cowork's precheck. **Timing:** `gardenState` on persona B (46 months) went from
+  ≈ 1.5 ms to ≈ 12.6 ms — three more `computeMonth` walks over every month (fundAges 4.1, givingMonths 3.4, earlyFixtures 3.0 ms);
+  above the work order's 10 ms, so memoisation in `renderGarden` is Sitting C's call.
+- **W3 — the meadow and the age bases (garden-scene.js).** `meadow(ids, symbols)`: one wildflower per giving month on the hill
+  behind the fence, x and y and species from `hashName(id)` (x 194–446, y HORIZON−30..−10; daisy / poppy / cornflower / buttercup as
+  `#mf0`–`#mf3`), drawn in `bg` before `fence()` so the pickets stand in front, fence or no fence; visible cap 36, then a `g-label`
+  `+N`. Every new symbol goes into the one `symbols` map → the single `<defs>` (foreground SVG, or bitmap mode's own) — no second
+  `<defs>` anywhere. **Age bases:** age never changes a plant's height or symbol; it draws a base layer under it, one symbol per
+  family × age (`#a-<family>-<age>`): rowcrop a row of 3 / 5 / 7 leaf lobes either side of the mound; shrub a woody crown, then a low
+  skirt, then two low branches; fruit a root flare and wider trunk base, then fallen-leaf washes, then a sucker shoot; evergreen a
+  wider skirt tier, a second, then exposed roots. Width ≤ 48 units at age 3, nothing above y = −20 or below y = +4; drawn inside
+  `.lift` before the plant's `<use>` (`liftMarkup`, shared by `plantMarkup` and `plantSprite`) so hover-lift and the was-* transitions
+  carry it; **age 0 prints byte-for-byte what 4978a59 printed** (pinned in §12). Bases are stroke paths per wash pass, not
+  `leaf()`/`stem()`: flowers ≈ 450 B each, bases 250–470 B at age 1 and 600–1,020 B at age 3. **Ceiling 80 → 96 KB** (Default 4):
+  the scene has been rasterised once into a canvas since 1.2.0, so the ceiling guards raster time and the bundle, not live filter
+  regions, and the §10 fixture already sat at 64 KB. §10 now 68.9 KB; the new §13 all-on fixture (72 months, 36 giving months,
+  45 stones, every inside-plan plant at age 3) 83.5 KB with 23 symbols — before Sitting B's fixtures, which have ≈ 12 KB left.
+- **Tests moved by design:** §5's `/roots grow deepest in winter/` → `/A big change settles over a season/`; §6's `24 → every
+  milestone` → `24 → the first five; next is the greenhouse at 30` plus a new `72 → every milestone`; §10's
+  `fixtures.length === MATURITY_MILESTONES.length` → `fixtures.join() === 'path,fence,arbor,pond,hive'`; and §10's live-sprite
+  regex now allows the base `<use>` before the plant's (the fixture's 23 closed months age every inside-plan plant to 3).
+
 ## 1.3.1 — 2026-11-12 — importer: memo-first for type-code banks; release leads
 
 One sitting from the 1.3.1 work order. A patch: no `compute.js`, no `garden.js`, `data.version` stays 7, no new keys, no migration. The importer no longer learns a bank's type-code Description (`DEBIT CARD PURCHASE`, `ACH CREDIT`) as a vendor when the merchant is in a memo column — it learns and matches the memo, and Reports groups those rows by memo too; a `ResizeObserver` notice no longer raises the error toast; the first-launch carry-over notice merges an unseen record and separates expense corrections from income resets; the keep-backup label rule (`[a-z0-9-]{1,40}`) is documented at the handler and both call sites; a footnote under Reports' funds table explains the transfer split; CI actions bumped to v5. Verified by Cowork from copies: 0 regressions on 5,819 stored rows, recap gate 92 / 0.
