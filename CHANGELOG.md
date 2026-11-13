@@ -9,6 +9,10 @@ so entries before that are dated by when the work happened, not by commit.
 
 ---
 
+## 1.3.1 — 2026-11-12 — importer: memo-first for type-code banks; release leads
+
+One sitting from the 1.3.1 work order. A patch: no `compute.js`, no `garden.js`, `data.version` stays 7, no new keys, no migration. The importer no longer learns a bank's type-code Description (`DEBIT CARD PURCHASE`, `ACH CREDIT`) as a vendor when the merchant is in a memo column — it learns and matches the memo, and Reports groups those rows by memo too; a `ResizeObserver` notice no longer raises the error toast; the first-launch carry-over notice merges an unseen record and separates expense corrections from income resets; the keep-backup label rule (`[a-z0-9-]{1,40}`) is documented at the handler and both call sites; a footnote under Reports' funds table explains the transfer split; CI actions bumped to v5. Verified by Cowork from copies: 0 regressions on 5,819 stored rows, recap gate 92 / 0.
+
 ### 2026-11-10 — 1.3.1 Sitting A (W1–W6): memo-first importer for type-code banks, ResizeObserver, carry-fix merge, label rule, Reports footnote, CI v5
 
 The only sitting of the 1.3.1 work order (`_cowork/work-order-1.3.1.md`, approved 2026-11-10 with all four §0 defaults),
