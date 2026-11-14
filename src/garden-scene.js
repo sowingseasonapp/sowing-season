@@ -455,6 +455,96 @@ function hive() {
   P.circ(x + 16, y - 16, 1.4, '#3a2d14', .8, 2).circ(x + 22, y - 22, 1.4, '#3a2d14', .8, 2);
   return `<g class="fx fx-hive"><title>The bee hive — two years tended.</title>${P.emit()}</g>`;
 }
+// 1.4.0 (W4): the three early fixtures — derived from history by earlyFixtures()
+// in garden.js, drawn in the near band (lawn, y 158–186: never a sign, never
+// the path). Each is a handful of washes, strokes and ellipses through one
+// Painter (the ageSymbol technique), ≤ 1,024 B each; the byte caps are tests.
+function wheelbarrow() {
+  // the left edge of the lawn, above the first bed's sign: wheel at the front
+  // (left), tray rising to the right, handles ending near x 72. Inside x 28–74,
+  // y 158–186 — the wheel's centre is HORIZON + 31 so its rim stays at 186.
+  const P = new Painter(1), wx = 46, wy = HORIZON + 31;
+  P.path('M38,178 L56,174 L62,162 L30,166 Z', WOOD.l, .7, 0).path('M40,176 L55,172.5 L59.5,164 L33,167 Z', WOOD.m, .6, 1);
+  P.circ(wx, wy, 5, STONE.m, .6, 1).path(`M${wx - 5},${wy} a5,5 0 1,0 10,0 a5,5 0 1,0 -10,0`, null, .8, 2, WOOD.d, 1.4);
+  P.path('M57,172 L72,165 M56,175 L72,169', null, .8, 2, WOOD.d, 2).path('M58,175 L60,186', null, .8, 2, WOOD.d, 1.6);
+  return `<g class="fx fx-wheelbarrow"><title>The wheelbarrow — the first month every dollar had a job.</title>${P.emit()}</g>`;
+}
+function birdbath() {
+  // right of the path, under the wall's left end: a stone pedestal with its
+  // foot at (665, HORIZON + 34), a 22-wide bowl with its rim at HORIZON + 16.
+  // Inside x 652–678, y 160–186.
+  const P = new Painter(2), x = 665, rim = HORIZON + 16;
+  P.rect(x - 6, HORIZON + 31, 12, 3, STONE.m, .7, 1, 1).rect(x - 3, rim + 2, 6, 13, STONE.l, .7, 0).rect(x - 2, rim + 3, 4, 12, STONE.m, .5, 1);
+  P.path(`M${x - 11},${rim} Q${x},${rim + 9} ${x + 11},${rim} Z`, STONE.m, .65, 1).ell(x, rim, 11, 3, STONE.l, .7, 0);
+  P.ell(x, rim, 9, 2, 'var(--g-water-l)', .6, 1).ell(x - 3, rim - .5, 3, .8, '#ffffff', .6, 2);
+  return `<g class="fx fx-birdbath"><title>The birdbath — the first month you closed.</title>${P.emit()}</g>`;
+}
+function rainBarrel() {
+  // the fence's right end (the rails end at x 452): a 14 × 20 barrel standing
+  // on (466, HORIZON + 2), three hoops, a downspout stub curving up and left
+  // to the top rail at about (452, HORIZON − 12).
+  const P = new Painter(0), x = 459, y = HORIZON - 18;
+  P.rect(x, y, 14, 20, WOOD.m, .8, 1, 2).rect(x + 2, y + 1, 3, 18, WOOD.l, .6, 0, 1);
+  for (const dy of [3, 9.5, 16]) P.rect(x - .5, y + dy, 15, 1.6, WOOD.d, .7, 2, .5);
+  P.path(`M${x + 6},${y} C${x + 6},${y - 6} ${x - 3},${y - 6} 452,${HORIZON - 13}`, null, .8, 2, STONE.d, 2.4);
+  return `<g class="fx fx-rainbarrel"><title>The rain barrel — the first month closed with every fund on plan and nothing unassigned.</title>${P.emit()}</g>`;
+}
+// 1.4.0 (W5): the five late fixtures (MATURITY_MILESTONES 30–72), far band,
+// ≤ 1,536 B each. Positions were measured against the wall (x 630–988, rows
+// y 120–157 at 45 stones), the pond (x 822–938, y 161–191), the border tree's
+// crown (x 50–134, y 31–99 at size 4) and the bed signs (from y 192).
+function greenhouse() {
+  // the far hill above the wall's top row (which starts at y 120): a low gable
+  // with its base at HORIZON − 34 and its ridge at HORIZON − 58, x 698–742.
+  const P = new Painter(1), x0 = 698, x1 = 742, xm = 720, base = HORIZON - 34, eave = HORIZON - 50, ridge = HORIZON - 58;
+  P.path(`M${x0},${base} V${eave} L${xm},${ridge} V${base} Z`, 'var(--g-water-l)', .35, 0).path(`M${xm},${base} V${ridge} L${x1},${eave} V${base} Z`, 'var(--g-water-l)', .35, 0);
+  P.path(`M${x0},${base} V${eave} L${xm},${ridge} L${x1},${eave} V${base} M${xm},${ridge} V${base} M${x0},${base - 8} H${x1}`, null, .8, 1, WOOD.m, 2);
+  P.path(`M${x0 - 2},${eave} L${xm},${ridge - 1} L${x1 + 2},${eave}`, null, .7, 2, WOOD.d, 1.6).rect(xm - 4, base - 12, 8, 12, WOOD.m, .7, 2, 1);
+  return `<g class="fx fx-greenhouse"><title>The greenhouse — two and a half years tended.</title>${P.emit()}</g>`;
+}
+function bench() {
+  // the lawn left of the pond and above the brook's line: a 30 × 5 stone slab
+  // centred on (760, HORIZON + 12) on two legs down to HORIZON + 20, and a
+  // lantern post at x 790 (HORIZON + 20 up to HORIZON − 4) with its box and a
+  // soft glow. The glow is static: .glow animates only under .plant.st-harvest.
+  const P = new Painter(2), cx = 760, cy = HORIZON + 12, px = 790;
+  P.rect(cx - 15, cy - 2.5, 30, 5, STONE.l, .7, 0, 1.5).rect(cx - 14, cy - 1.5, 28, 3, STONE.m, .5, 1, 1);
+  P.rect(cx - 11, cy, 4, 8, STONE.m, .7, 1).rect(cx + 7, cy, 4, 8, STONE.m, .7, 1);
+  P.path(`M${px},${HORIZON + 20} V${HORIZON - 4}`, null, .85, 2, WOOD.d, 2.4).rect(px - 3, HORIZON - 11, 6, 7, WOOD.d, .8, 2, 1);
+  P.raw(`<circle class="glow" cx="${px}" cy="${HORIZON - 8}" r="5" fill="#f4e39a"/>`);
+  return `<g class="fx fx-bench"><title>The bench and lantern — three years tended.</title>${P.emit()}</g>`;
+}
+function brook() {
+  // from the pond's left edge (x 822) into the lawn, ending 12 units short of
+  // the birdbath (x 652). The centreline never goes below HORIZON + 36 — the
+  // bed-sign band starts at HORIZON + 42 — so the stroke's edge clears it.
+  const P = new Painter(0);
+  const d = `M822,${HORIZON + 26} C760,${HORIZON + 28} 700,${HORIZON + 36} 640,${HORIZON + 34}`;
+  P.path(d, null, .55, 0, 'var(--g-water-l)', 8).path(d, null, .5, 1, 'var(--g-water-m)', 4);
+  P.ell(780, HORIZON + 29, 4, 1.2, '#ffffff', .6, 2).ell(690, HORIZON + 35, 4, 1.2, '#ffffff', .6, 2);
+  return `<g class="fx fx-brook"><title>The brook — four years tended.</title>${P.emit()}</g>`;
+}
+function willow() {
+  // the right edge, in front of the wall's end and behind the pond's right end:
+  // trunk from (976, HORIZON + 14) up to HORIZON − 30, three drooping leaf
+  // washes falling to the left over x 950–996, tips to about HORIZON + 10.
+  const P = new Painter(1), x = 976, foot = HORIZON + 14, top = HORIZON - 30;
+  P.path(`M${x - 2.5},${foot} L${x + 2.5},${foot} L${x + 1},${top} L${x - 1},${top} Z`, WOOD.m, .75, 1).path(`M${x},${foot} L${x},${top + 2}`, null, .6, 2, WOOD.d, 1.2);
+  P.ell(x - 15, HORIZON - 9, 17, 5.5, LEAF.l, .5, 0, 75).ell(x - 1, HORIZON - 8, 18, 6, LEAF.m, .55, 1, 82).ell(x + 10, HORIZON - 11, 15, 5.5, LEAF.d, .45, 2, 72);
+  return `<g class="fx fx-willow"><title>The willow — five years tended.</title>${P.emit()}</g>`;
+}
+function orchard() {
+  // the far-left hill behind the border tree: three small fruit-tree
+  // silhouettes at x 16, 44, 72 on a base line of HORIZON − 36, drawn at
+  // scale .55 — a trunk and two crown washes each; no fruit, no glow. The third
+  // stands partly behind the border tree's crown by design.
+  const P = new Painter(0), base = HORIZON - 36;
+  for (const x of [16, 44, 72]) {
+    P.path(`M${x - 1.5},${base} L${x + 1.5},${base} L${x + 1},${base - 10} L${x - 1},${base - 10} Z`, WOOD.m, .7, 1);
+    P.ell(x, base - 16, 8, 7, LEAF.l, .5, 0).ell(x + 1, base - 15, 6, 5, LEAF.m, .55, 1);
+  }
+  return `<g class="fx fx-orchard"><title>The orchard — six years tended.</title>${P.emit()}</g>`;
+}
 function pathBand(height) {
   const P = new Painter(1), x = W / 2;
   const d = `M${x - 10},${height} C${x + 40},${height - 200} ${x - 50},${HORIZON + 140} ${x},${HORIZON + 8}`;
@@ -573,6 +663,35 @@ function fireflySymbol() {
       <circle cx="0" cy="0" r="1.1" fill="#fff9dc"/>
     </g>`;
 }
+// 1.4.0 (W6): wildlife that arrives with the fixtures — literal colours, no
+// classes; each sprite's symbol lives in its own <defs> like the bee's.
+function robinSymbol() {
+  return `<g id="robin">
+      <ellipse cx="0" cy="-3" rx="4" ry="2.8" fill="#8a7a6a"/>
+      <ellipse cx="1" cy="-2.2" rx="2.6" ry="2" fill="#d9744f"/>
+      <circle cx="3.6" cy="-5.6" r="1.9" fill="#8a7a6a"/>
+      <path d="M5.3,-5.8 l2,0.4 l-2,0.6 z" fill="#3a2d14"/>
+      <circle cx="4" cy="-6" r=".4" fill="#1e1a14"/>
+    </g>`;
+}
+function rabbitSymbol() {
+  return `<g id="rabbit">
+      <ellipse cx="0" cy="-4" rx="6" ry="4" fill="#cfc3b2"/>
+      <circle cx="6" cy="-6" r="3" fill="#cfc3b2"/>
+      <ellipse cx="5" cy="-11" rx="1" ry="3" fill="#cfc3b2" transform="rotate(-10 5 -11)"/>
+      <ellipse cx="7.5" cy="-11" rx="1" ry="3" fill="#cfc3b2" transform="rotate(12 7.5 -11)"/>
+      <circle cx="-6" cy="-5" r="1.6" fill="#ffffff"/>
+    </g>`;
+}
+function dragonflySymbol() {
+  return `<g id="dragonfly">
+      <rect x="-8" y="-0.8" width="16" height="1.6" rx=".8" fill="#4f6f8f"/>
+      <ellipse cx="-2" cy="-3" rx="5" ry="1.6" fill="#dfe8f0" opacity=".55" transform="rotate(-20 -2 -3)"/>
+      <ellipse cx="-2" cy="3" rx="5" ry="1.6" fill="#dfe8f0" opacity=".55" transform="rotate(20 -2 3)"/>
+      <ellipse cx="3" cy="-2.6" rx="4" ry="1.4" fill="#dfe8f0" opacity=".55" transform="rotate(-25 3 -2.6)"/>
+      <ellipse cx="3" cy="2.6" rx="4" ry="1.4" fill="#dfe8f0" opacity=".55" transform="rotate(25 3 2.6)"/>
+    </g>`;
+}
 // AMBIENT LIFE (§4): ≤ 3 concurrently animated elements, CSS keyframes only,
 // slow loops, sky and background bands only — never over message cards,
 // tooltips or the status line, never attached to a plant the user must read.
@@ -582,15 +701,24 @@ function fireflySymbol() {
 //   steady  → butterfly only
 //   lean    → one slowly falling leaf over static fallen ones
 //   evening → the butterfly's slot becomes a single drifting firefly glow
+//   1.4.0 W6: a robin on the birdbath, a rabbit at the path's foot, a
+//   dragonfly over the pond — each only once its fixture is there, each
+//   hash-gated, in that order after today's kinds; the pool stays capped at 3
 // Each accent is its OWN small <svg> sprite with the animation class on the
 // element itself (compositor thread — see the PERF note above).
 export function ambientPlan(state, { tod = 'midday', placed = [] } = {}) {
   const h = hashName(state.monthId);
   const evening = tod === 'evening';
+  const fx = (state.maturity && state.maturity.fixtures) || [], early = (state.maturity && state.maturity.early) || [];
   const out = [];
   if (state.season.kind === 'lean') { out.push({ kind: 'leaf' }); return out; }
   out.push({ kind: evening ? 'firefly' : 'butterfly' });
   if (state.season.kind === 'growing' && (h & 0x40) && placed.some((e) => e.p.state === 'blooming')) out.push({ kind: 'bee' });
+  // 1.4.0 W6: wildlife arrives with the fixtures. Hash-gated so a month shows at most
+  // two of the three; the pool is still capped at 3 with today's kinds first.
+  if (early.includes('birdbath') && (h & 0x100)) out.push({ kind: 'robin' });
+  if (fx.includes('path') && (h & 0x200)) out.push({ kind: 'rabbit' });
+  if (fx.includes('pond') && (h & 0x400)) out.push({ kind: 'dragonfly' });
   return out.slice(0, 3);
 }
 function ambientSprite(state, height, opts = {}) {
@@ -613,6 +741,15 @@ function ambientSprite(state, height, opts = {}) {
       const first = (opts.placed || []).find((e) => e.p.state === 'blooming');
       const bx = Math.min(W - 120, Math.max(40, (first ? first.x : 300) + 30 + ((h >> 4) % 40)));
       out += sprite('bee-loop', 60, 30, bx, HORIZON + 6, `<defs>${beeSymbol()}</defs><g transform="translate(10,15)"><use href="#bee"/></g>`);
+    } else if (a.kind === 'robin') {
+      // 1.4.0 W6: on the birdbath's rim (y HORIZON + 16, x 652–678) — the sprite's local y 12 is the rim
+      out += sprite('robin-hop', 30, 20, 650, HORIZON + 4, `<defs>${robinSymbol()}</defs><g transform="translate(15,12)"><use href="#robin"/></g>`);
+    } else if (a.kind === 'rabbit') {
+      // 1.4.0 W6: the path's lower bend, at the garden's edge
+      out += sprite('rabbit-nibble', 36, 24, W / 2 + 20, height - EDGE_H - 10, `<defs>${rabbitSymbol()}</defs><g transform="translate(18,18)"><use href="#rabbit"/></g>`);
+    } else if (a.kind === 'dragonfly') {
+      // 1.4.0 W6: over the pond; the sprite's top stays at HORIZON + 2 (inside the sky/lawn band)
+      out += sprite('dragonfly-dart', 40, 20, 860, HORIZON + 2, `<defs>${dragonflySymbol()}</defs><g transform="translate(20,10)"><use href="#dragonfly"/></g>`);
     }
   }
   return out;
@@ -651,6 +788,7 @@ export function sceneSvg(state, opts = {}) {
   const bedsTop = HORIZON + LAWN_H;
   const height = bedsTop + Math.max(1, rows) * BED_H + EDGE_H;
   const fx = state.maturity.fixtures;
+  const early = state.maturity.early || []; // 1.4.0 W4: hand-built states have no `early`
   const money = opts.money || ((n) => '$' + Math.abs(n).toFixed(2));
   const symbols = new Map();
   const swayBudget = opts.sway ?? 6;
@@ -718,12 +856,20 @@ export function sceneSvg(state, opts = {}) {
     ${skyMarkup(height)}
     <rect class="season-light" x="0" y="0" width="${W}" height="${height}" fill="var(--g-light)" opacity="var(--g-light-op)"/>`;
   if (fx.includes('path')) bg += pathBand(height - EDGE_H + 10);
+  if (fx.includes('orchard')) bg += orchard();                 // 1.4.0 W5: behind the border tree
   bg += tree(state.maturity.treeSize);
+  if (early.includes('wheelbarrow')) bg += wheelbarrow();      // 1.4.0 W4
   if (fx.includes('hive')) bg += hive();
   bg += meadow(state.maturity.giving ? state.maturity.giving.months : [], symbols); if (fx.includes('fence')) bg += fence();
+  if (early.includes('rainbarrel')) bg += rainBarrel();        // 1.4.0 W4: at the fence's right end, in front of it
   if (fx.includes('arbor')) bg += arbor();
+  if (fx.includes('greenhouse')) bg += greenhouse();           // 1.4.0 W5: above the wall, drawn before it
   bg += wall(state.maturity.stones);
+  if (fx.includes('bench')) bg += bench();                     // 1.4.0 W5: the lantern post stands in front of the stones
+  if (fx.includes('willow')) bg += willow();                   // 1.4.0 W5: behind the pond's right end
   if (fx.includes('pond')) bg += pond();
+  if (fx.includes('brook')) bg += brook();                     // 1.4.0 W5: over the pond's edge
+  if (early.includes('birdbath')) bg += birdbath();            // 1.4.0 W4
   bg += `</svg>`;
   let fg = `<svg class="garden-svg garden-fg" ${viewBox} role="img" aria-label="Your garden for ${esc(opts.monthLabel || state.monthId)}">
     <defs>${filterDefs()}${[...symbols.values()].join('')}</defs>`;

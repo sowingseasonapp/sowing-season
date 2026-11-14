@@ -9,7 +9,8 @@ import {
   SPECIES, PLANT_STATES, VISIBLE_PLANT_CAP, MATURITY_MILESTONES, ACTION_LABELS,
   fundAges, givingMonths, earlyFixtures, AGE_THRESHOLDS, EARLY_FIXTURES,
 } from '../src/garden.js';
-import { sceneSvg, stripSvg, filterDefs, plantSprite, plantMarkup, PALETTE_TOKENS, applyPalette, ambientPlan } from '../src/garden-scene.js';
+import { sceneSvg, stripSvg, filterDefs, plantSprite, plantMarkup, PALETTE_TOKENS, applyPalette, ambientPlan, GARDEN_MILESTONE_LABELS } from '../src/garden-scene.js';
+import { computeMonth } from '../src/compute.js'; // 1.4.0 W2(i): to build the shared comps map the way gardenState does
 
 let pass = 0, fail = 0;
 const failures = [];
@@ -470,13 +471,26 @@ function makeMonth(id, { categories, income, transactions = [] }) {
     && ef([one(1000, [tx('F', -900, '2026-07-10')], '2026-07'), one(1000)]) === 'wheelbarrow,birdbath,rainbarrel'
     && ef([one(1000, [tx('F', -1100, '2026-07-10')], '2026-07'), one(1000)]) === 'wheelbarrow,birdbath',
     [ef([one(900, [tx('F', -950, '2026-07-10')], '2026-07'), one(1000)]), ef([one(1000, [tx('F', -900, '2026-07-10')], '2026-07'), one(1000)]), ef([one(1000, [tx('F', -1100, '2026-07-10')], '2026-07'), one(1000)])].join(' | '));
+  // 1.4.0 W0: the rain barrel waits for the close (m.id < nowMonth), like the birdbath — not for monthDone.
+  check('W0 early: a single sown, clean month on its last calendar day is not closed → wheelbarrow only, no rain barrel (d79d049 returned wheelbarrow,rainbarrel)',
+    ef([one(1000, [tx('F', -900, '2026-08-10')])], '2026-08-31') === 'wheelbarrow', ef([one(1000, [tx('F', -900, '2026-08-10')])], '2026-08-31'));
   const mat = maturityFor(data, TODAY);
   check('W2 maturityFor carries early (array), giving.count (number), and no early id in fixtures', Array.isArray(mat.early) && typeof mat.giving.count === 'number' && mat.giving.count === 20 && !mat.fixtures.some((id) => EARLY_FIXTURES.some((e) => e.id === id)) && AGE_THRESHOLDS.join() === '3,9,18', JSON.stringify(mat));
   const gs = gardenState(data, { monthId: '2026-08', todayISO: TODAY });
   check('W2 gardenState: plants carry age (Steady 3, Slips 2, Idle 1)', Object.fromEntries(gs.plants.map((p) => [p.fund, p.age])).Steady === 3 && gs.plants.find((p) => p.fund === 'Slips').age === 2 && gs.plants.find((p) => p.fund === 'Idle').age === 1, JSON.stringify(gs.plants.map((p) => [p.fund, p.age])));
+  // 1.4.0 W2(i): the shared computeMonth pass changes nothing — with and without `comps` the four walks answer identically.
+  const comps = new Map(data.months.map((m) => [m.id, computeMonth(m)]));
+  const gmShape = (g) => JSON.stringify([g.count, g.lifetime, g.months, [...g.byMonth]]);
+  check('W2(i): fundAges / earlyFixtures / givingMonths / maturityFor are identical with and without the shared comps map',
+    JSON.stringify([...fundAges(data, TODAY, comps)]) === JSON.stringify([...fundAges(data, TODAY)])
+    && JSON.stringify(earlyFixtures(data, TODAY, comps)) === JSON.stringify(earlyFixtures(data, TODAY))
+    && gmShape(givingMonths(data, comps)) === gmShape(givingMonths(data))
+    && JSON.stringify(maturityFor(data, TODAY, comps)) === JSON.stringify(maturityFor(data, TODAY))
+    && comps.size === 21);
 }
 
 // ---- 10. The scene: watercolor rules from §4 ----
+let hitPlants10 = 0; // data-plant targets in §10's bitmap hit layer, compared against §13's in §14
 {
   // 64-plant fixture: 8 categories × 8 funds, every family, most states, 2 weeds
   const cats = [];
@@ -519,7 +533,7 @@ function makeMonth(id, { categories, income, transactions = [] }) {
     /<g class="plant [^"]*" data-plant="[^"]+" transform="translate\([^"]+\) scale\([^"]+\)"[^>]*>\s*<rect class="hit"[^>]*\/>\s*<g class="body"><g class="lift">/.test(svg));
   const lean = sceneSvg({ ...g, season: { ...g.season, kind: 'lean' } }).svg;
   check('a growing season gets the butterfly, lean gets one falling leaf over static fallen ones', /garden-ambient flutter/.test(svg) && !/leaf-fall/.test(svg) && /garden-ambient leaf-fall/.test(lean) && !/flutter/.test(lean) && (lean.match(/leaf-fall/g) || []).length === 1 && /class="fallen wc3"/.test(lean) && !/class="fallen/.test(svg));
-  check('≤ 3 concurrently animated ambient elements', ((svg.match(/class="flutter"/g) || []).length + (svg.match(/class="leaf-fall"/g) || []).length) <= 3);
+  check('≤ 3 concurrently animated ambient elements', ['flutter', 'leaf-fall', 'bee-loop', 'firefly', 'robin-hop', 'rabbit-nibble', 'dragonfly-dart'].reduce((a, k) => a + (svg.match(new RegExp(`garden-ambient ${k}"`, 'g')) || []).length, 0) <= 3); // 1.4.0 W6: all seven kinds
   check('bed signs carry the plain category name', /class="g-sign-text" text-anchor="middle">Cat 0</.test(svg));
   const weedsBlock = (svg.match(/<g class="weeds"[\s\S]*?<\/text>/) || [''])[0].replace('class="weeds"', '').replace('data-weeds', '').replace(/g-weed-[lm]/g, '');
   check('weeds label is budget vocabulary and names the destination', /2 unassigned →/.test(svg) && /aria-label="Review 2 unassigned"/.test(svg) && !/stray|weed/i.test(weedsBlock), weedsBlock.slice(0, 120));
@@ -541,6 +555,7 @@ function makeMonth(id, { categories, income, transactions = [] }) {
   check('bitmap: hit layer carries every plant, the "+N" signs and the weeds as focusable buttons',
     (bm.hit.match(/data-plant="/g) || []).length === bm.placed.length && (bm.hit.match(/data-more="/g) || []).length === (svg.match(/class="more-sign"/g) || []).length && /data-weeds="1"/.test(bm.hit) && (bm.hit.match(/tabindex="0" role="button"/g) || []).length === bm.hits.length && /aria-label="Review 2 unassigned"/.test(bm.hit));
   check('bitmap: hit layer is transparent (no filters, no washes)', !/filter=|class="wc/.test(bm.hit));
+  hitPlants10 = (bm.hit.match(/data-plant="/g) || []).length; // 1.4.0 W6 §14: the §13 scene has the same beds
   const sp = plantSprite(bm.placed[0], bm.height, 'sway');
   check('live sprite: own svg with defs, positioned by percent, plant classes inside', /^<svg class="garden-live" data-live="0:0"/.test(sp) && /style="left:[\d.]+%;top:[\d.]+%;width:[\d.]+%"/.test(sp) && (sp.match(/<filter id=/g) || []).length === 4 && /class="plant st-\w+ fam-\w+ sway"/.test(sp) && /<g class="body"><g class="lift">(<use href="#a-[^"]+"\/>)?<use href="#p-/.test(sp)); // 1.4.0 W3: the fixture's plants are aged, so the base <use> may precede the plant's
   check('ambient sprite: animation class on the HTML svg element, not an inner <g>', /<svg class="garden-ambient flutter"/.test(bm.ambient) && !/<g class="flutter">/.test(bm.ambient));
@@ -556,15 +571,19 @@ function makeMonth(id, { categories, income, transactions = [] }) {
     kinds(growing, { tod: 'midday', placed: blooms }) === 'butterfly+bee' && kinds(growing, { tod: 'midday', placed: [] }) === 'butterfly' && kinds({ ...growing, monthId: '2026-07' }, { tod: 'midday', placed: blooms }) === 'butterfly');
   check('ambient: never more than 3, deterministic', [growing, steady, leanSt].every((st) => ambientPlan(st, { tod: 'evening', placed: blooms }).length <= 3) && kinds(growing, { tod: 'golden', placed: blooms }) === kinds(growing, { tod: 'golden', placed: blooms }));
   const ev = sceneSvg({ ...g, season: { ...g.season, kind: 'growing' } }, { tod: 'evening' });
+  // 1.4.0 W6: the three wildlife classes join the alternation; every sprite's top is in the sky/lawn band (< 25%)
+  // except the rabbit, which lives at the path's foot (> 60%) — matched in the same regex pass, not by loosening the bound.
   check('ambient sprites: each its own svg with the animation class on the element; sky/lawn bands only',
-    (ev.ambient.match(/<svg class="garden-ambient (flutter|firefly|bee-loop|leaf-fall)"/g) || []).length === (ev.ambient.match(/<svg /g) || []).length && !/<g class="(flutter|firefly|bee-loop|leaf-fall)">/.test(ev.ambient)
-    && [...ev.ambient.matchAll(/top:([\d.]+)%/g)].every((m) => Number(m[1]) < 25));
+    (ev.ambient.match(/<svg class="garden-ambient (flutter|firefly|bee-loop|leaf-fall|robin-hop|rabbit-nibble|dragonfly-dart)"/g) || []).length === (ev.ambient.match(/<svg /g) || []).length && !/<g class="(flutter|firefly|bee-loop|leaf-fall|robin-hop|rabbit-nibble|dragonfly-dart)">/.test(ev.ambient)
+    && [...ev.ambient.matchAll(/<svg class="garden-ambient ([\w-]+)"[^>]*top:([\d.]+)%/g)].every((m) => (m[1] === 'rabbit-nibble' ? Number(m[2]) > 60 : Number(m[2]) < 25)),
+    [...ev.ambient.matchAll(/<svg class="garden-ambient ([\w-]+)"[^>]*top:([\d.]+)%/g)].map((m) => `${m[1]} ${m[2]}%`).join(', '));
 
   const strip = stripSvg([{ fund: 'a', family: 'rowcrop', species: 'tomato', state: 'blooming', stage: 3 }]);
   check('intro/vignette strip uses the same defs and symbols', (strip.match(/<filter id=/g) || []).length === 4 && /<use href="#p-rowcrop-tomato-blooming-0"/.test(strip));
 }
 
 // ---- 12. 1.4.0 W3: meadow and age bases ----
+let g13, s13, bm13; // the §13 all-on fixture, shared with §14 (1.4.0 W4–W6)
 {
   const monthIds = (n, y0 = 2026, m0 = 1) => { const out = []; let y = y0, m = m0; for (let i = 0; i < n; i++) { out.push(`${y}-${String(m).padStart(2, '0')}`); m++; if (m > 12) { m = 1; y++; } } return out; };
   const stateFor = (months) => ({ monthId: '2026-08', beds: [], plants: [], weeds: 0, season: { kind: 'steady', note: '' }, sown: true,
@@ -611,7 +630,8 @@ function makeMonth(id, { categories, income, transactions = [] }) {
   const month = makeMonth('2026-08', { income: [{ fund: 'Pay', carryOver: 0, planned: 6400, rule: null, group: 'bonus' }], categories: cats, transactions: txs });
   const ids72 = monthIds(72, 2020, 9); // 2020-09 .. 2026-08
   const history = ids72.slice(0, 71).map((id, i) => {
-    const m = { ...month, id, categories: cats.map((c) => ({ ...c, funds: [...c.funds] })), transactions: [...txs] };
+    // 1.4.0 W4 (Sitting B): the first history month is clean — no overspend, nothing unassigned — so the rain barrel is derived, not forced.
+    const m = { ...month, id, categories: cats.map((c) => ({ ...c, funds: [...c.funds] })), transactions: i === 0 ? txs.filter((t) => t.amount !== -120 && !/^Nobody/.test(t.fund)) : [...txs] };
     if (i >= 35) { // the last 36 history months carry a tithe-rule fund that gives $200
       m.categories[0] = { ...m.categories[0], funds: [...m.categories[0].funds, fund('Tithe', 200, 'basic', { fund: { rule: { type: 'tithe', percent: 0.1 } } })] };
       m.transactions.push(tx('Tithe', -200));
@@ -620,19 +640,99 @@ function makeMonth(id, { categories, income, transactions = [] }) {
   });
   const snaps = Array.from({ length: 45 }, (_, i) => ({ date: ids72[i + 20] + '-01', aum: i + 1 }));
   const data13 = { version: 7, settings: {}, months: history.concat([month]), aum: { snapshots: snaps } };
-  const g13 = gardenState(data13, { monthId: '2026-08', todayISO: TODAY });
-  const s13 = sceneSvg(g13, { monthLabel: 'August 2026' });
+  g13 = gardenState(data13, { monthId: '2026-08', todayISO: TODAY });
+  s13 = sceneSvg(g13, { monthLabel: 'August 2026' });
   const insidePlan = g13.plants.filter((p) => p.leftover >= -0.004);
   check('§13 all-on: every milestone, 36 giving months, 45 stones, every inside-plan plant at age 3, 64 plants',
     g13.maturity.fixtures.length === MATURITY_MILESTONES.length && g13.maturity.giving.count === 36 && g13.maturity.stones === 45
     && insidePlan.length > 0 && insidePlan.every((p) => p.age === 3) && g13.plants.filter((p) => p.leftover < -0.004).every((p) => p.age === 0) && g13.plants.length === 64,
     JSON.stringify([g13.maturity.fixtures.length, g13.maturity.giving.count, g13.maturity.stones, insidePlan.length, g13.plants.length]));
-  check('§13 all-on: scene markup ≤ 96 KB and symbols < 60 (before Sitting B)', s13.svg.length <= 96 * 1024 && s13.symbols < 60, (s13.svg.length / 1024).toFixed(1) + ' KB, ' + s13.symbols + ' symbols');
-  console.log(`  §13 scene (before Sitting B): ${(s13.svg.length / 1024).toFixed(1)} KB, ${s13.symbols} symbols, ${(s13.svg.match(/<use href="#a-/g) || []).length} age-base uses, ${(s13.svg.match(/<use href="#mf/g) || []).length} flowers`);
-  const bm13 = sceneSvg(g13, { bitmap: true, palette: Object.fromEntries(PALETTE_TOKENS.map((k) => [k, k === 'light-op' ? '0.1' : '#abcdef'])) });
+  check('§13 all-on: scene markup ≤ 96 KB and symbols < 60 with every fixture drawn', s13.svg.length <= 96 * 1024 && s13.symbols < 60, (s13.svg.length / 1024).toFixed(1) + ' KB, ' + s13.symbols + ' symbols');
+  console.log(`  §13 scene: ${(s13.svg.length / 1024).toFixed(1)} KB, ${s13.symbols} symbols, ${(s13.svg.match(/<use href="#a-/g) || []).length} age-base uses, ${(s13.svg.match(/<use href="#mf/g) || []).length} flowers, fixtures ${[...s13.bg.matchAll(/<g class="fx fx-(wheelbarrow|birdbath|rainbarrel|greenhouse|bench|brook|willow|orchard)"/g)].map((m) => m[1]).join(' ')}`);
+  bm13 = sceneSvg(g13, { bitmap: true, palette: Object.fromEntries(PALETTE_TOKENS.map((k) => [k, k === 'light-op' ? '0.1' : '#abcdef'])) });
   check('§13 bitmap: the single <defs> holds each flower and base symbol once; bg slice carries the 36 flowers', (bm13.svg.match(/<defs>/g) || []).length === 1
     && ['mf0', 'mf1', 'mf2', 'mf3', 'a-rowcrop-3', 'a-shrub-3', 'a-fruit-3', 'a-evergreen-3'].every((k) => (bm13.svg.match(new RegExp(`<symbol id="${k}" `, 'g')) || []).length === 1)
     && (bm13.svg.match(/<use href="#mf/g) || []).length === 36);
+}
+
+// ---- 14. 1.4.0 W4–W6: fixtures and wildlife ----
+{
+  const EARLY = ['wheelbarrow', 'birdbath', 'rainbarrel'], LATE = ['greenhouse', 'bench', 'brook', 'willow', 'orchard'];
+  const has = (s, id) => s.includes(`<g class="fx fx-${id}">`);
+  const idx = (s, id) => s.indexOf(`<g class="fx fx-${id}">`);
+  // Early fixtures via a hand-built state (§12's stateFor shape plus `early`).
+  const stateFor = (early, fixtures = ['path', 'fence']) => ({ monthId: '2026-08', beds: [], plants: [], weeds: 0, season: { kind: 'steady', note: '' }, sown: true,
+    maturity: { fixtures, treeSize: 1, stones: 0, early, giving: { months: [], count: 0, lifetime: 0 } } });
+  const none = sceneSvg(stateFor([])).bg, wb = sceneSvg(stateFor(['wheelbarrow'])).bg, all3 = sceneSvg(stateFor(EARLY, ['path', 'fence', 'pond', 'hive'])).bg;
+  check('W4 early fixtures: early [] → none of the three; [wheelbarrow] → that one only; all three → all three',
+    EARLY.every((id) => !has(none, id)) && has(wb, 'wheelbarrow') && !has(wb, 'birdbath') && !has(wb, 'rainbarrel') && EARLY.every((id) => has(all3, id)),
+    [none, wb, all3].map((s) => EARLY.filter((id) => has(s, id)).join(',')).join(' | '));
+  check('W4 draw order: tree < wheelbarrow < hive; fence < rainbarrel; pond < birdbath',
+    idx(all3, 'tree') < idx(all3, 'wheelbarrow') && idx(all3, 'wheelbarrow') < idx(all3, 'hive') && idx(all3, 'fence') < idx(all3, 'rainbarrel') && idx(all3, 'pond') < idx(all3, 'birdbath') && idx(all3, 'pond') > 0,
+    ['tree', 'wheelbarrow', 'hive', 'fence', 'rainbarrel', 'pond', 'birdbath'].map((id) => `${id} ${idx(all3, id)}`).join(', '));
+  // Late fixtures through gardenState on an n-month fixture ending at the open 2026-08 (two snapshots → a wall to order against).
+  const mk = (n) => {
+    const months = []; let y = 2026, m = 8;
+    for (let i = 0; i < n; i++) { months.unshift(makeMonth(`${y}-${String(m).padStart(2, '0')}`, { categories: [{ name: 'C', excludeFromTotals: false, funds: [fund('F', 1000)] }] })); m--; if (m < 1) { m = 12; y--; } }
+    return sceneSvg(gardenState({ version: 7, settings: {}, months, aum: { snapshots: [{ date: '2026-05-01', aum: 100 }, { date: '2026-08-01', aum: 200 }] } }, { monthId: '2026-08', todayISO: TODAY })).bg;
+  };
+  const late = Object.fromEntries([24, 30, 36, 48, 60, 72].map((n) => [n, mk(n)]));
+  const drawn = (n) => LATE.filter((id) => has(late[n], id)).join(',');
+  check('W5 late fixtures by months tended: 24 → none; 30 → greenhouse; 36 → +bench; 48 → +brook; 60 → +willow; 72 → +orchard',
+    drawn(24) === '' && drawn(30) === 'greenhouse' && drawn(36) === 'greenhouse,bench' && drawn(48) === 'greenhouse,bench,brook' && drawn(60) === 'greenhouse,bench,brook,willow' && drawn(72) === LATE.join(','),
+    [24, 30, 36, 48, 60, 72].map((n) => `${n}: ${drawn(n)}`).join(' | '));
+  const s72 = late[72];
+  check('W5 draw order at 72: orchard < tree; greenhouse < wall; willow < pond < brook',
+    idx(s72, 'orchard') < idx(s72, 'tree') && idx(s72, 'greenhouse') < idx(s72, 'wall') && idx(s72, 'willow') < idx(s72, 'pond') && idx(s72, 'pond') < idx(s72, 'brook') && idx(s72, 'orchard') > 0 && idx(s72, 'wall') > 0,
+    ['orchard', 'tree', 'greenhouse', 'wall', 'willow', 'pond', 'brook'].map((id) => `${id} ${idx(s72, id)}`).join(', '));
+  const benchG = (s72.match(/<g class="fx fx-bench">[\s\S]*?<\/g>(?=<g class="fx|<\/svg>)/) || [''])[0];
+  check('W5 the bench\'s glow is static: <circle class="glow" inside fx-bench, no st-harvest anywhere in the bg', /<circle class="glow" cx="790" cy="142" r="5"/.test(benchG) && !/st-harvest/.test(s72), benchG.slice(-160));
+  // The §13 all-on fixture (from §12) draws all eight; labels, filters, the hit layer, the byte caps.
+  const ALL8 = EARLY.concat(LATE);
+  check('§13 draws all eight new fixture classes', ALL8.every((id) => has(s13.bg, id)), ALL8.filter((id) => !has(s13.bg, id)).join(','));
+  check('GARDEN_MILESTONE_LABELS has greenhouse, bench, brook, willow, orchard (the early ids are Sitting C\'s W8)',
+    LATE.every((id) => typeof GARDEN_MILESTONE_LABELS[id] === 'string' && GARDEN_MILESTONE_LABELS[id].length > 0) && EARLY.every((id) => !(id in GARDEN_MILESTONE_LABELS)), JSON.stringify(GARDEN_MILESTONE_LABELS));
+  const filterAttrs13 = s13.svg.match(/filter="url\(#[^)]+\)"/g) || [];
+  check('§13: the only filter attribute is still the paper grain on the background rect', filterAttrs13.length === 1 && filterAttrs13[0] === 'filter="url(#paper)"', filterAttrs13.join(','));
+  const bare13 = sceneSvg({ ...g13, maturity: { ...g13.maturity, fixtures: [], early: [] } }, { bitmap: true, palette: Object.fromEntries(PALETTE_TOKENS.map((k) => [k, k === 'light-op' ? '0.1' : '#abcdef'])) });
+  check('§13 hit layer is unchanged by fixtures: no fx- in it, the same data-plant count as §10\'s beds, identical with every fixture stripped',
+    !/fx-/.test(bm13.hit) && (bm13.hit.match(/data-plant="/g) || []).length === hitPlants10 && bm13.hit === bare13.hit, `${(bm13.hit.match(/data-plant="/g) || []).length} vs ${hitPlants10}`);
+  // Byte caps, measured as svg-budget.mjs does: the <g class="fx fx-<id>">…</g> group in the bg layer.
+  const fxBytes = (id) => { const m = s13.bg.match(new RegExp(`<g class="fx fx-${id}">[\\s\\S]*?</g>(?=<g class="fx|</svg>)`)); return m ? m[0].length : -1; };
+  const sizes = Object.fromEntries(ALL8.map((id) => [id, fxBytes(id)]));
+  check('W4 byte caps: fx-wheelbarrow / fx-birdbath / fx-rainbarrel each ≤ 1,024 B', EARLY.every((id) => sizes[id] > 0 && sizes[id] <= 1024), EARLY.map((id) => `${id} ${sizes[id]} B`).join(', '));
+  check('W5 byte caps: fx-greenhouse / fx-bench / fx-brook / fx-willow / fx-orchard each ≤ 1,536 B', LATE.every((id) => sizes[id] > 0 && sizes[id] <= 1536), LATE.map((id) => `${id} ${sizes[id]} B`).join(', '));
+  console.log(`  §14 fixture bytes: ${ALL8.map((id) => `${id} ${sizes[id]}`).join(' · ')}`);
+  // Wildlife (W6): month ids are picked by their hash bits over 2026-01..2040-12 (deterministic; the pick asserts one was found).
+  const pick = (pred) => { for (let y = 2026; y <= 2040; y++) for (let m = 1; m <= 12; m++) { const id = `${y}-${String(m).padStart(2, '0')}`; if (pred(hashName(id))) return id; } return null; };
+  const kinds = (st, o) => ambientPlan(st, o).map((a) => a.kind).join('+');
+  const blooms = [{ p: { state: 'blooming' }, x: 300 }];
+  const everyFx = { fixtures: ['path', 'fence', 'arbor', 'pond', 'hive', 'greenhouse', 'bench', 'brook', 'willow', 'orchard'], early: EARLY, treeSize: 4, stones: 45 };
+  const allBits = pick((h) => (h & 0x740) === 0x740), noneBits = pick((h) => (h & 0x700) === 0);
+  const onlyRobin = pick((h) => (h & 0x700) === 0x100), onlyRabbit = pick((h) => (h & 0x700) === 0x200), onlyDragonfly = pick((h) => (h & 0x700) === 0x400);
+  check(`W6 picks found (all bits ${allBits}, none ${noneBits}, robin-only ${onlyRobin}, rabbit-only ${onlyRabbit}, dragonfly-only ${onlyDragonfly}); a lean season on ${allBits} with every fixture → 'leaf' alone`,
+    [allBits, noneBits, onlyRobin, onlyRabbit, onlyDragonfly].every(Boolean) && kinds({ monthId: allBits, season: { kind: 'lean' }, maturity: everyFx }, { tod: 'evening', placed: blooms }) === 'leaf');
+  const steadyOn = (id, maturity) => kinds({ monthId: id, season: { kind: 'steady' }, maturity }, { tod: 'midday', placed: blooms });
+  check(`W6 robin: only with early birdbath and bit 0x100 (${onlyRobin} → butterfly+robin; no birdbath → butterfly; ${noneBits} with birdbath → butterfly)`,
+    steadyOn(onlyRobin, { fixtures: [], early: ['birdbath'] }) === 'butterfly+robin' && steadyOn(onlyRobin, { fixtures: ['path', 'pond'], early: ['wheelbarrow'] }) === 'butterfly' && steadyOn(noneBits, { fixtures: [], early: ['birdbath'] }) === 'butterfly',
+    [steadyOn(onlyRobin, { fixtures: [], early: ['birdbath'] }), steadyOn(onlyRobin, { fixtures: ['path', 'pond'], early: ['wheelbarrow'] }), steadyOn(noneBits, { fixtures: [], early: ['birdbath'] })].join(' | '));
+  check(`W6 rabbit: only with the path and bit 0x200 (${onlyRabbit})`,
+    steadyOn(onlyRabbit, { fixtures: ['path'], early: [] }) === 'butterfly+rabbit' && steadyOn(onlyRabbit, { fixtures: ['fence', 'pond'], early: EARLY }) === 'butterfly' && steadyOn(noneBits, { fixtures: ['path'], early: [] }) === 'butterfly',
+    [steadyOn(onlyRabbit, { fixtures: ['path'], early: [] }), steadyOn(onlyRabbit, { fixtures: ['fence', 'pond'], early: EARLY }), steadyOn(noneBits, { fixtures: ['path'], early: [] })].join(' | '));
+  check(`W6 dragonfly: only with the pond and bit 0x400 (${onlyDragonfly})`,
+    steadyOn(onlyDragonfly, { fixtures: ['pond'], early: [] }) === 'butterfly+dragonfly' && steadyOn(onlyDragonfly, { fixtures: ['path', 'fence'], early: EARLY }) === 'butterfly' && steadyOn(noneBits, { fixtures: ['pond'], early: [] }) === 'butterfly',
+    [steadyOn(onlyDragonfly, { fixtures: ['pond'], early: [] }), steadyOn(onlyDragonfly, { fixtures: ['path', 'fence'], early: EARLY }), steadyOn(noneBits, { fixtures: ['pond'], early: [] })].join(' | '));
+  const full = kinds({ monthId: allBits, season: { kind: 'growing' }, maturity: everyFx }, { tod: 'evening', placed: blooms });
+  check(`W6 pool: a growing evening on ${allBits} with every fixture and blooms → exactly 3, today's kinds first, then robin → rabbit → dragonfly, cut at 3 (firefly+bee+robin)`,
+    full === 'firefly+bee+robin' && ambientPlan({ monthId: allBits, season: { kind: 'growing' }, maturity: everyFx }, { tod: 'evening', placed: blooms }).length === 3
+    && kinds({ monthId: allBits, season: { kind: 'steady' }, maturity: everyFx }, { tod: 'midday', placed: blooms }) === 'butterfly+robin+rabbit', full);
+  check(`W6 a state with no maturity at all answers as today (${allBits}: steady → butterfly; growing evening with blooms → firefly+bee)`,
+    kinds({ monthId: allBits, season: { kind: 'steady' } }, { tod: 'midday', placed: blooms }) === 'butterfly' && kinds({ monthId: allBits, season: { kind: 'growing' } }, { tod: 'evening', placed: blooms }) === 'firefly+bee');
+  // The sprites themselves: positions, own symbol defs, no wash classes (literal colours).
+  const sp = sceneSvg({ ...g13, monthId: allBits, season: { kind: 'steady', note: '' } }, { monthLabel: 'x' }).ambient;
+  check('W6 sprites: robin on the birdbath (left 65%, top HORIZON + 4), rabbit at the path\'s foot (> 60%), each with its own <defs> symbol and no wash class',
+    /<svg class="garden-ambient robin-hop"[^>]*left:65%;top:21\.7%/.test(sp) && /<svg class="garden-ambient rabbit-nibble"[^>]*left:52%;top:(9\d|8\d)(\.\d+)?%/.test(sp)
+    && /<defs><g id="robin">/.test(sp) && /<defs><g id="rabbit">/.test(sp) && !/<g id="(robin|rabbit|dragonfly)">[\s\S]*?class="wc/.test(sp), sp.replace(/<defs>[\s\S]*?<\/defs>/g, '<defs/>'));
 }
 
 // ---- 11. Acceptance guards: working views stay literal; motion honours reduced-motion ----
@@ -657,9 +757,10 @@ function makeMonth(id, { categories, income, transactions = [] }) {
   check('Garden view has no editing controls (only buttons that navigate)', !/<input[^>]*class="money/.test(appSrc.slice(appSrc.indexOf('function renderGarden'), appSrc.indexOf('/* ---------------- Settings view'))));
   const rm = css.slice(css.indexOf('@media (prefers-reduced-motion: reduce)'));
   const rmBlock = rm.slice(0, rm.indexOf('}\n}') + 3);
-  check('prefers-reduced-motion disables every garden animation class', ['.flutter', '.leaf-fall', '.bee-loop', '.firefly', '.plant.sway .body', '.plant.st-harvest .glow', '.garden-live', '.plant .lift'].every((k) => rmBlock.includes(k)), rmBlock.slice(0, 200));
+  check('prefers-reduced-motion disables every garden animation class', ['.flutter', '.leaf-fall', '.bee-loop', '.firefly', '.robin-hop', '.rabbit-nibble', '.dragonfly-dart', '.plant.sway .body', '.plant.st-harvest .glow', '.garden-live', '.plant .lift'].every((k) => rmBlock.includes(k)), rmBlock.slice(0, 200));
   check('continuous plant motion is stepped (cheap to re-raster)', /\.plant\.sway \.body \{ animation: sway [^;]*steps\(/.test(css) && /\.plant\.st-harvest \.glow \{ animation: glow [^;]*steps\(/.test(css));
-  check('ambient loops are slow (6–12 s)', [...css.matchAll(/\.(flutter|leaf-fall|bee-loop|firefly) \{ animation: \w+ (\d+)s/g)].every((m) => Number(m[2]) >= 6 && Number(m[2]) <= 12));
+  const loops = [...css.matchAll(/\.(flutter|leaf-fall|bee-loop|firefly|robin-hop|rabbit-nibble|dragonfly-dart) \{ animation: \w+ (\d+)s/g)];
+  check('ambient loops are slow (6–12 s)', loops.length === 7 && loops.every((m) => Number(m[2]) >= 6 && Number(m[2]) <= 12), loops.map((m) => `${m[1]} ${m[2]}s`).join(', '));
   check('no raster assets beyond the AUM/Budget help screenshots and the derived icon', (() => {
     const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => e.isDirectory() ? walk(`${d}/${e.name}`) : [`${d}/${e.name}`]);
     const rasters = walk(fileURLToPath(new URL('../src', import.meta.url))).filter((f) => /\.(png|jpe?g|gif|webp|bmp)$/i.test(f));

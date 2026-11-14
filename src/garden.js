@@ -312,7 +312,7 @@ export function stonesLaidIn(snapshots, monthId) {
   return n;
 }
 
-export function maturityFor(data, todayISO) {
+export function maturityFor(data, todayISO, comps = null) {
   const monthsTended = data.months.length;
   const nowMonth = todayISO.slice(0, 7);
   const monthsClosed = data.months.filter((m) => m.id < nowMonth).length;
@@ -321,17 +321,18 @@ export function maturityFor(data, todayISO) {
   const fixtures = MATURITY_MILESTONES.filter((m) => monthsTended >= m.months).map((m) => m.id);
   const stones = allTimeHighs(data.aum && data.aum.snapshots);
   const next = MATURITY_MILESTONES.find((m) => monthsTended < m.months) || null;
-  const early = earlyFixtures(data, todayISO);
-  const giving = givingMonths(data);
+  const early = earlyFixtures(data, todayISO, comps);
+  const giving = givingMonths(data, comps);
   return { monthsTended, monthsClosed, treeSize, fixtures, stones, level: fixtures.length + treeSize, next,
     early, giving: { count: giving.count, lifetime: giving.lifetime, months: giving.months } };
 }
 
-export function fundAges(data, todayISO) {
+// comps: optional Map<monthId, computeMonth(m)> shared by gardenState so one render walks history once.
+export function fundAges(data, todayISO, comps = null) {
   const out = new Map();
   for (const m of data.months) {
     if (!monthContext(m.id, todayISO).monthDone) continue;
-    const comp = computeMonth(m);
+    const comp = (comps && comps.get(m.id)) || computeMonth(m);
     for (const c of comp.categories) {
       if (c.excludeFromTotals) continue;
       for (const f of c.funds) {
@@ -351,12 +352,12 @@ export function fundAges(data, todayISO) {
 
 // Giving by month across every giving fund in a counted category. Quiet
 // (excludeInsights) giving funds count — the meadow is not the plant layer.
-export function givingMonths(data) {
+export function givingMonths(data, comps = null) {
   const byMonth = new Map();
   const months = [];
   let lifetime = 0;
   for (const m of data.months) {
-    const comp = computeMonth(m);
+    const comp = (comps && comps.get(m.id)) || computeMonth(m);
     let given = 0, planned = 0, any = false;
     for (const c of comp.categories) {
       if (c.excludeFromTotals) continue;
@@ -380,15 +381,15 @@ export const EARLY_FIXTURES = [
   { id: 'birdbath', label: 'a birdbath' },         // the first month closed
   { id: 'rainbarrel', label: 'a rain barrel' },    // the first close with every fund on plan and nothing unassigned
 ];
-export function earlyFixtures(data, todayISO) {
+export function earlyFixtures(data, todayISO, comps = null) {
   const nowMonth = todayISO.slice(0, 7);
   let sown = false, closed = false, clean = false;
   for (const m of data.months) {
-    const comp = computeMonth(m);
+    const comp = (comps && comps.get(m.id)) || computeMonth(m);
     const isSown = Math.abs(comp.summary.leftToAllocate) <= SOWN_TOLERANCE;
     if (isSown) sown = true;
     if (m.id < nowMonth) closed = true;
-    if (!clean && isSown && comp.unassigned.length === 0 && monthContext(m.id, todayISO).monthDone) {
+    if (!clean && isSown && comp.unassigned.length === 0 && m.id < nowMonth) {
       const anyOver = comp.categories.some((c) => !c.excludeFromTotals
         && c.funds.some((f) => !(f.setup && f.setup.excludeInsights) && fundSplit(f).overThisMonth < -0.004));
       if (!anyOver) clean = true;
@@ -461,7 +462,8 @@ export function gardenState(data, { monthId, todayISO }) {
 
   const beds = [];
   const plants = [];
-  const ages = fundAges(data, todayISO);
+  const comps = new Map(data.months.map((m) => [m.id, computeMonth(m)])); // 1.4.0 W2(i): one pass, shared by the three history walks
+  const ages = fundAges(data, todayISO, comps);
   comp.categories.forEach((c, ci) => {
     if (c.excludeFromTotals) return; // Work: no plants, same as every other insight surface
     const bed = { category: c.name, ci, plants: [] };
@@ -483,7 +485,7 @@ export function gardenState(data, { monthId, todayISO }) {
   const sown = Math.abs(left) <= SOWN_TOLERANCE;
   const checkIns = incomeCheckIns(month, comp, todayISO);
   const season = seasonFor(data.aum && data.aum.snapshots);
-  const maturity = maturityFor(data, todayISO);
+  const maturity = maturityFor(data, todayISO, comps);
 
   // ≤3 encouragement lines, most useful first. Each carries its one-click remedy.
   const messages = [];

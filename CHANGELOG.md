@@ -9,6 +9,66 @@ so entries before that are dated by when the work happened, not by commit.
 
 ---
 
+### 2026-11-13 — 1.4.0 Sitting B (W0, W2(i), W4–W6): early fixtures, late fixtures, wildlife
+
+Second of three sittings from the 1.4.0 work order (the amended W2, W4, W5, W6 items of 2026-11-13), from `d79d049`
+(Sitting A). `garden.js` changes by W0's one token and W2(i)'s optional `comps` parameter and nothing else; `compute.js`,
+`csv.js`, `main.js`, `preload.js`, `app.js`, `reports.js`, `charts.js`, `index.html`, `dev.html`, `spots.js` are byte-identical
+to `d79d049`. `data.version` stays 7; nothing new is written. Suites: garden **205 → 225** (+1 W0, +1 W2(i), +18 §14) ·
+compute 1255 · csv 621 · migrate 17 · reports 94, 0 failed. No tag, no bump.
+
+- **W0 — the rain barrel waits for the close (garden.js).** In `earlyFixtures` the clean-month test keys on `m.id < nowMonth`
+  (the birdbath's rule) instead of `monthContext().monthDone`, so a single sown, clean month on its last calendar day grows the
+  wheelbarrow only — the barrel's title says *closed*. `fundAges` keeps `monthDone` (a plant's age is about its month being over).
+- **W2(i) — one `computeMonth` pass per render (garden.js).** `gardenState` builds `comps = Map<monthId, computeMonth(m)>` once
+  and hands it to `fundAges`, `givingMonths`, `earlyFixtures` and `maturityFor` (which forwards it); each reads
+  `(comps && comps.get(m.id)) || computeMonth(m)`, so the defaults (`null`) leave every direct call and test exactly as before.
+  `gardenState` on persona B (46 months), `performance.now()` median of 9: **≈ 12.6 ms → ≈ 7 ms** (12.3 / 12.9 before, 6.6 / 7.4 after,
+  two runs each). +1 test: the four walks answer identically with and without the map.
+- **W4 — three early fixtures (garden-scene.js, near band, ≤ 1,024 B each).** `wheelbarrow()` 871 B at the lawn's left edge above
+  the first bed's sign (x 30–72, y 162–186; the wheel's centre is HORIZON + 31, not + 34, so its rim stays at 186 and clear of
+  the sign line — the only position nudged from the spec); `birdbath()` 728 B right of the path under the wall's left end
+  (x 654–676, y 163–184, foot at HORIZON + 34, rim at HORIZON + 16); `rainBarrel()` 821 B standing at the fence's right end
+  (x 459–473, y 132–152) with a downspout stub curving up and left to the top rail at (452, HORIZON − 13). Each is one Painter
+  with two or three wash passes, `<g class="fx fx-<id>"><title>…` like every fixture; drawn from `state.maturity.early || []`
+  (hand-built states have no `early`).
+- **W5 — five late fixtures (garden-scene.js, far band, ≤ 1,536 B each)**, measured in Chromium with `getBBox` on the §13 scene:
+  `greenhouse()` 739 B on the far hill at x 696–744, y 91–116 — its base (HORIZON − 34) sits above the wall's top row (y 120);
+  `bench()` 798 B at x 745–795, y 137–170 — slab centred on (760, HORIZON + 12), legs to HORIZON + 20, the lantern post at x 790 in
+  front of the stones with a **static** `<circle class="glow">` (`.glow` animates only under `.plant.st-harvest`);
+  `brook()` 598 B from the pond's left edge (822) to x 640, twelve units short of the birdbath — its centreline never goes
+  below HORIZON + 36 because the bed-sign band starts at HORIZON + 42 (bedsTop + 4), so the 8-wide stroke's edge (≈ 190)
+  clears the signs (192); `willow()` 707 B at x 951–996 with its trunk foot at (976, HORIZON + 14) in the lawn below the wall's
+  bottom row (157) and three drooping washes in front of the wall's last stones; `orchard()` 836 B — three small silhouettes at
+  x 16 / 44 / 72 on HORIZON − 36, the third partly behind the border tree's crown by design. Draw order in `sceneSvg`: orchard →
+  tree → wheelbarrow → hive → meadow → fence → rain barrel → arbor → greenhouse → wall → bench → willow → pond → brook → birdbath.
+  **§13 with every fixture drawn: 90.5 KB of the 96 KB ceiling** (was 83.5 before this sitting; the eight fixtures add 6.1 KB
+  and the sprites ≈ 0.9 KB). The wall trim was not needed and was not used. `GARDEN_MILESTONE_LABELS` already carries the five
+  late ids through `MATURITY_MILESTONES`; the three early ids are Sitting C's W8.
+- **W6 — wildlife tied to fixtures (garden-scene.js, styles.css).** `ambientPlan` adds, after today's kinds and before the cut at 3:
+  a robin when `early` has the birdbath and `hashName(monthId) & 0x100`, a rabbit when `fixtures` has the path and `& 0x200`, a
+  dragonfly when it has the pond and `& 0x400` — so a month shows at most two of the three and the pool stays capped at 3 with
+  today's kinds first (a growing evening with every fixture and every bit set is `firefly+bee+robin`). The lean early return is
+  untouched; a state with no `maturity` answers as before. Sprites through the existing `sprite()` helper, each with its own
+  `<defs>` symbol in literal colours and no wash class: `robin-hop` 30 × 20 at (650, HORIZON + 4) on the birdbath's rim,
+  `rabbit-nibble` 36 × 24 at (W / 2 + 20, height − EDGE_H − 10) at the path's foot (top 90% on the 710-unit scene — the one
+  sprite outside the sky/lawn band, matched by class in §10), `dragonfly-dart` 40 × 20 at (860, HORIZON + 2) over the pond.
+  CSS: `.robin-hop` robinHop 9 s steps(12) (two ±3 / −4 px hops in the last third), `.rabbit-nibble` rabbitNibble 10 s steps(12)
+  (an ear twitch as a ±2° rotate, one −5 px hop mid-loop), `.dragonfly-dart` dragonflyDart 7 s ease-in-out (a figure-eight
+  within ±8 × ±4 px); all three in the `prefers-reduced-motion` block. On the export copy at 2026-09-28 the robin shows in
+  Dec, Jan, Feb, May, Aug and Sep, the rabbit in Dec, Mar, Apr, May, Jun and Aug, July has the butterfly alone.
+- **Tests (test-garden.mjs).** §10's sprite-band check and its ≤ 3 count learn the seven class names (the rabbit must be > 60 %);
+  §11's reduced-motion and slow-loop checks gain the three names; §13's label drops "before Sitting B" and its line prints the
+  fixture classes found; its fixture's first history month is now clean (no overspend, nothing unassigned) so the rain barrel is
+  derived there rather than forced — ages, stones and giving months are unchanged by it. New §14 (18 checks): early fixtures via
+  a hand-built state, draw order, late fixtures by months tended through `gardenState` (24 / 30 / 36 / 48 / 60 / 72), the static
+  bench glow, all eight classes on §13, the labels, the one filter attribute, the hit layer identical with every fixture
+  stripped, the eight byte caps, and six wildlife checks whose month ids are picked by hash bit in the test. The test imports
+  `computeMonth` from `compute.js` to build the W2(i) map the way `gardenState` does.
+- **Verified visually** (dev server, `dist-tmp\scene-140B.html` scratch page and `dist-tmp\scene-13.html`; screens in
+  `_cowork\3yr-sim\pass4\140-verify\screens-B\`): export Sep 2026, persona B Sep 2029 (greenhouse and bench, no brook), the §13
+  all-on scene; every animation name is `none` with the stylesheet's own reduced-motion rules applied.
+
 ### 2026-11-13 — 1.4.0 Sitting A (W1–W3): giving funds in the engine, plant ages, giving months, early fixtures, late milestones, the meadow
 
 First of three sittings from the 1.4.0 work order (`_cowork/work-order-1.4.0.md`, on its eight §0 defaults), from `4978a59`

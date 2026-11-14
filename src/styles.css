@@ -758,6 +758,10 @@ span.neg { color: var(--red); }
   75% { transform: translate(14px, 6px); } 100% { transform: translate(0, 0); }
 }
 .firefly { animation: fireflyDrift 12s ease-in-out infinite; }
+/* 1.4.0 W6: wildlife tied to fixtures — the robin and rabbit are stepped (cheap), the dragonfly darts a short figure-eight. */
+.robin-hop { animation: robinHop 9s steps(12, jump-none) infinite; }
+.rabbit-nibble { animation: rabbitNibble 10s steps(12, jump-none) infinite; }
+.dragonfly-dart { animation: dragonflyDart 7s ease-in-out infinite; }
 @keyframes fireflyDrift {
   0% { transform: translate(0, 0); opacity: .35; } 20% { opacity: .95; } 40% { transform: translate(22px, -12px); opacity: .4; }
   60% { opacity: .9; } 80% { transform: translate(40px, 4px); opacity: .35; } 100% { transform: translate(0, 0); opacity: .35; }
@@ -766,8 +770,21 @@ span.neg { color: var(--red); }
   0% { transform: translate(0, 0) rotate(0); opacity: 0; } 8% { opacity: .8; }
   100% { transform: translate(-60px, 180px) rotate(300deg); opacity: 0; }
 }
+/* 1.4.0 W6 keyframes: two small hops in the last third; an ear twitch and one hop mid-loop; a figure-eight within ±8 × ±4 px. */
+@keyframes robinHop {
+  0%, 64% { transform: translate(0, 0); } 70% { transform: translate(-3px, -4px); } 76% { transform: translate(-3px, 0); }
+  82% { transform: translate(3px, -4px); } 88%, 100% { transform: translate(0, 0); }
+}
+@keyframes rabbitNibble {
+  0%, 20% { transform: translate(0, 0) rotate(0); } 25% { transform: rotate(2deg); } 30% { transform: rotate(-2deg); } 35% { transform: rotate(0); }
+  48% { transform: translate(0, 0); } 52% { transform: translate(0, -5px); } 56%, 100% { transform: translate(0, 0); }
+}
+@keyframes dragonflyDart {
+  0% { transform: translate(0, 0); } 12.5% { transform: translate(6px, -4px); } 25% { transform: translate(8px, 0); } 37.5% { transform: translate(6px, 4px); }
+  50% { transform: translate(0, 0); } 62.5% { transform: translate(-6px, -4px); } 75% { transform: translate(-8px, 0); } 87.5% { transform: translate(-6px, 4px); } 100% { transform: translate(0, 0); }
+}
 @media (prefers-reduced-motion: reduce) {
-  .plant .body, .plant .lift, .plant.sway .body, .plant.st-harvest .glow, .flutter, .leaf-fall, .bee-loop, .firefly, .plant[class*="was-"] .lift, .plant.was-wilting .body, .plant.was-thirsty .body, .garden-live { animation: none !important; transition: none !important; }
+  .plant .body, .plant .lift, .plant.sway .body, .plant.st-harvest .glow, .flutter, .leaf-fall, .bee-loop, .firefly, .robin-hop, .rabbit-nibble, .dragonfly-dart, .plant[class*="was-"] .lift, .plant.was-wilting .body, .plant.was-thirsty .body, .garden-live { animation: none !important; transition: none !important; }
   .firefly { opacity: .8; }
   .leaf-fall { opacity: .5; transform: translate(-30px, 90px); }
 }
