@@ -764,6 +764,10 @@ let g13, s13, bm13; // the §13 all-on fixture, shared with §14 (1.4.0 W4–W6)
   // 1.4.0 W11 (Default 6): the tithe vocabulary follows the file — the gate exists and the two handlers null-guard their element.
   check('W11: fileHasTithe gate present; the exempt and tithePct handlers guard a missing element',
     appSrc.includes('const fileHasTithe = () => data.months.some(hasTitheFund);') && appSrc.includes('if (exempt) exempt.onchange') && appSrc.includes('if (tp) tp.onchange'));
+  // 1.4.0 release (Sitting C W7 lead): an option tick (quiet, giving) commits as 'option' and never re-applies autoPlanned —
+  // a planned amount typed this month survives the tick; a schedule change still re-applies the auto amount.
+  check('W7 lead: option ticks commit as option and never reset a typed planned',
+    appSrc.includes("onChange(res, source)") && appSrc.includes("source === 'option' ? null : autoPlanned(f, month.id)") && appSrc.includes("refresh(true, 'option')"));
   const rm = css.slice(css.indexOf('@media (prefers-reduced-motion: reduce)'));
   const rmBlock = rm.slice(0, rm.indexOf('}\n}') + 3);
   check('prefers-reduced-motion disables every garden animation class', ['.flutter', '.leaf-fall', '.bee-loop', '.firefly', '.robin-hop', '.rabbit-nibble', '.dragonfly-dart', '.plant.sway .body', '.plant.st-harvest .glow', '.garden-live', '.plant .lift'].every((k) => rmBlock.includes(k)), rmBlock.slice(0, 200));

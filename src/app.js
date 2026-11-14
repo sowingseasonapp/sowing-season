@@ -749,7 +749,7 @@ function wireSetupForm(root, opts) {
   // `commit` separates "show me what this would do" (every keystroke) from
   // "save it" (blur / enter / picking a behaviour), so typing 2400 doesn't
   // briefly save 2, then 24, then 240.
-  const refresh = (commit = false) => {
+  const refresh = (commit = false, source = 'schedule') => {
     const carryOver = opts.carryOver || 0;
     const b = root.querySelector('input[name="fsBehavior"]:checked').value;
     $$('.behavior', root).forEach((el) => el.classList.toggle('sel', el.querySelector('input').checked));
@@ -794,13 +794,16 @@ function wireSetupForm(root, opts) {
             : words ? ` <span class="muted">— ${esc(words)}</span>` : ''}`;
       }
     }
-    if (commit && onChange) onChange(res);
+    if (commit && onChange) onChange(res, source);
   };
   $$('input[name="fsBehavior"]', root).forEach((r) => r.onchange = () => refresh(true));
-  $$('#fsFields input, #fsQuiet, #fsGiving', root).forEach((el) => { // 1.4.0 W7: the giving box commits like the quiet box
+  $$('#fsFields input', root).forEach((el) => {
     el.oninput = () => refresh(false);
     el.onchange = () => refresh(true);
   });
+  // 1.4.0 (release): the two option boxes commit as 'option' — the panel keeps
+  // this month's planned as it is for them (a typed override survives a tick).
+  $$('#fsQuiet, #fsGiving', root).forEach((el) => { el.onchange = () => refresh(true, 'option'); });
   refresh(false);
   return refresh;
 }
@@ -1264,12 +1267,14 @@ function renderFundPanel() {
       carryOver: f.carryOver,
       leftover: live.leftover, // W6: a done goal's words read what's actually here
       fund: f, // W9: the result line leads with the user's planned when it overrides the setup
-      onChange: (res) => {
+      onChange: (res, source = 'schedule') => {
         if (res.error) return; // incomplete input — leave the fund as it was
         f.setup = res.setup; // readSetupForm carried catchUp / done over (sitting B)
         for (const m of data.months) for (const c of m.categories) for (const g of c.funds) // 1.4.0 W7: the designation is one fact about the fund, every month (Default 2)
           if (g !== f && normFund(g.fund) === normFund(f.fund) && g.setup) g.setup.giving = res.setup.giving;
-        const auto = autoPlanned(f, month.id);
+        // 1.4.0 (release): a schedule change re-applies the auto amount, as always;
+        // an option tick (quiet, giving) changes no number — a typed planned stays.
+        const auto = source === 'option' ? null : autoPlanned(f, month.id);
         if (auto != null) { f.rule = null; f.planned = auto; }
         recalcRules(month); markDirty(`the setup change on "${f.fund}"`);
         render(); // the panel lives outside #main, so it survives the re-render

@@ -9,6 +9,14 @@ so entries before that are dated by when the work happened, not by commit.
 
 ---
 
+### 2026-11-14 — 1.4.0 release sitting: option ticks keep a typed planned
+
+Sitting C's W7 lead, fixed before the release (Dustin, 2026-11-14). `showFundPanel`'s `onChange` re-applied `autoPlanned` on every
+setup commit, so ticking This is a giving fund — or the older Exclude from Review alerts box — on a fixed / pacing fund whose planned
+was typed this month reset it to the auto amount. `wireSetupForm`'s `refresh` now carries a `source` argument (`'schedule'` by default,
+`'option'` from the two boxes) through to `onChange`, and the one condition `source === 'option' ? null : autoPlanned(f, month.id)`
+leaves a typed planned alone for a tick while a schedule change re-applies the auto amount exactly as before. `app.js` only; garden **227 → 228**.
+
 ### 2026-11-14 — 1.4.0 Sitting C (W0, W7–W11): giving designation, Reports Giving tab, recap line, maturity line, tithe vocabulary
 
 Third of three sittings from the 1.4.0 work order, from `b1f80bb` (Sitting B). Files: `src/app.js`, `src/reports.js`,
