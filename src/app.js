@@ -4,7 +4,7 @@ import {
   autoPlanned, isOverridden, fundFlags, savingsMonthly, migrateV5,
   migrateV6, migrateV7, resyncCarryOvers, aumTotals, upsertSnapshot, aumLastUpdated,
   MONTH_NAMES, nextMonthId, monthDiff, monthAdd, fundSplit,
-  incomeTrueUp, setIncomeActual, incomePlanFor,
+  incomeTrueUp, setIncomeActual, incomePlanFor, isGivingFund,
 } from './compute.js';
 import { gardenState, incomeCheckIns, stonesLaidIn, sownStreak, monthContext, recentPerCheckAvg, fundDeposits } from './garden.js';
 import { sceneSvg, stripSvg, plantSprite, butterflySymbol, PALETTE_TOKENS, GARDEN_MILESTONE_LABELS } from './garden-scene.js';
@@ -13,7 +13,7 @@ import {
   suggestStarterFunds, starterFundFor, normVendor, isBoilerplate,
 } from './csv.js';
 import { groupedBars, barList, lineArea } from './charts.js';
-import { monthReport, yearReport, yearsPresent, defaultReportMonth } from './reports.js';
+import { monthReport, yearReport, yearsPresent, defaultReportMonth, givingReport } from './reports.js';
 import { spotTx, spotBudget, spotAum } from './spots.js';
 
 // Chart series: garden pigments, same CVD-safe blue↔orange axis (see --viz-s1/s2
@@ -348,6 +348,10 @@ function titheSum(month) {
 function hasTitheFund(month) {
   return month.categories.some((c) => c.funds.some((f) => f.rule && f.rule.type === 'tithe'));
 }
+// 1.4.0 W11 (Default 6, #25): the tithe vocabulary follows the file — its surfaces
+// (nine, all in app.js) show only while some month has a tithe-rule fund. The data (titheAmount,
+// titheExempt, tithePercent) is untouched and the surfaces come back with the fund.
+const fileHasTithe = () => data.months.some(hasTitheFund);
 function titheMovedNote(before, after) {
   return Math.abs(after - before) > 0.004 ? `Tithe moved ${money(before)} → ${money(after)} with that change. Ctrl+Z undoes both.` : '';
 }
@@ -628,6 +632,7 @@ function readSetupForm(root, monthId, prev = null) {
   const b = root.querySelector('input[name="fsBehavior"]:checked').value;
   const s = blankSetup();
   s.excludeInsights = $('#fsQuiet', root).checked;
+  s.giving = $('#fsGiving', root).checked; // 1.4.0 W7: always written, true or false — false wins over a tithe rule
   if (b === 'pacing') s.type = 'pacing';
   else if (b === 'fixed') {
     const n = parseInt($('#fsN', root).value, 10);
@@ -692,7 +697,7 @@ function fixedWords(s, carryOver, monthId) {
   return `${money(s.totalAmount)} every ${s.everyMonths} month${s.everyMonths === 1 ? '' : 's'}${due}${aside}, so ${money(auto)} a month.`;
 }
 
-function setupFormHtml(setup, monthId) {
+function setupFormHtml(setup, monthId, rule = null) {
   const s = setup || blankSetup();
   const b = behaviorOf(s);
   return `
@@ -727,6 +732,9 @@ function setupFormHtml(setup, monthId) {
     <div class="setup-options">
       <label title="This fund never triggers Needs Attention or Available to Move, and shows no pace status. Numbers still compute normally — it just stays quiet.">
         <input type="checkbox" id="fsQuiet" ${s.excludeInsights ? 'checked' : ''}> Exclude from Review alerts
+      </label>
+      <label title="Counts what you give over time: a Giving tab on the Reports page, and a wildflower in the garden's meadow for every month you gave. The Tithe fund from setup is one already.">
+        <input type="checkbox" id="fsGiving" ${isGivingFund({ setup: s, rule }) ? 'checked' : ''}> This is a giving fund
       </label>
     </div>`;
 }
@@ -789,7 +797,7 @@ function wireSetupForm(root, opts) {
     if (commit && onChange) onChange(res);
   };
   $$('input[name="fsBehavior"]', root).forEach((r) => r.onchange = () => refresh(true));
-  $$('#fsFields input, #fsQuiet', root).forEach((el) => {
+  $$('#fsFields input, #fsQuiet, #fsGiving', root).forEach((el) => { // 1.4.0 W7: the giving box commits like the quiet box
     el.oninput = () => refresh(false);
     el.onchange = () => refresh(true);
   });
@@ -1049,15 +1057,15 @@ function renderFundPanel() {
                 <label title="For hourly, tips or commission pay. The per-check amount becomes an estimate — plan low, and the month review offers a one-tap update to what actually arrived.">
                   <input type="checkbox" id="pnlChkVar" ${chk.variable ? 'checked' : ''}> Per-check amount varies <span class="muted">(hourly, tips, commission)</span></label>
               </div>
-              <div class="modal-row"><label style="width:auto" title="Per-check income the tithe is based on (before insurance/retirement deductions)">Titheable per check</label>
+              ${fileHasTithe() ? `<div class="modal-row"><label style="width:auto" title="Per-check income the tithe is based on (before insurance/retirement deductions)">Titheable per check</label>
                 <input class="money" id="pnlChkTithe" style="width:110px;flex:none" value="${money(chk.titheAmount || 0)}" title="Per-check income the tithe is based on (before insurance/retirement deductions)${
-                  chk.variable ? '. If your pay varies, use a typical gross check — the tithe is an estimate.' : ''}"></div>
+                  chk.variable ? '. If your pay varies, use a typical gross check — the tithe is an estimate.' : ''}"></div>` : ''}
             </div>
             <p class="setup-result" id="pnlIncCalc"></p>
-            <div class="setup-options">
+            ${fileHasTithe() ? `<div class="setup-options">
               <label title="This fund's income doesn't count toward the tithe base."><input type="checkbox" id="pnlExempt" ${f.titheExempt ? 'checked' : ''}> Exempt from tithe</label>
-            </div>`
-          : setupFormHtml(f.setup, month.id)}
+            </div>` : ''}`
+          : setupFormHtml(f.setup, month.id, f.rule)}
         </section>
 
         <section class="panel-sec">
@@ -1177,7 +1185,7 @@ function renderFundPanel() {
         $('#pnlIncCalc', wrap).innerHTML = `Planned this month: <b>${money(f.planned)}</b> <span class="muted">· trued up at close — the paycheck fields drive next month, not this one.</span>`;
       } else {
         $('#pnlIncCalc', wrap).innerHTML = t === 'standard' && c
-          ? `Planned this month: <b>${money(r2((c.count || 0) * (c.amount || 0)))}</b> <span class="muted">· tithed on ${money(r2((c.count || 0) * (c.titheAmount || 0)))}</span>`
+          ? `Planned this month: <b>${money(r2((c.count || 0) * (c.amount || 0)))}</b>${fileHasTithe() ? ` <span class="muted">· tithed on ${money(r2((c.count || 0) * (c.titheAmount || 0)))}</span>` : ''}` // 1.4.0 W11: the tithed-on clause follows the file too
           : `Planned this month: <b>you set it</b> <span class="muted">— enter the amount you expect.</span>`;
       }
       if (previewTithe != null && Math.abs(previewTithe - titheSum(month)) > 0.004) {
@@ -1243,7 +1251,7 @@ function renderFundPanel() {
       recalcRules(month); markDirty(`the estimate update on "${f.fund}"`); render();
       toast(`Estimated per check set to ${money(chkAvg)}.`);
     };
-    $('#pnlExempt', wrap).onchange = (e) => {
+    const exempt = $('#pnlExempt', wrap); if (exempt) exempt.onchange = (e) => { // 1.4.0 W11: absent without a tithe fund
       const titheBefore = titheSum(month);
       f.titheExempt = e.target.checked; recalcRules(month); markDirty(`the tithe exemption change on "${f.fund}"`); render();
       const moved = titheMovedNote(titheBefore, titheSum(month)); // W10
@@ -1259,6 +1267,8 @@ function renderFundPanel() {
       onChange: (res) => {
         if (res.error) return; // incomplete input — leave the fund as it was
         f.setup = res.setup; // readSetupForm carried catchUp / done over (sitting B)
+        for (const m of data.months) for (const c of m.categories) for (const g of c.funds) // 1.4.0 W7: the designation is one fact about the fund, every month (Default 2)
+          if (g !== f && normFund(g.fund) === normFund(f.fund) && g.setup) g.setup.giving = res.setup.giving;
         const auto = autoPlanned(f, month.id);
         if (auto != null) { f.rule = null; f.planned = auto; }
         recalcRules(month); markDirty(`the setup change on "${f.fund}"`);
@@ -2289,8 +2299,9 @@ function renderBudget(main) {
 
   // Income sections: Standard (paychecks) and Bonus (everything else)
   const incomeGroups = [
-    { key: 'standard', title: 'Standard Income', hint: 'Paychecks or a main source of income. Planned = checks × per-check amount. The tithe uses the titheable amount (pay before insurance/retirement deductions), not the deposited amount. If your pay varies, open the fund and turn on "amount varies" — plan low, and the Review button will offer to match the real amount once checks arrive.' },
-    { key: 'bonus', title: 'Extra Income', hint: 'Inconsistent income you want to track — gifts, reimbursements, transfers. Its planned amount counts toward the tithe unless the fund is marked exempt.' },
+    // 1.4.0 W11: the tithe sentence in each hint exists only while the file has a tithe fund.
+    { key: 'standard', title: 'Standard Income', hint: 'Paychecks or a main source of income. Planned = checks × per-check amount.' + (fileHasTithe() ? ' The tithe uses the titheable amount (pay before insurance/retirement deductions), not the deposited amount.' : '') + ' If your pay varies, open the fund and turn on "amount varies" — plan low, and the Review button will offer to match the real amount once checks arrive.' },
+    { key: 'bonus', title: 'Extra Income', hint: 'Inconsistent income you want to track — gifts, reimbursements, transfers.' + (fileHasTithe() ? ' Its planned amount counts toward the tithe unless the fund is marked exempt.' : '') },
   ];
   // Transactions per fund this month (for the count column).
   const txCounts = {};
@@ -2322,13 +2333,13 @@ function renderBudget(main) {
       // 1.3.0 I1: a fund trued up at close says so — the checks fields no longer
       // describe this month's planned.
       const capBits = [];
-      if (isStd && chk.count) capBits.push(`${chk.count} × ${money(chk.amount)}${chk.variable ? ' est.' : ''}${chk.titheAmount && Math.abs(chk.titheAmount - chk.amount) > 0.004
-            ? ` · titheable ${money(chk.titheAmount)}` : ''}`);
+      if (isStd && chk.count) capBits.push(`${chk.count} × ${money(chk.amount)}${chk.variable ? ' est.' : ''}${chk.titheAmount && Math.abs(chk.titheAmount - chk.amount) > 0.004 && fileHasTithe()
+            ? ` · titheable ${money(chk.titheAmount)}` : ''}`); // 1.4.0 W11: the titheable clause follows the file too
       if (f.truedUp) capBits.push(`trued up to ${money(f.planned)} at close`);
       const caption = capBits.length ? `<div class="fund-note">${capBits.join(' · ')}</div>` : '';
       body += `<tr>
-        <td><a href="#" class="fund-name" data-inc-setup="${i}" title="Open this fund — income type, tithe, carry-over, paycheck">${esc(f.fund)}</a>${
-          f.titheExempt ? '<span class="rule-chip chip-muted" title="Exempt from tithe — not counted in the tithe base.">no tithe</span>' : ''}${
+        <td><a href="#" class="fund-name" data-inc-setup="${i}" title="Open this fund — income type, ${fileHasTithe() ? 'tithe, ' : ''}carry-over, paycheck">${esc(f.fund)}</a>${
+          f.titheExempt && fileHasTithe() ? '<span class="rule-chip chip-muted" title="Exempt from tithe — not counted in the tithe base.">no tithe</span>' : ''}${
           isClosedMonth && f.lateAtClose ? `<span class="rule-chip chip-muted" title="Marked late when ${monthName(month.id)} closed — the shortfall carries into ${monthName(nextMonthId(month.id))}, pending.">late</span>` : ''}${
           isStd && !(f.rule && f.rule.type === 'checks')
             ? '<span class="rule-chip chip-warn" title="Planned no longer follows the paycheck numbers — it was typed by hand. Open the fund (click its name) to reconnect it.">set by hand</span>' : ''}${txChip(f)}${caption}</td>
@@ -3282,7 +3293,7 @@ function renderImport(main) {
  * and the range live in module variables — never in data. Every name that
  * reaches the page goes through esc(); every number through money().
  */
-const WIN_ICON = { pacing: ['rosette', 'win'], cats: ['bloom'], ahead: ['ni-chart'], goal: ['target'], stone: ['stone'], logged: ['ledger'] };
+const WIN_ICON = { pacing: ['rosette', 'win'], cats: ['bloom'], ahead: ['ni-chart'], goal: ['target'], stone: ['stone'], logged: ['ledger'], giving: ['basket'] }; // 1.4.0 W10: giving → basket (no leaf in the sprite)
 const YEAR_WIN_ICON = { allocated: ['basket'], onplan: ['rosette'], grew: ['bloom'] };
 // A goal that hit its target keeps the recap's 'goal reached' alt — the module
 // carries a `hit` flag on that win, so no string is re-parsed here.
@@ -3307,13 +3318,18 @@ function renderReports(main) {
   // qualify every column/chart label with the year ("Dec '25").
   const multiYear = new Set(data.months.map((m) => m.id.slice(0, 4))).size > 1;
   const shortLabel = (id) => MONTH_SHORT[Number(id.slice(5, 7)) - 1] + (multiYear ? ` '${id.slice(2, 4)}` : '');
+  // 1.4.0 W9: the Giving tab exists only while some month has a giving fund; if
+  // the last one was unticked while the tab was open, fall back — no error.
+  const giving = givingReport(data, today);
+  if (reportsTab === 'giving' && !giving) reportsTab = 'month';
   const mount = [];
   let html = `<h1 class="view-title">Reports</h1><p class="sub">Looking back: what a month did, and what a year adds up to.</p>
     <div class="report-tabs" role="tablist">
       <button class="btn${reportsTab === 'month' ? ' sel' : ''}" data-rtab="month" role="tab" aria-selected="${reportsTab === 'month'}">This Month</button>
       <button class="btn${reportsTab === 'year' ? ' sel' : ''}" data-rtab="year" role="tab" aria-selected="${reportsTab === 'year'}">This Year</button>
+      ${giving ? `<button class="btn${reportsTab === 'giving' ? ' sel' : ''}" data-rtab="giving" role="tab" aria-selected="${reportsTab === 'giving'}">Giving</button>` : ''}
     </div>`;
-  html += reportsTab === 'month' ? reportsMonthHtml(today) : reportsYearHtml(main, today, shortLabel, mount);
+  html += reportsTab === 'giving' ? reportsGivingHtml(giving, shortLabel, mount) : reportsTab === 'month' ? reportsMonthHtml(today) : reportsYearHtml(main, today, shortLabel, mount);
   main.innerHTML = `<div id="reportsRoot">${html}</div>`;
   for (const fn of mount) fn();
   wireReports(main);
@@ -3503,6 +3519,31 @@ function reportsYearHtml(main, today, shortLabel, mount) {
 
   if (rep.wins.length) html += `<div class="section"><div class="section-head"><h2>Wins</h2><span class="muted">${esc(rangeName)}</span></div>
     <ul class="modal-list recap-wins section-body">${rep.wins.map((w) => `<li>${winIcon(w)} ${esc(w.text)}</li>`).join('')}</ul></div>`;
+  return html;
+}
+
+// ---- Giving (1.4.0 W9) ----
+// Working register. The copy rule for this page: the words are given and
+// planned, the column is Difference — nothing here says short, behind, missed
+// or streak. Transfers are already out of givenIn, so no W5-style footnote.
+function reportsGivingHtml(rep, shortLabel, mount) {
+  const last = rep.months.slice(-12);
+  const rows = rep.months.slice().reverse(); // newest first, like the rest of Reports
+  const html = `<div class="report-range"><b>Given in ${esc(rep.year)} ${money(rep.thisYear)}</b> <span class="muted">· lifetime ${money(rep.lifetime)} · ${rep.count} month${rep.count === 1 ? '' : 's'} given</span></div>
+    <p class="report-sentence">Giving funds: ${rep.funds.map(esc).join(', ')}.</p>
+    <div class="section"><div class="section-head"><h2>By month</h2></div><div id="chartGiving"></div>
+      <table class="grid compact report-table"><thead><tr><th>Month</th><th>Planned</th><th>Given</th><th>Difference</th></tr></thead><tbody>
+      ${rows.map((r) => `<tr><td>${esc(monthLabel(r.id))}${r.done ? '' : ' <span class="muted">· under way</span>'}</td><td>${money(r.planned)}</td><td>${money(r.given)}</td><td>${delta(r.diff)}</td></tr>`).join('')}
+      </tbody></table>
+      ${rep.titheRule ? `<p class="muted" style="font-size:.85rem">Planned is ${rep.titheRule.pct}% of your titheable income (Settings → Budget rules).</p>` : ''}
+    </div>`;
+  mount.push(() => {
+    $('#chartGiving').appendChild(groupedBars({
+      labels: last.map((r) => shortLabel(r.id)), height: 190,
+      series: [{ name: 'Given', color: VIZ.s2, values: last.map((r) => Math.max(0, r.given)) }],
+      plannedLine: last.map((r) => Math.max(0, r.planned)),
+    }));
+  });
   return html;
 }
 
@@ -4121,7 +4162,10 @@ function renderGarden(main) {
   const fixtureNames = mat.fixtures.map((id) => GARDEN_MILESTONE_LABELS[id]);
   const matBits = [`Tended ${mat.monthsTended} month${mat.monthsTended === 1 ? '' : 's'}`];
   if (fixtureNames.length) matBits.push(fixtureNames.join(', '));
+  const earlyNames = (mat.early || []).map((id) => GARDEN_MILESTONE_LABELS[id]); // 1.4.0 W8
+  if (earlyNames.length) matBits.push(earlyNames.join(', '));
   if (mat.stones) matBits.push(`${mat.stones} wall stone${mat.stones === 1 ? '' : 's'}`);
+  if (mat.giving && mat.giving.count) matBits.push(`${mat.giving.count} giving month${mat.giving.count === 1 ? '' : 's'}`); // 1.4.0 W8
   if (mat.next) matBits.push(`${GARDEN_MILESTONE_LABELS[mat.next.id]} at ${mat.next.months} months`);
 
   main.innerHTML = `
@@ -4137,7 +4181,7 @@ function renderGarden(main) {
       <div class="garden-msg msg-${m.kind}"><span>${esc(m.text)}</span>
         ${m.action ? `<button class="btn btn-sm" data-garden-act="${i}">${esc(m.action.label)}</button>` : ''}</div>`).join('')}
     </div>
-    <p class="garden-maturity muted" title="The garden's permanent parts: fixtures appear as months of history build up, and each wall stone marks a new all-time high in what you manage (AUM). They never go away.">${matBits.map(esc).join(' · ')}</p>`;
+    <p class="garden-maturity muted" title="The garden's permanent parts: fixtures appear as months of history build up, and each wall stone marks a new all-time high in what you manage (AUM). They never go away. The meadow beyond the fence grows a wildflower for every month you gave.">${matBits.map(esc).join(' · ')}</p>`;
 
   const wrap = $('.garden-wrap', main);
   const tip = $('#gardenTip', main);
@@ -4476,10 +4520,10 @@ function renderSettings(main) {
     <div class="settings-grid">
       <div class="section"><div class="section-head"><h2>Budget rules</h2></div>
         <div style="padding:12px 16px">
-          <div class="field-row"><label>Tithe percentage</label>
+          ${fileHasTithe() ? `<div class="field-row"><label>Tithe percentage</label>
             <input class="money small-num" id="tithePct" value="${Math.round((data.settings.tithePercent ?? 0.15) * 100)}"> %</div>
           <p class="muted" style="font-size:.85rem">Applied to funds with the "auto: % of income" rule.
-            Base = checks × titheable-per-check for Standard Income (set on the Budget page), plus Extra Income planned. Tithe-exempt funds are excluded — to make a fund exempt, click its name on the Budget page and tick “Exempt from tithe”.</p>
+            Base = checks × titheable-per-check for Standard Income (set on the Budget page), plus Extra Income planned. Tithe-exempt funds are excluded — to make a fund exempt, click its name on the Budget page and tick “Exempt from tithe”.</p>` : ''}
           <div class="field-row"><label title="Fund-to-fund transfers stay visible inside each fund, but stop counting toward actual income and spending in the summary cards, Reports, and month recap.">Exclude transfers from income &amp; spending reporting</label>
             <input type="checkbox" id="exTransfers" ${data.settings.excludeTransfers ? 'checked' : ''}></div>
           <p class="muted" style="font-size:.85rem">Moving money between funds isn't real income or spending — this keeps the totals honest.</p>
@@ -4521,7 +4565,7 @@ function renderSettings(main) {
       ? 'Transfers are now excluded from income & spending reporting.'
       : 'Transfers count in income & spending reporting again.');
   };
-  $('#tithePct').onchange = (e) => {
+  const tp = $('#tithePct'); if (tp) tp.onchange = (e) => { // 1.4.0 W11: absent without a tithe fund
     const v = parseFloat(e.target.value);
     if (!isNaN(v) && v >= 0 && v <= 100) {
       data.settings.tithePercent = r2(v / 100);

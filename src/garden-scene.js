@@ -41,7 +41,7 @@
 //            handful of tiny sprites, so ambient motion is ~free. Nothing is
 //            stored or shipped — the bitmap is re-rendered from the SVG on
 //            every render and on resize.
-import { layoutBeds, MATURITY_MILESTONES, SCENE_PLANT_CEILING, hashName } from './garden.js';
+import { layoutBeds, MATURITY_MILESTONES, EARLY_FIXTURES, SCENE_PLANT_CEILING, hashName } from './garden.js';
 
 const W = 1000;
 const HORIZON = 150;
@@ -515,22 +515,27 @@ function bench() {
   return `<g class="fx fx-bench"><title>The bench and lantern — three years tended.</title>${P.emit()}</g>`;
 }
 function brook() {
-  // from the pond's left edge (x 822) into the lawn, ending 12 units short of
-  // the birdbath (x 652). The centreline never goes below HORIZON + 36 — the
-  // bed-sign band starts at HORIZON + 42 — so the stroke's edge clears it.
+  // from the pond's left edge (x 822) into the lawn, ending at x 692 — fourteen
+  // units right of the birdbath's edge (x 678). The centreline never goes below
+  // HORIZON + 36; the bed-sign band (bedsTop) is HORIZON + 38, and the 8-wide
+  // stroke's lower edge reaches ≈ 188.3, 3.7 above the sign boards at 192.
   const P = new Painter(0);
-  const d = `M822,${HORIZON + 26} C760,${HORIZON + 28} 700,${HORIZON + 36} 640,${HORIZON + 34}`;
+  const d = `M822,${HORIZON + 26} C780,${HORIZON + 28} 730,${HORIZON + 36} 692,${HORIZON + 34}`;
   P.path(d, null, .55, 0, 'var(--g-water-l)', 8).path(d, null, .5, 1, 'var(--g-water-m)', 4);
-  P.ell(780, HORIZON + 29, 4, 1.2, '#ffffff', .6, 2).ell(690, HORIZON + 35, 4, 1.2, '#ffffff', .6, 2);
+  P.ell(790, HORIZON + 29, 4, 1.2, '#ffffff', .6, 2).ell(720, HORIZON + 34, 4, 1.2, '#ffffff', .6, 2);
   return `<g class="fx fx-brook"><title>The brook — four years tended.</title>${P.emit()}</g>`;
 }
 function willow() {
   // the right edge, in front of the wall's end and behind the pond's right end:
-  // trunk from (976, HORIZON + 14) up to HORIZON − 30, three drooping leaf
-  // washes falling to the left over x 950–996, tips to about HORIZON + 10.
+  // trunk from (976, HORIZON + 14) up to HORIZON − 30, four leaf washes: a crown
+  // at the trunk's top and three drooping falls fanning both sides at 60° / 65° /
+  // −62°, over x 950–996, tips to about HORIZON + 10.
   const P = new Painter(1), x = 976, foot = HORIZON + 14, top = HORIZON - 30;
   P.path(`M${x - 2.5},${foot} L${x + 2.5},${foot} L${x + 1},${top} L${x - 1},${top} Z`, WOOD.m, .75, 1).path(`M${x},${foot} L${x},${top + 2}`, null, .6, 2, WOOD.d, 1.2);
-  P.ell(x - 15, HORIZON - 9, 17, 5.5, LEAF.l, .5, 0, 75).ell(x - 1, HORIZON - 8, 18, 6, LEAF.m, .55, 1, 82).ell(x + 10, HORIZON - 11, 15, 5.5, LEAF.d, .45, 2, 72);
+  P.ell(x - 2, HORIZON - 22, 16, 9, LEAF.m, .45, 1)                      // crown, unrotated, spans HORIZON − 31 … − 13
+    .ell(x - 16, HORIZON - 8, 17, 5.5, LEAF.l, .5, 0, 60)                  // left fall
+    .ell(x - 2, HORIZON - 6, 18, 6, LEAF.m, .55, 1, 65)                    // centre fall
+    .ell(x + 10, HORIZON - 9, 15, 5.5, LEAF.d, .45, 2, -62);               // right fall, leaning the other way
   return `<g class="fx fx-willow"><title>The willow — five years tended.</title>${P.emit()}</g>`;
 }
 function orchard() {
@@ -676,10 +681,10 @@ function robinSymbol() {
 }
 function rabbitSymbol() {
   return `<g id="rabbit">
-      <ellipse cx="0" cy="-4" rx="6" ry="4" fill="#cfc3b2"/>
-      <circle cx="6" cy="-6" r="3" fill="#cfc3b2"/>
-      <ellipse cx="5" cy="-11" rx="1" ry="3" fill="#cfc3b2" transform="rotate(-10 5 -11)"/>
-      <ellipse cx="7.5" cy="-11" rx="1" ry="3" fill="#cfc3b2" transform="rotate(12 7.5 -11)"/>
+      <ellipse cx="0" cy="-4" rx="6" ry="4" fill="#bfae98"/>
+      <circle cx="6" cy="-6" r="3" fill="#bfae98"/>
+      <ellipse cx="5" cy="-11" rx="1" ry="3" fill="#bfae98" transform="rotate(-10 5 -11)"/>
+      <ellipse cx="7.5" cy="-11" rx="1" ry="3" fill="#bfae98" transform="rotate(12 7.5 -11)"/>
       <circle cx="-6" cy="-5" r="1.6" fill="#ffffff"/>
     </g>`;
 }
@@ -746,7 +751,7 @@ function ambientSprite(state, height, opts = {}) {
       out += sprite('robin-hop', 30, 20, 650, HORIZON + 4, `<defs>${robinSymbol()}</defs><g transform="translate(15,12)"><use href="#robin"/></g>`);
     } else if (a.kind === 'rabbit') {
       // 1.4.0 W6: the path's lower bend, at the garden's edge
-      out += sprite('rabbit-nibble', 36, 24, W / 2 + 20, height - EDGE_H - 10, `<defs>${rabbitSymbol()}</defs><g transform="translate(18,18)"><use href="#rabbit"/></g>`);
+      out += sprite('rabbit-nibble', 48, 32, W / 2 + 20, height - EDGE_H - 16, `<defs>${rabbitSymbol()}</defs><g transform="translate(24,24) scale(1.3333)"><use href="#rabbit"/></g>`);
     } else if (a.kind === 'dragonfly') {
       // 1.4.0 W6: over the pond; the sprite's top stays at HORIZON + 2 (inside the sky/lawn band)
       out += sprite('dragonfly-dart', 40, 20, 860, HORIZON + 2, `<defs>${dragonflySymbol()}</defs><g transform="translate(20,10)"><use href="#dragonfly"/></g>`);
@@ -911,4 +916,4 @@ export function stripSvg(plants, { width = 320, height = 96 } = {}) {
     <rect width="${width}" height="${height}" fill="var(--g-paper)" filter="url(#paper)" rx="8"/>${P.emit()}${s}</svg>`;
 }
 
-export const GARDEN_MILESTONE_LABELS = Object.fromEntries(MATURITY_MILESTONES.map((m) => [m.id, m.label]));
+export const GARDEN_MILESTONE_LABELS = Object.fromEntries([...MATURITY_MILESTONES, ...EARLY_FIXTURES].map((m) => [m.id, m.label])); // 1.4.0 W8: the early ids too, so one map serves the maturity line

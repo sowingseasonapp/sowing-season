@@ -9,6 +9,84 @@ so entries before that are dated by when the work happened, not by commit.
 
 ---
 
+### 2026-11-14 — 1.4.0 Sitting C (W0, W7–W11): giving designation, Reports Giving tab, recap line, maturity line, tithe vocabulary
+
+Third of three sittings from the 1.4.0 work order, from `b1f80bb` (Sitting B). Files: `src/app.js`, `src/reports.js`,
+`src/garden-scene.js` (W0 and W8's one label line only), `tools/test-reports.mjs`, `tools/test-garden.mjs`, this file.
+`compute.js`, `garden.js`, `csv.js`, `main.js`, `preload.js`, `charts.js`, `spots.js`, `styles.css`, `index.html`,
+`dev.html` are byte-identical to `b1f80bb` — the Giving tab needed no style hook. `data.version` stays 7; one new optional
+key, `setup.giving` (true | false), written by W7 only; no migration. Suites: reports **94 → 100** (+5 W9, +1 W10) · garden
+**225 → 227** (+1 W8 guard, +1 W11 guard; the §14 label check flipped in place) · compute 1255 · csv 621 · migrate 17, 0 failed.
+No tag, no bump.
+
+- **Correction to the Sitting B entry (W0 here).** The brook's end at x 640 was *twelve units past* the birdbath (x 652–678), not
+  short of it — the water ran under the pedestal at 48+ months. It now ends at **x 692, fourteen units right of the birdbath's
+  edge**: `M822,HORIZON+26 C780,+28 730,+36 692,+34`, glints at (790, HORIZON + 29) and (720, HORIZON + 34); still 598 B. And the
+  bed-sign band is `bedsTop` = **HORIZON + 38**, not + 42 — the 8-wide stroke's lower edge reaches ≈ 188.3, 3.7 above the sign
+  boards at 192, invisible and unchanged; the `brook()` comment says so now.
+- **W0 — the willow fills out; the rabbit grows (garden-scene.js; Dustin's call 2026-11-14, "I want both").** `willow()` draws
+  four washes instead of three stacked at 75° / 82° / 72°: an unrotated crown at (974, HORIZON − 22) rx 16 ry 9 spanning
+  HORIZON − 31 … − 13, then three falls fanning both sides — left (960, −8) at 60°, centre (974, −6) at 65°, right (986, −9) at
+  −62°; **707 → 789 B**, under the 1,536 B cap; trunk, foot and title unchanged. The rabbit sprite box is **48 × 32** at
+  (W / 2 + 20, height − EDGE_H − 16), the symbol drawn through `translate(24,24) scale(1.3333)`, body fills `#bfae98` (was
+  `#cfc3b2`; the white tail stays) — `left:52%; top:89.6%` on the 710-unit §13 scene, inside §10's > 60 % bound and §14's
+  `top:(9\d|8\d)` match.
+- **W7 — "This is a giving fund" (app.js).** `setupFormHtml(setup, monthId, rule = null)` adds a second `.setup-options` label
+  (`#fsGiving`, ticked when `isGivingFund({ setup: s, rule })`); the panel passes `f.rule`, the add dialog nothing.
+  `readSetupForm` **always** writes `s.giving = checked` — a Tithe fund saved ticked stores `true` (the heuristic agrees),
+  unticked stores `false`, which wins over the rule; a setup never saved through the form has no key and `rule.type === 'tithe'`
+  decides (the wizard's Tithe fund is untouched). The panel's `onChange` then writes `g.setup.giving` on every other month's
+  same-named fund that has a setup (**Default 2 — the one Invariant-8 exception**: the designation is one fact about the fund,
+  and nothing in `compute.js` reads it, so no number in any month moves). One `markDirty` per tick, so one Ctrl+Z takes the
+  whole ten-month write back. Off-script and required: `wireSetupForm`'s commit selector (`'#fsFields input, #fsQuiet'`) gains
+  `#fsGiving` — without it the box never fired `onChange`.
+- **W8 — the maturity line and the meadow in words.** `GARDEN_MILESTONE_LABELS` is built from `[...MATURITY_MILESTONES,
+  ...EARLY_FIXTURES]` (the one garden-scene.js line besides W0), so `renderGarden` names the early fixtures after the late ones
+  and, after the stones, `N giving month(s)`; `next` stays last. The `.garden-maturity` title gains "The meadow beyond the
+  fence grows a wildflower for every month you gave." Export copy, Sep 2026: *Tended 10 months · a garden path, a picket fence ·
+  a wheelbarrow, a birdbath, a rain barrel · 2 wall stones · 10 giving months · an arbor at 12 months* (this copy's `allTimeHighs`
+  says two stones); persona A at 36 months: *… a wheelbarrow, a birdbath · 1 wall stone · a brook at 48 months*, no giving clause.
+- **W9 — Reports → Giving (reports.js `givingReport`, app.js third tab).** `givingReport(data, todayISO)` → `null` when no
+  month has a giving fund (Default 8), else `{ funds (first-seen order), months: [{ id, label, planned, given, diff, done }]
+  oldest first, year, thisYear, lifetime, count (months with given > 0.004), titheRule: { pct } | null }` — `given` = Σ
+  `givenIn` over giving funds in counted categories (Work skipped; quiet funds **not** skipped), `planned` = Σ their planned,
+  `year` the current calendar year or the latest present, `titheRule` when a giving fund in the newest month carries
+  `rule.type 'tithe'`. The tab button renders only while the report is non-null; a selected Giving tab whose report turns null
+  falls back to This Month. `reportsGivingHtml`: the range line *Given in 2026 $X · lifetime $Y · N months given*, the funds
+  sentence, a `groupedBars` chart of the last 12 months (Given bars, planned line) mounted like This Year's fund chart, and a
+  table *Month · Planned · Given · Difference* newest first (the open month *· under way*, the difference through `delta()`),
+  plus *Planned is N% of your titheable income (Settings → Budget rules).* when `titheRule` — which, under W11, is exactly
+  when it is true. **Copy rule:** the words are *given* and *planned*, the column is *Difference*; nothing on the page says
+  short, behind, missed or streak. Working register. No CSS added. Export copy at 2026-09-28: *$14,110.91 · $15,146.59 · 10*, Dec
+  2025 `$1,035.68 · $1,035.68 · $0.00`, Sep 2026 `$1,167.69 · $1,167.70 · +$0.01 · under way` (the tithe rule's rounding against
+  the deposits — real, not a bug); persona B at 2029-09-28: *$13,222.00 · $64,373.95 · 46*, Sep 2029 `$1,322.20 · $1,983.30 ·
+  +$661.10 · under way`; persona A has no Giving button.
+- **W10 — the recap's giving line (reports.js `recapRows`).** After the *ahead* win and before the matured goals: Σ `givenIn`
+  over giving funds in counted categories (the computed fund rows carry the raw `setup` and `rule`, so `isGivingFund` reads
+  them directly), and when > 0.004 a win of kind `giving`: *You gave $X this month — the meadow grew.* Ceremony register — the
+  garden half-sentence is allowed here. The Harvest recap and the Reports Wins list both read `rep.wins`. `WIN_ICON.giving` is
+  `basket` (the sprite has no leaf). The recap gate is Cowork's: `compare --ignore-kind giving` expects 92 / 0, and 92 / 56
+  without the flag.
+- **W11 — tithe vocabulary follows the file (app.js; Default 6, #25).** `const fileHasTithe = () => data.months.some(hasTitheFund)`
+  gates: the income panel's *Titheable per check* row and *Exempt from tithe* option (its handler is `if (exempt) exempt.onchange`
+  — the old line threw without the element), the *no tithe* chip, the tithe sentence in each `incomeGroups` hint (built from
+  parts), and Settings' *Tithe percentage* row with its paragraph (`if (tp) tp.onchange`). Three more surfaces the six-item list
+  missed, found by the acceptance's `innerHTML.includes('tithe')` check and gated the same way: the income link's title (*income
+  type, tithe, carry-over, paycheck*), the per-check note's *· titheable $X* clause, and the income result line's *· tithed on $X*.
+  `titheMovedNote` already says nothing without a tithe fund. The data — `titheAmount`, `titheExempt`, `tithePercent` — is
+  untouched and every surface returns the moment a tithe-rule fund exists. On the no-tithe fixture the Budget and Settings bodies
+  carry the word only inside dev.html's own shim script; on the export copy everything reads as before.
+- **Tests.** test-reports §12 (+6): `givingReport` null on the base fixture; a tithe-rule Fun → funds, rows to the cent (the
+  January transfer excluded), lifetime, count, thisYear, year, `titheRule.pct`, `done` at two dates; a $0-net refund month not
+  counted; `setup.giving` true on a quiet Gas adds it (first-seen order is `[Gas, Fun]` on this fixture); `giving: false` on
+  the only tithe fund → null, and a Work fund's tithe rule never counts; W10's line exactly once on January, never on the base
+  fixture. test-garden: §14's label check now asserts the early ids with their labels; §11 gains the W8 guard (giving months and
+  the meadow sentence inside `renderGarden`) and the W11 guard (the gate and the two null-guarded handlers).
+- **Verified in dev.html** (dev server, `Date` shimmed to the acceptance dates): Reports → Giving on the export copy and persona B,
+  no tab on persona A; the Garden maturity line on the export copy and persona A; the W7 tick / untick round trip on Compassion
+  and Tithe with the write counted across the ten months, the rule chip surviving, the Giving tab leaving and returning, and one
+  Undo reverting the whole write; the W11 no-tithe fixture on Budget (three income panels open) and Settings.
+
 ### 2026-11-13 — 1.4.0 Sitting B (W0, W2(i), W4–W6): early fixtures, late fixtures, wildlife
 
 Second of three sittings from the 1.4.0 work order (the amended W2, W4, W5, W6 items of 2026-11-13), from `d79d049`

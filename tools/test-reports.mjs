@@ -4,7 +4,7 @@
 // suite needs the owner's workbook and can't run in CI; this one can).
 // Run: npm run test:reports
 import { buildNextMonth, computeMonth, r2 } from '../src/compute.js';
-import { monthReport, yearReport, rangeMonths, yearsPresent, defaultReportMonth, fmtMoney } from '../src/reports.js';
+import { monthReport, yearReport, rangeMonths, yearsPresent, defaultReportMonth, fmtMoney, givingReport } from '../src/reports.js';
 
 let pass = 0, fail = 0;
 const failures = [];
@@ -332,6 +332,48 @@ const IN_APRIL = '2026-04-15';   // everything done
     inMar.lowest.id === '2026-02' && inMar.lowest.received === 2000 && inMar.highest.id === '2026-01'
     && inApr.lowest.id === '2026-03' && inApr.lowest.received === 500 && inApr.highest.id === '2026-01'
     && none.highest.id === '2026-01' && none.lowest.id === '2026-03' && none.lowest.received === 500, j([inMar, inApr, none]));
+}
+
+// ---- 12. 1.4.0 W9 — givingReport; W10 — the recap's giving line ----
+{
+  const clone = (x) => JSON.parse(JSON.stringify(x));
+  // The fixture with Fun as a tithe-rule fund in every month (the rule set on each
+  // cloned month, so planned stays the stored 50). Fun's rows: −20 Netflix each month;
+  // January's −10 transfer out is excluded by givenIn.
+  const withRule = (mut = () => {}) => {
+    const months = [jan, feb, mar].map(clone);
+    for (const m of months) for (const c of m.categories) for (const f of c.funds) if (f.fund === 'Fun') f.rule = { type: 'tithe', percent: 0.1 };
+    mut(months);
+    return { ...mkData(), months };
+  };
+  const fundIn = (m, n) => m.categories.flatMap((c) => c.funds).find((f) => f.fund === n);
+  check('W9: no giving fund anywhere → null', givingReport(data, IN_MARCH) === null);
+  const dT = withRule();
+  const gT = givingReport(dT, IN_MARCH);
+  check('W9: a tithe-rule fund → funds [Fun], three rows oldest first with planned/given/diff to the cent (Jan: 50 / 20.00 / −30.00, the −10 transfer excluded), lifetime 60, count 3, thisYear 60 in 2026, titheRule.pct 10; done = Jan/Feb at IN_MARCH, all three in April',
+    gT !== null && j(gT.funds) === j(['Fun']) && gT.months.length === 3 && gT.months.map((r) => r.id).join(',') === '2026-01,2026-02,2026-03'
+    && gT.months.every((r) => r.planned === 50 && r.given === 20 && r.diff === -30) && gT.lifetime === 60 && gT.count === 3 && gT.thisYear === 60 && gT.year === '2026'
+    && gT.titheRule && gT.titheRule.pct === 10 && gT.months[0].label === 'January'
+    && gT.months.map((r) => r.done).join(',') === 'true,true,false' && givingReport(dT, IN_APRIL).months.every((r) => r.done === true), j(gT));
+  // A +20 refund on Fun in March nets that month to 0: count ignores it, lifetime drops to 40.
+  const dR = withRule((ms) => ms[2].transactions.push(tx('Fun', 20, 'NETFLIX REFUND', '2026-03-20')));
+  const gR = givingReport(dR, IN_MARCH);
+  check('W9: a month whose net given is 0.00 is not counted — count 2 of 3, lifetime 40.00, March row given 0 / diff −50',
+    gR.count === 2 && gR.lifetime === 40 && gR.thisYear === 40 && gR.months[2].given === 0 && gR.months[2].diff === -50, j(gR));
+  // setup.giving: true on a basic fund adds its rows; a quiet one (excludeInsights) still counts.
+  const dG = withRule((ms) => { for (const m of ms) fundIn(m, 'Gas').setup = { type: 'basic', giving: true, excludeInsights: true }; });
+  const gG = givingReport(dG, IN_MARCH);
+  check('W9: setup.giving true on a quiet basic fund (Gas) adds it — funds in first-seen order [Gas, Fun], January given 120.00 (100 + 20)',
+    j(gG.funds) === j(['Gas', 'Fun']) && gG.months[0].given === 120 && gG.months[0].planned === 150 && gG.months[0].diff === -30 && gG.months[1].given === 180, j(gG));
+  // setup.giving: false wins over the tithe rule — the only giving fund gone → null.
+  const dN = withRule((ms) => { for (const m of ms) fundIn(m, 'Fun').setup = { type: 'basic', giving: false }; });
+  check('W9: setup.giving false on the only tithe-rule fund → null; the tithe rule alone never counts a Work fund', givingReport(dN, IN_MARCH) === null
+    && givingReport(withRule((ms) => { for (const m of ms) { fundIn(m, 'Fun').setup = { type: 'basic', giving: false }; fundIn(m, 'Work Expenses').rule = { type: 'tithe', percent: 0.1 }; } }), IN_MARCH) === null);
+  // W10: the recap line, ceremony register — exactly one giving win on the tithe fixture, none on the base fixture.
+  const winsT = monthReport(dT, '2026-01', IN_MARCH).wins.filter((w) => w.kind === 'giving');
+  check('W10: January on the tithe fixture → exactly one giving win, "You gave $20.00 this month — the meadow grew."; the base fixture has none',
+    winsT.length === 1 && winsT[0].text === 'You gave $20.00 this month — the meadow grew.' && monthReport(data, '2026-01', IN_MARCH).wins.every((w) => w.kind !== 'giving')
+    && monthReport(dR, '2026-03', IN_APRIL).wins.every((w) => w.kind !== 'giving'), j(winsT));
 }
 
 console.log(`\ntest-reports: ${pass} passed, ${fail} failed`);

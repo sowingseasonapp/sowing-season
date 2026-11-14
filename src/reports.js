@@ -19,6 +19,7 @@
 //  - transfers leave the vendor lists via isTransferTx.
 import {
   computeMonth, buildNextMonth, fundSplit, isTransferTx, normFund, r2, monthAdd, MONTH_NAMES,
+  isGivingFund, givenIn,
 } from './compute.js';
 import { monthContext, stonesLaidIn } from './garden.js';
 import { vendorKey, isBoilerplate } from './csv.js';
@@ -127,6 +128,10 @@ function recapRows(data, month, comp) {
   }
   if (catsUnder && catRows.length) wins.push({ kind: 'cats', text: `${catsUnder} of ${catRows.length} categories came in at or under plan` });
   if (actDiff(data, comp) > 0.004) wins.push({ kind: 'ahead', text: `You ended ${fmtMoney(actDiff(data, comp))} ahead — income beat spending` });
+  // 1.4.0 W10: the month's giving, ceremony register (the garden half-sentence is allowed here).
+  let given = 0;
+  for (const c of comp.categories) { if (c.excludeFromTotals) continue; for (const f of c.funds) if (isGivingFund(f)) given = r2(given + givenIn(month, f)); }
+  if (given > 0.004) wins.push({ kind: 'giving', text: `You gave ${fmtMoney(given)} this month — the meadow grew.` });
   for (const f of matured) {
     const set = r2(f.carryOver + f.planned);
     const spentHere = f.expensed < -0.004 ? -f.expensed : 0;
@@ -484,6 +489,31 @@ export function yearReport(data, range, todayISO) {
     headline, byMonth, categories, grid, perFund, vendors, biggest: biggest5, incomeMonths,
     funds: historyFunds, fundHistory, wins,
   };
+}
+
+// 1.4.0 W9: giving over time. null when no month has a giving fund (Default 8).
+// given = Σ givenIn over giving funds in counted categories (Work skipped; quiet
+// funds NOT skipped — the meadow is not the plant layer); planned = Σ their planned.
+export function givingReport(data, todayISO) {
+  const months = data.months.slice().sort((a, b) => a.id.localeCompare(b.id));
+  const funds = []; const rows = []; let lifetime = 0, count = 0, any = false;
+  for (const m of months) {
+    let given = 0, planned = 0, has = false;
+    for (const c of m.categories) { if (c.excludeFromTotals) continue;
+      for (const f of c.funds) { if (!isGivingFund(f)) continue; has = true;
+        if (!funds.some((n) => normFund(n) === normFund(f.fund))) funds.push(f.fund);
+        given = r2(given + givenIn(m, f)); planned = r2(planned + (f.planned || 0)); } }
+    if (!has) continue;
+    any = true; lifetime = r2(lifetime + given); if (given > 0.004) count++;
+    rows.push({ id: m.id, label: m.label, planned, given, diff: r2(given - planned), done: monthContext(m.id, todayISO).monthDone });
+  }
+  if (!any) return null;
+  const years = [...new Set(rows.map((r) => r.id.slice(0, 4)))];
+  const year = years.includes(todayISO.slice(0, 4)) ? todayISO.slice(0, 4) : years[years.length - 1];
+  const thisYear = r2(rows.filter((r) => r.id.slice(0, 4) === year).reduce((a, r) => a + r.given, 0));
+  const newest = months[months.length - 1];
+  const tithe = newest.categories.some((c) => !c.excludeFromTotals && c.funds.some((f) => isGivingFund(f) && f.rule && f.rule.type === 'tithe'));
+  return { funds, months: rows, year, thisYear, lifetime, count, titheRule: tithe ? { pct: Math.round((data.settings.tithePercent ?? 0.15) * 100) } : null };
 }
 
 // The calendar years present in the data, newest first — the range selector's options.

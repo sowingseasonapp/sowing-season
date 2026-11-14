@@ -690,8 +690,9 @@ let g13, s13, bm13; // the §13 all-on fixture, shared with §14 (1.4.0 W4–W6)
   // The §13 all-on fixture (from §12) draws all eight; labels, filters, the hit layer, the byte caps.
   const ALL8 = EARLY.concat(LATE);
   check('§13 draws all eight new fixture classes', ALL8.every((id) => has(s13.bg, id)), ALL8.filter((id) => !has(s13.bg, id)).join(','));
-  check('GARDEN_MILESTONE_LABELS has greenhouse, bench, brook, willow, orchard (the early ids are Sitting C\'s W8)',
-    LATE.every((id) => typeof GARDEN_MILESTONE_LABELS[id] === 'string' && GARDEN_MILESTONE_LABELS[id].length > 0) && EARLY.every((id) => !(id in GARDEN_MILESTONE_LABELS)), JSON.stringify(GARDEN_MILESTONE_LABELS));
+  check('GARDEN_MILESTONE_LABELS has greenhouse, bench, brook, willow, orchard and (W8) the early ids as a wheelbarrow / a birdbath / a rain barrel',
+    LATE.every((id) => typeof GARDEN_MILESTONE_LABELS[id] === 'string' && GARDEN_MILESTONE_LABELS[id].length > 0)
+    && GARDEN_MILESTONE_LABELS.wheelbarrow === 'a wheelbarrow' && GARDEN_MILESTONE_LABELS.birdbath === 'a birdbath' && GARDEN_MILESTONE_LABELS.rainbarrel === 'a rain barrel', JSON.stringify(GARDEN_MILESTONE_LABELS));
   const filterAttrs13 = s13.svg.match(/filter="url\(#[^)]+\)"/g) || [];
   check('§13: the only filter attribute is still the paper grain on the background rect', filterAttrs13.length === 1 && filterAttrs13[0] === 'filter="url(#paper)"', filterAttrs13.join(','));
   const bare13 = sceneSvg({ ...g13, maturity: { ...g13.maturity, fixtures: [], early: [] } }, { bitmap: true, palette: Object.fromEntries(PALETTE_TOKENS.map((k) => [k, k === 'light-op' ? '0.1' : '#abcdef'])) });
@@ -755,6 +756,14 @@ let g13, s13, bm13; // the §13 all-on fixture, shared with §14 (1.4.0 W4–W6)
   })());
   check('month-close: ceremony title, literal action button', appSrc.includes('harvest</h2>') && /`Start \$\{monthLabel\(nid\)\} anyway` : `Start \$\{monthLabel\(nid\)\}`/.test(appSrc));
   check('Garden view has no editing controls (only buttons that navigate)', !/<input[^>]*class="money/.test(appSrc.slice(appSrc.indexOf('function renderGarden'), appSrc.indexOf('/* ---------------- Settings view'))));
+  // 1.4.0 W8: the maturity line counts giving months and the title names the meadow — inside renderGarden only.
+  check('W8: renderGarden speaks the giving months and the meadow sentence', (() => {
+    const fn = appSrc.slice(appSrc.indexOf('function renderGarden'), appSrc.indexOf('/* ---------------- Settings view'));
+    return fn.includes('giving month') && fn.includes('grows a wildflower for every month you gave');
+  })());
+  // 1.4.0 W11 (Default 6): the tithe vocabulary follows the file — the gate exists and the two handlers null-guard their element.
+  check('W11: fileHasTithe gate present; the exempt and tithePct handlers guard a missing element',
+    appSrc.includes('const fileHasTithe = () => data.months.some(hasTitheFund);') && appSrc.includes('if (exempt) exempt.onchange') && appSrc.includes('if (tp) tp.onchange'));
   const rm = css.slice(css.indexOf('@media (prefers-reduced-motion: reduce)'));
   const rmBlock = rm.slice(0, rm.indexOf('}\n}') + 3);
   check('prefers-reduced-motion disables every garden animation class', ['.flutter', '.leaf-fall', '.bee-loop', '.firefly', '.robin-hop', '.rabbit-nibble', '.dragonfly-dart', '.plant.sway .body', '.plant.st-harvest .glow', '.garden-live', '.plant .lift'].every((k) => rmBlock.includes(k)), rmBlock.slice(0, 200));
