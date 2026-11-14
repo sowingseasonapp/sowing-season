@@ -9,6 +9,22 @@ so entries before that are dated by when the work happened, not by commit.
 
 ---
 
+## 1.4.0 — 2026-11-14 — the Giving tracker and a garden that grows
+
+Three sittings from the 1.4.0 work order (roadmap D1). `compute.js` gains two pure exports, `isGivingFund` and `givenIn`, and
+nothing else — `computeMonth`, `fundFlags`, `autoPlanned`, `buildNextMonth`, `incomeTrueUp`, `incomePlanFor` and
+`resyncCarryOvers` are identity-proven on 92 months of three data files; `data.version` stays 7; one new optional key,
+`setup.giving`, written only when a fund's setup is saved; no migration; `csv.js`, `main.js` and `preload.js` are byte-identical
+to 1.3.1. A giving fund is any fund with the tithe rule or the new This is a giving fund box ticked. The garden now ages: a plant
+that finishes on plan three, nine and eighteen months running stands on a base; three early fixtures mark the first fully allocated
+month, the first closed month and the first clean close; five late milestones (greenhouse, bench and lantern, brook, willow, orchard
+row) arrive at 30 to 72 months; wildlife comes with the fixtures; and a meadow beyond the fence grows one permanent wildflower for
+every month that gave. Reports has a Giving tab (given against planned, by month and lifetime); the month recap says what was given;
+the Garden's maturity line counts giving months; the tithe vocabulary appears only in a file that has a tithe fund; and ticking a
+fund's option boxes (quiet, giving) no longer resets a planned amount typed this month. Verified by Cowork from copies: identity
+92 / 0, ages and giving tables reproduced on three files, recap gate 92 / 0 (giving line aside), scene geometry measured in Chromium,
+43-step UI walk.
+
 ### 2026-11-14 — 1.4.0 release sitting: option ticks keep a typed planned
 
 Sitting C's W7 lead, fixed before the release (Dustin, 2026-11-14). `showFundPanel`'s `onChange` re-applied `autoPlanned` on every
